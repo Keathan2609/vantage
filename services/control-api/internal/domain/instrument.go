@@ -79,7 +79,12 @@ type InstrumentSpec struct {
 	MaxLeverage decimal.Decimal
 	// SupportedOrderTypes lists order types the venue accepts.
 	SupportedOrderTypes OrderTypeSet
-	// CommissionPerLot is charged per lot per side in the account currency.
+	// CommissionPerLot is charged per lot per side, expressed in the QUOTE
+	// currency -- the same convention as the swap rates below. The comment
+	// here used to say "account currency", which contradicted both the venue
+	// (it stamps commission_ccy with the quote currency) and the booking path
+	// (it converts from that currency), and a reader trusting the comment
+	// would double-convert.
 	CommissionPerLot decimal.Decimal
 	// SwapLongPerLot and SwapShortPerLot are financing charges applied per lot
 	// per day held, expressed in the quote currency.

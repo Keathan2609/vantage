@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/vantage/control-api/internal/booking"
 	"github.com/vantage/control-api/internal/broker"
 	brokermock "github.com/vantage/control-api/internal/broker/mock"
@@ -27,6 +29,7 @@ import (
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/marketdata"
 	"github.com/vantage/control-api/internal/metrics"
+	"github.com/vantage/control-api/internal/money"
 	"github.com/vantage/control-api/internal/notify"
 	"github.com/vantage/control-api/internal/oms"
 	"github.com/vantage/control-api/internal/orchestrator"
@@ -154,8 +157,8 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 
 	// The mock venue keeps its own books, which is what makes reconciliation a
 	// real comparison rather than a self-check.
-	a.MockBroker = brokermock.New(pool, quoteSource{store: a.Store}, a.MarketClock,
-		a.Clock, brokermock.DefaultConfig())
+	a.MockBroker = brokermock.New(pool, quoteSource{store: a.Store}, venueRates{store: a.Store},
+		a.MarketClock, a.Clock, brokermock.DefaultConfig())
 
 	a.Brokers = broker.NewRegistry()
 	if err := a.Brokers.Register(a.MockBroker); err != nil {
@@ -376,4 +379,29 @@ func (q quoteSource) LatestQuote(ctx context.Context, instrumentID string) (doma
 
 func (q quoteSource) Instrument(ctx context.Context, id string) (domain.Instrument, error) {
 	return q.store.Market.Instrument(ctx, id)
+}
+
+// venueRates lets the mock venue convert quote-currency amounts into its own
+// account currency.
+//
+// It reads the same rate table Vantage values positions from, which is the
+// closest a simulation can get to "the venue and we agree on the exchange
+// rate". A real venue would use its own, and the difference would then be a
+// legitimate BALANCE_MISMATCH for an operator to look at -- which is exactly
+// what the check is for.
+type venueRates struct{ store *store.Store }
+
+func (v venueRates) VenueRate(ctx context.Context, base, quote string) (decimal.Decimal, error) {
+	r, err := v.store.Market.LatestFXRate(ctx, money.Currency(base), money.Currency(quote))
+	if err == nil {
+		return r.Rate, nil
+	}
+	// Try the inverse before giving up: the seed stores USD/ZAR, not ZAR/USD,
+	// and a venue refusing to price a close for want of a reciprocal would be
+	// an absurd reason to fail an execution.
+	inv, invErr := v.store.Market.LatestFXRate(ctx, money.Currency(quote), money.Currency(base))
+	if invErr != nil || !inv.Rate.IsPositive() {
+		return decimal.Zero, err
+	}
+	return decimal.NewFromInt(1).Div(inv.Rate), nil
 }

@@ -195,6 +195,23 @@ have them.
   placed in that window is correctly refused for a stale feed. Wait for feed
   health rather than "fixing" the refusal.
 
+- **The venue closes for an hour every weekday at 17:00 New York.**
+  `fx_metals_24x5` models a daily maintenance break (17:00-18:00 NY, Mon-Thu),
+  during which ingestion correctly stores nothing and every instrument reports
+  `no_data`. Any suite whose setup calls `waitForTradableFeed` then fails after
+  its timeout with "market data for X never became tradable (last state:
+  no_data)" -- which reads like broken market data and is the platform being
+  right. Check the New York clock before debugging it. The Go and smoke suites
+  are unaffected only because they do not wait on the feed the same way.
+
+- **`node .next/standalone/server.js` needs `.next/static` copied in.**
+  Next's standalone output omits the static assets, so the server answers 200
+  for the HTML and 404s every chunk, serving them as `text/plain`. The page
+  then renders "Connecting to the control plane..." forever and around 20
+  Playwright tests fail on missing selectors, looking exactly like a broken
+  API. The Dockerfile copies `.next/static` into the standalone tree; do the
+  same when running it by hand, or use `npm run dev`.
+
 ## Repository map
 
 ```

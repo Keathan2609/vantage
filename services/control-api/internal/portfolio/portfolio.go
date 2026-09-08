@@ -90,55 +90,27 @@ func (s *Service) Compute(ctx context.Context, account domain.Account) (Snapshot
 		return Snapshot{}, fmt.Errorf("portfolio: equity state: %w", err)
 	}
 
-	snap := Snapshot{
-		Account:              account,
-		ExposureByInstrument: map[string]money.Amount{},
-		ExposureByCurrency:   map[money.Currency]money.Amount{},
-	}
+	snap := Snapshot{Account: account}
 
-	unrealized := money.Zero(ccy)
-	marginUsed := money.Zero(ccy)
-	gross := money.Zero(ccy)
-	net := money.Zero(ccy)
-
+	// Price every position first, then aggregate. Marking to market needs the
+	// store; the arithmetic over the results does not, and keeping the two
+	// apart is what makes the exposure invariants testable without a database
+	// (see aggregate.go).
 	for _, p := range positions {
 		view, err := s.valuePosition(ctx, p, ccy, now)
 		if err != nil {
 			return Snapshot{}, err
 		}
 		snap.Positions = append(snap.Positions, view)
-
-		if !view.Valued {
-			snap.UnvaluedPositions++
-			continue
-		}
-
-		unrealized = unrealized.MustAdd(view.UnrealizedPnL)
-		marginUsed = marginUsed.MustAdd(view.MarginUsed)
-		gross = gross.MustAdd(view.NotionalValue.Abs())
-
-		signed := view.NotionalValue.MulDecimal(p.Side.SignedMultiplier())
-		net = net.MustAdd(signed)
-
-		cur := snap.ExposureByInstrument[p.InstrumentID]
-		if cur.Currency() == "" {
-			cur = money.Zero(ccy)
-		}
-		snap.ExposureByInstrument[p.InstrumentID] = cur.MustAdd(view.NotionalValue.Abs())
-
-		// Currency exposure is attributed to the instrument's QUOTE currency:
-		// a long XAUUSD position is, among other things, a short USD position,
-		// and netting that against other USD exposure is the point.
-		qc := view.Instrument.QuoteCcy
-		curCcy := snap.ExposureByCurrency[qc]
-		if curCcy.Currency() == "" {
-			curCcy = money.Zero(ccy)
-		}
-		snap.ExposureByCurrency[qc] = curCcy.MustAdd(signed)
 	}
 
-	equity := balance.MustAdd(unrealized)
-	free, err := equity.Sub(marginUsed)
+	agg := aggregate(snap.Positions, ccy)
+	snap.ExposureByInstrument = agg.ByInstrument
+	snap.ExposureByCurrency = agg.ByCurrency
+	snap.UnvaluedPositions = agg.Unvalued
+
+	equity := balance.MustAdd(agg.Unrealized)
+	free, err := equity.Sub(agg.MarginUsed)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -148,15 +120,15 @@ func (s *Service) Compute(ctx context.Context, account domain.Account) (Snapshot
 		Currency:       ccy,
 		Balance:        balance.RoundLedger(),
 		Equity:         equity.RoundLedger(),
-		MarginUsed:     marginUsed.RoundLedger(),
+		MarginUsed:     agg.MarginUsed.RoundLedger(),
 		FreeMargin:     free.RoundLedger(),
 		RealizedPnL:    totals.RealizedPnL.RoundLedger(),
-		UnrealizedPnL:  unrealized.RoundLedger(),
+		UnrealizedPnL:  agg.Unrealized.RoundLedger(),
 		Fees:           totals.Fees.RoundLedger(),
 		Commission:     totals.Commission.RoundLedger(),
 		Swap:           totals.Swap.RoundLedger(),
-		GrossExposure:  gross.RoundLedger(),
-		NetExposure:    net.RoundLedger(),
+		GrossExposure:  agg.Gross.RoundLedger(),
+		NetExposure:    agg.Net.RoundLedger(),
 		OpenPositions:  len(positions),
 		PendingOrders:  pendingOrders,
 		PeakEquity:     equityState.PeakEquity,

@@ -52,6 +52,25 @@ type MarketStatusSource interface {
 	Status(t time.Time) domain.MarketStatus
 }
 
+// RateSource converts an amount into the venue account's own currency.
+//
+// # Why the venue needs this at all
+//
+// An XAUUSD contract realises profit and charges commission in USD. A venue
+// account may be denominated in something else -- ZAR, here. A real venue
+// converts before it touches the balance, and so must this one.
+//
+// It did not, and the consequence was a genuine, growing divergence:
+// USD-denominated realised P&L was added directly to a ZAR balance, so the
+// venue's book drifted from Vantage's ledger by a factor of the USD/ZAR rate
+// on every close. Reconciliation found it, which is the system working -- but
+// a permanent BALANCE_MISMATCH that no operator action can clear is noise, and
+// noise is what stops anyone reading the alerts that matter.
+type RateSource interface {
+	// VenueRate returns how many units of quote one unit of base buys.
+	VenueRate(ctx context.Context, base, quote string) (decimal.Decimal, error)
+}
+
 // Config controls the simulation's realism knobs.
 type Config struct {
 	// SlippageFraction is the average adverse price movement applied to market
@@ -114,6 +133,7 @@ func DeterministicConfig() Config {
 type Broker struct {
 	pool   *db.Pool
 	quotes QuoteSource
+	rates  RateSource
 	clock  domain.Clock
 	market MarketStatusSource
 	cfg    Config
@@ -127,7 +147,8 @@ type Broker struct {
 }
 
 // New builds the mock venue.
-func New(pool *db.Pool, quotes QuoteSource, market MarketStatusSource, clock domain.Clock, cfg Config) *Broker {
+func New(pool *db.Pool, quotes QuoteSource, rates RateSource, market MarketStatusSource,
+	clock domain.Clock, cfg Config) *Broker {
 	seed := cfg.Seed
 	if seed == 0 && !cfg.Deterministic {
 		seed = time.Now().UnixNano()
@@ -135,12 +156,51 @@ func New(pool *db.Pool, quotes QuoteSource, market MarketStatusSource, clock dom
 	return &Broker{
 		pool:   pool,
 		quotes: quotes,
+		rates:  rates,
 		clock:  clock,
 		market: market,
 		cfg:    cfg,
 		rng:    rand.New(rand.NewSource(seed)),
 		faults: NewFaultInjector(),
 	}
+}
+
+// toAccountCurrency converts a quote-currency amount into the venue account's
+// currency.
+//
+// It fails rather than falling back to 1:1. A venue that cannot price its own
+// account should refuse the execution, because the alternative -- crediting a
+// USD figure to a ZAR balance -- is a silent, compounding accounting error
+// that looks like a reconciliation problem long after the cause is gone.
+func (b *Broker) toAccountCurrency(ctx context.Context, tx pgx.Tx, accountRef string,
+	amount decimal.Decimal, from string) (decimal.Decimal, error) {
+
+	if amount.IsZero() {
+		return amount, nil
+	}
+	var accountCcy string
+	if err := tx.QueryRow(ctx,
+		`SELECT currency FROM mock_venue_accounts WHERE account_ref = $1`, accountRef).
+		Scan(&accountCcy); err != nil {
+		return decimal.Zero, fmt.Errorf("mock: venue account currency: %w", err)
+	}
+	if accountCcy == from {
+		return amount, nil
+	}
+	if b.rates == nil {
+		return decimal.Zero, fmt.Errorf(
+			"mock: the venue holds a %s account and this execution is denominated in %s, "+
+				"but no rate source was supplied", accountCcy, from)
+	}
+	rate, err := b.rates.VenueRate(ctx, from, accountCcy)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("mock: %s/%s rate: %w", from, accountCcy, err)
+	}
+	if !rate.IsPositive() {
+		return decimal.Zero, fmt.Errorf("mock: %s/%s rate is not positive (%s)",
+			from, accountCcy, rate)
+	}
+	return amount.Mul(rate), nil
 }
 
 // Name identifies this adapter.
@@ -431,6 +491,21 @@ func (b *Broker) executeTx(ctx context.Context, tx pgx.Tx, accountRef, brokerOrd
 		return broker.ExecutionReport{}, err
 	}
 
+	// The venue reported a commission on the fill above, so the venue's own
+	// balance has to pay it. It previously did not, which meant the venue's
+	// book disagreed with Vantage's ledger by every commission ever charged.
+	if commission.IsPositive() {
+		charge, err := b.toAccountCurrency(ctx, tx, accountRef, commission, string(inst.QuoteCcy))
+		if err != nil {
+			return broker.ExecutionReport{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE mock_venue_accounts SET balance = balance - $2, updated_at = now()
+			WHERE account_ref = $1`, accountRef, charge); err != nil {
+			return broker.ExecutionReport{}, err
+		}
+	}
+
 	return broker.ExecutionReport{
 		BrokerFillID:  fillID,
 		BrokerOrderID: brokerOrderID,
@@ -481,11 +556,19 @@ func (b *Broker) applyPositionTx(ctx context.Context, tx pgx.Tx, accountRef stri
 	if domain.OrderSide(curSide) == domain.SideSell {
 		diff = diff.Neg()
 	}
+	// Realised P&L is denominated in the instrument's QUOTE currency, which is
+	// not necessarily the account's. Converting is not a nicety: adding a USD
+	// figure to a ZAR balance drifts the venue's book from the ledger by the
+	// exchange rate on every single close.
 	realised := diff.Mul(closing).Mul(inst.Spec.ContractSize)
+	credit, err := b.toAccountCurrency(ctx, tx, accountRef, realised, string(inst.QuoteCcy))
+	if err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE mock_venue_accounts SET balance = balance + $2, updated_at = now()
-		WHERE account_ref = $1`, accountRef, realised); err != nil {
+		WHERE account_ref = $1`, accountRef, credit); err != nil {
 		return err
 	}
 
@@ -882,9 +965,20 @@ func (b *Broker) ApplySwap(ctx context.Context, accountRef string) (decimal.Deci
 		if charge.IsZero() {
 			continue
 		}
-		if _, err := b.pool.Exec(ctx, `
-			UPDATE mock_venue_accounts SET balance = balance + $2, updated_at = now()
-			WHERE account_ref = $1`, accountRef, charge); err != nil {
+		// Swap is expressed in the quote currency, like realised P&L, and has
+		// to be converted for the same reason. Done in a transaction so the
+		// conversion reads the account's currency and the debit lands
+		// together.
+		if err := b.pool.InTx(ctx, func(tx pgx.Tx) error {
+			debit, err := b.toAccountCurrency(ctx, tx, accountRef, charge, string(inst.QuoteCcy))
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `
+				UPDATE mock_venue_accounts SET balance = balance + $2, updated_at = now()
+				WHERE account_ref = $1`, accountRef, debit)
+			return err
+		}); err != nil {
 			return total, err
 		}
 		total = total.Add(charge)
