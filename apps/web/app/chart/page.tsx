@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 
 import { Empty, Panel } from "@/components/ui";
 import { api, type Bar } from "@/lib/api";
-import { decimal, percent, time } from "@/lib/format";
+import { decimal, percent, percentValue, time } from "@/lib/format";
 import { useAsync, useVantage } from "@/lib/store";
 
 const TIMEFRAMES = ["15m", "1h", "4h"] as const;
@@ -114,7 +114,18 @@ function ChartView() {
             No completed bars for {selected?.symbol} at {timeframe}.
           </Empty>
         ) : (
-          <Candles bars={series} precision={selected?.price_precision ?? 2} />
+          <Candles
+            bars={series}
+            precision={selected?.price_precision ?? 2}
+            label={
+              summary
+                ? `${selected?.symbol ?? "instrument"} ${timeframe} candlestick chart, ` +
+                  `${summary.bars} bars, high ${decimal(String(summary.high), selected?.price_precision ?? 2)}, ` +
+                  `low ${decimal(String(summary.low), selected?.price_precision ?? 2)}, ` +
+                  `change ${percentValue(summary.changePct * 100)}`
+                : `${selected?.symbol ?? "instrument"} ${timeframe} candlestick chart`
+            }
+          />
         )}
       </Panel>
 
@@ -214,7 +225,15 @@ function ChartView() {
  * the palette and the density, it adds no dependency to audit or update, and it
  * cannot pull in a licence that needs reviewing.
  */
-function Candles({ bars, precision }: { bars: Bar[]; precision: number }) {
+function Candles({
+  bars,
+  precision,
+  label,
+}: {
+  bars: Bar[];
+  precision: number;
+  label: string;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(900);
   const [hover, setHover] = useState<number | null>(null);
@@ -263,7 +282,11 @@ function Candles({ bars, precision }: { bars: Bar[]; precision: number }) {
         width={width}
         height={height}
         role="img"
-        aria-label="price chart"
+        // The whole chart is one image to assistive technology, so this label
+        // is everything a screen-reader user gets. "price chart" would be
+        // nothing: the instrument, the timeframe and the range at least say
+        // what is on screen.
+        aria-label={label}
         onMouseLeave={() => setHover(null)}
       >
         {ticks.map((tick) => (

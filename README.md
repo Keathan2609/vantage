@@ -135,6 +135,7 @@ start-up.
 | [OBSERVABILITY](docs/OBSERVABILITY.md) | Logs, metrics, audit, and what to alert on |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Environments, workflows, testing, migrations, conventions |
 | [DISASTER_RECOVERY](docs/DISASTER_RECOVERY.md) | Failure modes, backups, restore, and recovering a broken position view |
+| [ENGINEERING_REPORT](docs/ENGINEERING_REPORT.md) | What was built, what was verified and how, and what was not |
 
 ## Tests
 
