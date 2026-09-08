@@ -522,3 +522,195 @@ func TestEveryDocumentedCheckIsEvaluated(t *testing.T) {
 		check(t, d, name) // fails the test if absent
 	}
 }
+
+// --- reference price -------------------------------------------------------
+//
+// Added after the end-to-end suite exposed the defect these cover: the engine
+// priced every order at the current market, so a limit order 20% below the
+// market with a stop just under its limit was measured as risking a fifth of
+// the account and refused for a risk it did not carry.
+
+func TestLimitOrderRiskIsMeasuredFromTheLimitPrice(t *testing.T) {
+	in := baseInput()
+	// A limit far below the market, with a stop close to it. The real risk is
+	// the small distance between the two.
+	limit := dec("2100.00")
+	stop := dec("2092.00")
+	in.Intent.Type = domain.OrderTypeLimit
+	in.Intent.LimitPrice = &limit
+	in.Intent.StopLoss = &stop
+
+	if got := referencePrice(in); !got.Equal(limit) {
+		t.Fatalf("referencePrice = %s, want the limit price %s", got, limit)
+	}
+
+	d := evaluate(t, in)
+	c := check(t, d, domain.CheckRiskPerTrade)
+	if !c.Passed {
+		t.Fatalf("a limit order with an 8-dollar stop must not breach a 1%% budget: %s", c.Message)
+	}
+	if !d.Approved {
+		t.Fatalf("expected approval, got: %v", d.Failures())
+	}
+}
+
+func TestStopOrderRiskIsMeasuredFromTheStopPrice(t *testing.T) {
+	in := baseInput()
+	trigger := dec("2700.00")
+	stop := dec("2692.00")
+	in.Intent.Type = domain.OrderTypeStop
+	in.Intent.StopPrice = &trigger
+	in.Intent.StopLoss = &stop
+
+	if got := referencePrice(in); !got.Equal(trigger) {
+		t.Fatalf("referencePrice = %s, want the stop trigger %s", got, trigger)
+	}
+	if c := check(t, evaluate(t, in), domain.CheckRiskPerTrade); !c.Passed {
+		t.Fatalf("a stop order measured from its trigger must pass: %s", c.Message)
+	}
+}
+
+func TestMarketOrderStillUsesTheExecutablePrice(t *testing.T) {
+	in := baseInput() // market order, no limit or stop price
+	want := in.Quote.ExecutionPrice(in.Intent.Side)
+	if got := referencePrice(in); !got.Equal(want) {
+		t.Fatalf("referencePrice = %s, want the executable price %s", got, want)
+	}
+}
+
+func TestAMissingRequiredPriceFallsBackToTheMarket(t *testing.T) {
+	// The instrument-rule gate earlier in the pipeline refuses a limit order
+	// with no limit price. If one reaches the engine anyway, it must not
+	// divide by zero or price the order at nothing.
+	in := baseInput()
+	in.Intent.Type = domain.OrderTypeLimit
+	in.Intent.LimitPrice = nil
+
+	want := in.Quote.ExecutionPrice(in.Intent.Side)
+	if got := referencePrice(in); !got.Equal(want) {
+		t.Fatalf("referencePrice = %s, want the market fallback %s", got, want)
+	}
+}
+
+func TestLimitOrderNotionalUsesTheLimitPrice(t *testing.T) {
+	// Notional, margin and exposure all follow the reference price, so a
+	// far-away limit order must not be sized against the current market.
+	in := baseInput()
+	limit := dec("1000.00")
+	stop := dec("996.00")
+	in.Intent.Type = domain.OrderTypeLimit
+	in.Intent.LimitPrice = &limit
+	in.Intent.StopLoss = &stop
+
+	d := evaluate(t, in)
+	notional := check(t, d, domain.CheckOrderNotional)
+	// At 1000 rather than ~2648, the notional is well under half.
+	if !notional.Passed {
+		t.Fatalf("notional check failed for a cheap limit order: %s", notional.Message)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reducing orders: the exposure limits must not prevent shedding exposure
+// ---------------------------------------------------------------------------
+
+// closingPosition builds an input where the account is long `quantity` and the
+// intent sells it back.
+func closingPosition(quantity, sellQuantity string) Input {
+	in := baseInput()
+	held := dec(quantity)
+	in.ExistingPosition = &domain.Position{
+		AccountID:    in.Account.ID,
+		InstrumentID: "XAUUSD.m",
+		Side:         domain.SideBuy,
+		Quantity:     held,
+		Status:       domain.PositionOpen,
+	}
+	in.OpenPositions = 1
+	// The position is worth far more than the per-order notional cap, which is
+	// the situation that made closing impossible.
+	exposure := zar("3866.77")
+	in.Snapshot.State.GrossExposure = exposure
+	in.Snapshot.State.NetExposure = exposure
+	in.Snapshot.ExposureByInstrument["XAUUSD.m"] = exposure
+
+	in.Intent.Side = domain.SideSell
+	in.Intent.Quantity = dec(sellQuantity)
+	// A closing order carries no protective stop: there is nothing left to
+	// protect once it fills.
+	in.Intent.StopLoss = nil
+	return in
+}
+
+func TestAPositionLargerThanTheOrderNotionalCapCanStillBeClosed(t *testing.T) {
+	// The defect this pins: a flatten of a 3866.77 ZAR position was refused
+	// with "Order notional 3866.77 ZAR against a limit of 2500.00 ZAR". The
+	// position had been built by several individually-permitted orders, and
+	// the per-order cap then made it impossible to exit. A risk control that
+	// prevents reducing risk is worse than no control, because it converts a
+	// large position into a trapped one.
+	d := evaluate(t, closingPosition("0.08", "0.08"))
+
+	notional := check(t, d, domain.CheckOrderNotional)
+	if !notional.Passed {
+		t.Fatalf("a full close was refused by the per-order notional cap: %s", notional.Message)
+	}
+	for _, name := range []domain.RiskCheckName{
+		domain.CheckGrossExposure,
+		domain.CheckNetExposure,
+		domain.CheckInstrumentExposure,
+	} {
+		if r := check(t, d, name); !r.Passed {
+			t.Errorf("a full close was refused by %s: %s", name, r.Message)
+		}
+	}
+}
+
+func TestAPartialCloseIsAlsoTreatedAsReducing(t *testing.T) {
+	d := evaluate(t, closingPosition("0.08", "0.03"))
+	if r := check(t, d, domain.CheckOrderNotional); !r.Passed {
+		t.Fatalf("a partial close was refused by the notional cap: %s", r.Message)
+	}
+}
+
+func TestAnOverClosingSideFlipDoesNotSkipTheExposureChecks(t *testing.T) {
+	// The other half of the same fix, and the more dangerous half.
+	//
+	// `reducing` used to mean only "opposite side". An account long 0.08 could
+	// therefore SELL 5.00 lots and skip the gross-exposure, per-instrument and
+	// concentration checks completely — 0.08 of that is a close and 4.92 is a
+	// large new short position, taken with the exposure limits switched off.
+	//
+	// A side flip is not a reduction and must be measured like any other new
+	// exposure.
+	in := closingPosition("0.08", "5.00")
+	d := evaluate(t, in)
+
+	if d.Approved {
+		t.Fatal("a 5.00-lot sell against a 0.08-lot long was approved; an " +
+			"over-closing side flip must be measured as new exposure")
+	}
+	gross := check(t, d, domain.CheckGrossExposure)
+	notional := check(t, d, domain.CheckOrderNotional)
+	if gross.Passed && notional.Passed {
+		t.Fatalf("neither the gross-exposure nor the notional check refused a "+
+			"side flip far beyond every limit (gross=%s notional=%s)",
+			gross.Observed, notional.Observed)
+	}
+}
+
+func TestAnAddingOrderOnTheSameSideIsNeverTreatedAsReducing(t *testing.T) {
+	in := closingPosition("0.08", "0.08")
+	in.Intent.Side = domain.SideBuy // adding to the long, not closing it
+	stop := dec("2628.00")
+	in.Intent.StopLoss = &stop
+	d := evaluate(t, in)
+
+	if r := check(t, d, domain.CheckOrderNotional); r.Passed {
+		t.Fatal("an order ADDING to an existing long skipped the notional cap")
+	}
+	if d.Approved {
+		t.Fatal("an order that would push exposure to 7733 ZAR against a 2500 " +
+			"ZAR limit was approved")
+	}
+}

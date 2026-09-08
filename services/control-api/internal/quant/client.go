@@ -39,6 +39,7 @@ type Client struct {
 
 	mu      sync.Mutex
 	breaker circuitBreaker
+	alerter Alerter
 }
 
 // Errors callers distinguish.
@@ -94,19 +95,50 @@ func (c *Client) breakerOpen(now time.Time) bool {
 
 func (c *Client) recordFailure(now time.Time) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.breaker.failures++
+	opened := false
 	if c.breaker.failures >= c.breaker.threshold {
 		c.breaker.openUntil = now.Add(c.breaker.cooldown)
 		c.breaker.failures = 0
+		opened = true
+	}
+	alerter := c.alerter
+	c.mu.Unlock()
+
+	// Alerted when the breaker OPENS, not on every failed call: the breaker
+	// exists precisely because the service is flapping, and an alert per
+	// failure would flap with it.
+	if opened && alerter != nil {
+		alerter.QuantFailure(context.Background(),
+			"circuit breaker opened after repeated failures", true)
 	}
 }
 
 func (c *Client) recordSuccess() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	wasOpen := !c.breaker.openUntil.IsZero() || c.breaker.failures > 0
 	c.breaker.failures = 0
 	c.breaker.openUntil = time.Time{}
+	alerter := c.alerter
+	c.mu.Unlock()
+
+	if wasOpen && alerter != nil {
+		alerter.QuantRecovered(context.Background())
+	}
+}
+
+// Alerter is the subset of internal/notify this client needs. Declared here
+// so quant does not import notify, which imports store.
+type Alerter interface {
+	QuantFailure(ctx context.Context, reason string, breakerOpen bool)
+	QuantRecovered(ctx context.Context)
+}
+
+// SetAlerter attaches an alerter after construction.
+func (c *Client) SetAlerter(a Alerter) {
+	c.mu.Lock()
+	c.alerter = a
+	c.mu.Unlock()
 }
 
 // Health probes the research service.

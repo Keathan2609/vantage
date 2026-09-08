@@ -53,6 +53,25 @@ type Ingestor struct {
 
 	mu     sync.RWMutex
 	health map[string]domain.MarketDataHealth
+
+	// alerter is optional: the ingestor works without it, and a nil alerter
+	// keeps the tests free of a database.
+	alerter Alerter
+}
+
+// Alerter is the subset of internal/notify the ingestor needs. Declared here
+// rather than imported so marketdata does not depend on notify, which depends
+// on store — the dependency would point outwards.
+type Alerter interface {
+	FeedDegraded(ctx context.Context, instrumentID, symbol, state string, issues []string, ageSeconds float64)
+	FeedRecovered(ctx context.Context, instrumentID, symbol string)
+}
+
+// SetAlerter attaches an alerter after construction.
+func (i *Ingestor) SetAlerter(a Alerter) {
+	i.mu.Lock()
+	i.alerter = a
+	i.mu.Unlock()
 }
 
 // NewIngestor builds an ingestor.
@@ -200,8 +219,31 @@ func (i *Ingestor) AllHealth() map[string]domain.MarketDataHealth {
 
 func (i *Ingestor) setHealth(h domain.MarketDataHealth) {
 	i.mu.Lock()
+	previous, existed := i.health[h.InstrumentID]
 	i.health[h.InstrumentID] = h
+	alerter := i.alerter
 	i.mu.Unlock()
+
+	if alerter == nil {
+		return
+	}
+	// Alert on the STATE, not on every tick. The alerter applies its own
+	// cooldown, but transitions are what an operator wants to see: a feed
+	// going bad, and a feed coming back.
+	nowBad := !h.State.TradableForAutomation()
+	wasBad := existed && !previous.State.TradableForAutomation()
+
+	ctx := context.Background()
+	switch {
+	case nowBad:
+		issues := make([]string, 0, len(h.Issues))
+		for _, issue := range h.Issues {
+			issues = append(issues, string(issue))
+		}
+		alerter.FeedDegraded(ctx, h.InstrumentID, h.Symbol, string(h.State), issues, h.QuoteAge.Seconds())
+	case wasBad:
+		alerter.FeedRecovered(ctx, h.InstrumentID, h.Symbol)
+	}
 }
 
 // ---------------------------------------------------------------------------

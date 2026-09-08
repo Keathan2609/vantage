@@ -136,6 +136,47 @@ to notice:
 A result with warnings is still stored. Suppressing it would just move the
 judgement out of view.
 
+## The look-ahead audit
+
+Every rule above is only worth what its enforcement is worth, so the whole
+research plane was audited for the ways future information leaks into a
+backtest. What was checked, and what was found:
+
+| Leak | Enforcement | Verified by |
+| --- | --- | --- |
+| A strategy reading a bar it could not have seen | The engine hands each strategy `bars.iloc[: i + 1]` — a strict prefix, never the whole frame | `backtest.py:196`; `test_backtest.py` |
+| Bars supplied out of order | Non-ascending timestamps are rejected before the run starts, so a "shuffle" cannot be smuggled in as input | `test_backtest.py` |
+| An indicator reading forward | 13 indicator series are recomputed on truncated prefixes and compared value-by-value | `test_indicators.py::test_no_lookahead` (parameterised) |
+| Indicator warm-up producing a value from too little data | 15 `min_periods` declarations; warm-up bars are `NaN`, not a partial average | `test_indicators.py` |
+| Same-bar execution | Honesty rule 1: fills are on the *next* bar's open | `test_backtest.py` |
+| Random train/test splits | `chronological_split` only; the sole permutation in the codebase is `monte_carlo_trade_order`, which reorders completed *trades* to sample sequence risk and never reorders bars | `test_evaluation.py` |
+| Train/test adjacency | `embargo_bars` (default 2) drops bars either side of the boundary, so a label whose horizon straddles the split cannot be learned from | `test_evaluation.py` |
+| Target leakage | Labels are built from a forward horizon and the horizon bars are excluded from the features for that row | `docs/MACHINE_LEARNING.md` |
+| Holdout reuse | The test split is scored once and is not used for selection | `docs/MACHINE_LEARNING.md` |
+| Revised economic data | Calendar events are keyed on their release timestamp, and a revision is a new row rather than an edit to the original | `docs/NEWS_AND_CALENDAR.md` |
+
+**One finding, and it is a caveat rather than a bug.** `support_resistance` is
+the only indicator that uses `shift(-1)`, to identify a swing point by
+comparing a bar with its neighbours on both sides. It cannot mark the final bar
+as a swing — there is no bar after it — which is correct. But it then reports
+the *mean* of each cluster of swing points, so adding later bars changes
+cluster membership and moves the reported level: a level found at 1844.24 over
+400 bars had no counterpart within 159 points once 600 bars were supplied.
+
+That is estimator non-stationarity, not exploitable look-ahead. Two facts
+bound it:
+
+1. Nothing calls the function. It is exported and tested; no strategy, scanner
+   or model uses it today.
+2. Any caller inside the backtester receives a prefix, so it could only ever
+   see levels derived from bars that had already closed.
+
+It is documented rather than silently "fixed" because the honest constraint on
+a future caller is a rule, not a code change: **pass a prefix, and never
+compare a level computed over one window against one computed over another.**
+`test_support_resistance_levels_depend_on_the_window_given` pins the behaviour
+so that a change to it is deliberate.
+
 ## What a backtest still cannot tell you
 
 - **Slippage in the conditions that matter.** The model is a fraction; real

@@ -17,6 +17,10 @@ const baseURL = process.env.VANTAGE_E2E_BASE_URL ?? "http://localhost:3000";
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Signs in once and saves the session. The login rate limit is a real
+  // control, and a suite that signs in per test exhausts it and then reports
+  // the refusals as application failures.
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: false, // The suite shares one paper account and its ledger.
   forbidOnly: !!process.env.CI,
   retries: 0, // A flaky trading test is a defect, not something to retry away.
@@ -26,6 +30,9 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   use: {
     baseURL,
+    // Every spec starts authenticated as the trader unless it overrides this.
+    // The specs that exercise the sign-in FORM clear it explicitly.
+    storageState: "test-results/.auth/trader.json",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",

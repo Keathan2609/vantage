@@ -190,8 +190,13 @@ jobs:
         # material is committed to this repository, not even a placeholder
         # that could be copied into a real environment.
         run: |
-          export VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-          export VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          # Declared and assigned separately (SC2155): `export VAR="$(cmd)"`
+          # returns export's status, not the command's, so a failing openssl
+          # would silently produce an empty key and surface much later as a
+          # confusing configuration error.
+          VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          export VANTAGE_DATA_ENCRYPTION_KEY VANTAGE_SESSION_SIGNING_KEY
           go run ./cmd/control-api migrate
           go run ./cmd/control-api migrate-status
 
@@ -206,8 +211,13 @@ jobs:
           VANTAGE_MIGRATION_DATABASE_URL: postgres://vantage_owner:vantage_owner_dev_password@127.0.0.1:5432/vantage?sslmode=disable
           VANTAGE_DATA_ENCRYPTION_KEY_VERSION: '1'
         run: |
-          export VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-          export VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          # Declared and assigned separately (SC2155): `export VAR="$(cmd)"`
+          # returns export's status, not the command's, so a failing openssl
+          # would silently produce an empty key and surface much later as a
+          # confusing configuration error.
+          VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          export VANTAGE_DATA_ENCRYPTION_KEY VANTAGE_SESSION_SIGNING_KEY
           go run ./cmd/control-api migrate
 
       # The database's own refusals are part of the security model, so CI

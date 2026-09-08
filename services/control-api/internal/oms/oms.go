@@ -69,7 +69,19 @@ type Service struct {
 	clock       domain.Clock
 	marketClock *domain.MarketClock
 	mode        domain.ExecutionMode
+	alerter     Alerter
 }
+
+// Alerter is the subset of internal/notify the OMS needs, declared here so
+// oms does not import notify.
+type Alerter interface {
+	OrderOutcomeUnknown(ctx context.Context, accountID uuid.UUID, orderID, symbol, cause string)
+	BrokerFailure(ctx context.Context, brokerName, operation string, unknownOutcome bool, cause string)
+	DailyLossThreshold(ctx context.Context, accountID uuid.UUID, loss, limit, currency string, breached bool)
+}
+
+// SetAlerter attaches an alerter after construction.
+func (s *Service) SetAlerter(a Alerter) { s.alerter = a }
 
 // New builds the OMS.
 //
@@ -201,6 +213,18 @@ func (s *Service) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (Result
 	}
 	if !decision.Approved {
 		r := rejectionFromDecision(decision)
+		// A daily-loss refusal is the one risk outcome an operator must be
+		// told about rather than discover in a list: it means no further
+		// orders will be accepted today.
+		if s.alerter != nil {
+			for _, check := range decision.Checks {
+				if check.Name == domain.CheckDailyLoss && !check.Passed {
+					s.alerter.DailyLossThreshold(ctx, account.ID,
+						check.Observed, check.Limit, string(account.Currency), true)
+					break
+				}
+			}
+		}
 		return s.persistRejection(ctx, req, account, ctxData, r, decision, now)
 	}
 
@@ -701,7 +725,73 @@ func (s *Service) applyAck(ctx context.Context, req PlaceOrderRequest, account d
 
 	result := Result{DecisionID: &decisionID}
 
-	err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+	apply := func(tx pgx.Tx) error {
+		// Reset on a retry: a rolled-back attempt may have appended fills to
+		// the result before it failed, and replaying would double-count them.
+		result = Result{DecisionID: &decisionID}
+		return s.applyAckTx(ctx, tx, req, account, g, order, ack, &result, now)
+	}
+
+	// A deadlock rolls the whole transaction back, so replaying it is safe --
+	// the venue's answer is still in `ack`, in memory. One retry is attempted
+	// because the lock order (see store.LockAccountTx) should make a deadlock
+	// impossible; a second failure means something is wrong that retrying will
+	// not fix.
+	err := s.store.Pool().InTx(ctx, apply)
+	if errors.Is(err, store.ErrDeadlock) {
+		logging.FromContext(ctx).Warn(
+			"deadlock while persisting an accepted order; retrying once",
+			"order_id", order.ID, "error", err.Error())
+		metrics.OrderPersistDeadlocks.Inc()
+		err = s.store.Pool().InTx(ctx, apply)
+	}
+	if err != nil {
+		// THE DANGEROUS CASE. The venue accepted this order and we could not
+		// write down what happened. The outcome is therefore UNKNOWN, exactly
+		// as it is when the broker's response is lost -- and it must be
+		// recorded that way.
+		//
+		// Returning the raw error here (which is what this code did until a
+		// concurrency test produced six HTTP 500s from one burst of orders)
+		// leaves the order in its pre-submission state while the venue holds a
+		// live order, with nothing marking it for reconciliation and nothing
+		// blocking automation. That is the one state this system is built to
+		// never be in.
+		logging.FromContext(ctx).Error(
+			"could not persist an order the venue accepted; marking the outcome unknown",
+			"order_id", order.ID, "broker_order_id", ack.BrokerOrderID, "error", err.Error())
+		return s.failOrder(ctx, req, account, order, domain.NewRejection(
+			domain.RejectInternalError,
+			"The venue accepted this order but Vantage could not record the result. "+
+				"Its true state is unknown and will be resolved by reconciliation."),
+			now)
+	}
+
+	// Refresh the snapshot after the fills so the caller sees post-trade state.
+	snap, err := s.portfolio.Compute(ctx, account)
+	if err == nil {
+		result.Snapshot = &snap
+		_ = s.portfolio.RecordEquityPoint(ctx, snap)
+	}
+	return result, nil
+}
+
+// applyAckTx is the body of Phase D: everything the venue's answer changes,
+// written in one transaction.
+func (s *Service) applyAckTx(ctx context.Context, tx pgx.Tx, req PlaceOrderRequest,
+	account domain.Account, g gatheredContext, order domain.Order, ack broker.OrderAck,
+	result *Result, now time.Time) error {
+	{
+		// The account's row lock is taken FIRST, before the order, the
+		// position, the fill or the ledger. See store.LockAccountTx for the
+		// deadlock this prevents: without it, the FK on `fills` takes an
+		// implicit KEY SHARE on this row early and the explicit FOR UPDATE
+		// arrives late, with the positions lock in between — which is a cycle
+		// that Postgres resolves by killing one of the transactions.
+		if err := s.store.Accounts.LockAccountTx(ctx, tx, account.ID); err != nil {
+			return err
+		}
+
 		current, err := s.store.Trading.OrderByIDTx(ctx, tx, order.ID)
 		if err != nil {
 			return err
@@ -772,18 +862,7 @@ func (s *Service) applyAck(ctx context.Context, req PlaceOrderRequest, account d
 				"broker_order_id": ack.BrokerOrderID, "status": current.Status,
 				"symbol": g.instrument.Symbol, "quantity": current.Quantity.String(),
 			})
-	})
-	if err != nil {
-		return Result{}, err
 	}
-
-	// Refresh the snapshot after the fills so the caller sees post-trade state.
-	snap, err := s.portfolio.Compute(ctx, account)
-	if err == nil {
-		result.Snapshot = &snap
-		_ = s.portfolio.RecordEquityPoint(ctx, snap)
-	}
-	return result, nil
 }
 
 // applyFillTx books one execution: the fill, the position and the ledger.
@@ -955,6 +1034,10 @@ func (s *Service) rejectAcceptedOrder(ctx context.Context, req PlaceOrderRequest
 
 	var rejected domain.Order
 	err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		// Same declared lock order as Phase D: the account row first.
+		if err := s.store.Accounts.LockAccountTx(ctx, tx, account.ID); err != nil {
+			return err
+		}
 		current, err := s.store.Trading.OrderByIDTx(ctx, tx, order.ID)
 		if err != nil {
 			return err
@@ -985,6 +1068,10 @@ func (s *Service) failOrder(ctx context.Context, req PlaceOrderRequest, account 
 
 	var failed domain.Order
 	err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		// Same declared lock order as Phase D: the account row first.
+		if err := s.store.Accounts.LockAccountTx(ctx, tx, account.ID); err != nil {
+			return err
+		}
 		current, err := s.store.Trading.OrderByIDTx(ctx, tx, order.ID)
 		if err != nil {
 			return err
@@ -1022,6 +1109,13 @@ func (s *Service) failOrder(ctx context.Context, req PlaceOrderRequest, account 
 		return Result{}, err
 	}
 	metrics.OrdersFailed.WithLabelValues(req.InstrumentID).Inc()
+	if s.alerter != nil {
+		// Raised outside the transaction: an alerting failure must not roll
+		// back the record that the order failed.
+		s.alerter.OrderOutcomeUnknown(ctx, account.ID, failed.ID.String(),
+			req.InstrumentID, rej.Message)
+		s.alerter.BrokerFailure(ctx, account.BrokerName, "place_order", true, rej.Message)
+	}
 	return Result{Order: &failed, Rejection: &rej}, nil
 }
 

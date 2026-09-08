@@ -26,6 +26,7 @@ import (
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/marketdata"
 	"github.com/vantage/control-api/internal/metrics"
+	"github.com/vantage/control-api/internal/notify"
 	"github.com/vantage/control-api/internal/oms"
 	"github.com/vantage/control-api/internal/orchestrator"
 	"github.com/vantage/control-api/internal/portfolio"
@@ -55,6 +56,7 @@ type App struct {
 	Ingestor     *marketdata.Ingestor
 	Provider     *marketdata.MockProvider
 	EconData     *econdata.Ingestor
+	Alerter      *notify.Alerter
 	Scheduler    *scheduler.Scheduler
 	MarketClock  *domain.MarketClock
 	Clock        domain.Clock
@@ -177,6 +179,20 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	a.Orchestrator = orchestrator.New(a.Store, a.Quant, a.OMS, a.Portfolio, a.Converter,
 		a.Reconciler, a.Clock, a.MarketClock)
 
+	// Alerting is wired once every producer exists, and before the scheduler
+	// starts, so each source has a sink from its first tick. Each component
+	// declares its own narrow Alerter interface, which is why notify can
+	// depend on store while nothing depends on notify.
+	//
+	// The order matters and is the reason this block sits here rather than
+	// beside the OMS: an earlier revision attached the alerter to a.Quant
+	// before a.Quant was constructed, and the service panicked on start-up.
+	a.Alerter = notify.New(a.Store, func() time.Time { return a.Clock.Now() })
+	a.Ingestor.SetAlerter(a.Alerter)
+	a.OMS.SetAlerter(a.Alerter)
+	a.Quant.SetAlerter(a.Alerter)
+	a.Reconciler.SetAlerter(a.Alerter)
+
 	a.Scheduler = scheduler.New(scheduler.Deps{
 		Store:        a.Store,
 		Pool:         pool,
@@ -194,7 +210,9 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	a.Server, err = httpapi.NewServer(httpapi.Deps{
 		Config: cfg, Logger: log, Pool: pool, Store: a.Store, Keyring: a.Keyring,
 		Limiter: a.Limiter, Brokers: a.Brokers, OMS: a.OMS, Portfolio: a.Portfolio,
-		Ingestor: a.Ingestor, EconData: a.EconData, Reconciler: a.Reconciler, Quant: a.Quant,
+		Ingestor: a.Ingestor, EconData: a.EconData, Alerter: a.Alerter,
+		MockBroker: a.MockBroker,
+		Reconciler: a.Reconciler, Quant: a.Quant,
 		Orchestrator: a.Orchestrator, Clock: a.Clock, MarketClock: a.MarketClock,
 		Version: Version, Commit: Commit,
 	})

@@ -7,10 +7,16 @@ worse than no model: it carries confidence it has not earned.
 
 What is enforced here:
 
-*   **Chronological splits with an embargo.** Train, validation and test are
-    contiguous time windows in order, with a gap between them. Random
-    K-fold on time-series data trains on the future and is the most common
-    single cause of an unreproducible result.
+*   **Chronological splits with an embargo that covers the label horizon.**
+    Train, validation and test are contiguous time windows in order, with a gap
+    between them. Random K-fold on time-series data trains on the future and is
+    the most common single cause of an unreproducible result.
+
+    The gap must be at least as wide as the label's forward horizon, and
+    ``train`` refuses a request where it is not. A 2-bar embargo on a 10-bar
+    label leaks: the last eight training rows are labelled from closes inside
+    the validation window. That combination was reachable through the API until
+    an audit found it.
 
 *   **Labels are strictly forward-looking, and the rows that need future data
     to label are dropped.** A label built from the next N bars cannot exist for
@@ -370,6 +376,27 @@ def train(
     if algorithm not in ALGORITHMS:
         raise ValueError(f"unknown algorithm {algorithm!r}; choose from {sorted(ALGORITHMS)}")
 
+    # The embargo must cover the label's forward horizon, or the split leaks.
+    #
+    # A row at the end of the training window is labelled from the close
+    # `horizon` bars later. If the embargo is narrower than the horizon, those
+    # closes fall INSIDE the validation window: the model is trained on the
+    # outcome of bars it is then scored against, and the validation number is
+    # not a measure of anything. The same applies at the validation/test
+    # boundary.
+    #
+    # This is refused rather than silently widened. A caller who asked for a
+    # 2-bar embargo on a 10-bar label has a mistaken mental model, and quietly
+    # giving them a different split than the one they requested — and recording
+    # it in the model's provenance — hides that instead of correcting it.
+    if embargo_bars < horizon:
+        raise ValueError(
+            f"embargo_bars ({embargo_bars}) is smaller than the label horizon "
+            f"({horizon}). The last {horizon - embargo_bars} training row(s) would be "
+            f"labelled from closes inside the validation window, which leaks the test "
+            f"outcome into training. Use embargo_bars >= {horizon}."
+        )
+
     dataset = build_dataset(bars, horizon)
     split = chronological_split(
         dataset.row_count, train_fraction, validation_fraction, embargo_bars
@@ -416,7 +443,7 @@ def train(
         )
     }
 
-    warnings = _training_warnings(evaluations, y, split)
+    warnings = _training_warnings(evaluations, y, split, horizon)
 
     return TrainedModel(
         key=key,
@@ -490,7 +517,7 @@ def evaluate(pipeline: Any, x: np.ndarray, y: np.ndarray) -> dict[str, Any]:
 
 
 def _training_warnings(
-    evaluations: dict[str, dict[str, Any]], y: np.ndarray, split: Split
+    evaluations: dict[str, dict[str, Any]], y: np.ndarray, split: Split, horizon: int
 ) -> list[str]:
     warnings: list[str] = []
 
@@ -516,10 +543,16 @@ def _training_warnings(
             f"high for a liquid market. Check the feature set for look-ahead before "
             f"believing it."
         )
-    if split.embargo_bars == 0:
+    # There is deliberately no "embargo is zero" warning here any more: `train`
+    # now REFUSES an embargo narrower than the label horizon, and the horizon is
+    # at least 1, so a zero embargo can no longer reach this point. A warning
+    # that cannot fire reads like a check that is happening when it is not.
+    if split.embargo_bars == horizon:
         warnings.append(
-            "No embargo between windows. With a forward-looking label the last training "
-            "rows share their outcome window with the first validation rows."
+            f"The embargo ({split.embargo_bars} bars) exactly equals the label horizon. "
+            f"That is the minimum that prevents label overlap, and it leaves no room for "
+            f"serial correlation between adjacent windows; a wider gap gives a more "
+            f"conservative validation score."
         )
     positive_rate = float(np.mean(y))
     if positive_rate < 0.4 or positive_rate > 0.6:

@@ -382,6 +382,11 @@ const (
 	RejectBrokerRejected       RejectCode = "broker_rejected"
 	RejectBrokerUnavailable    RejectCode = "broker_unavailable"
 	RejectInternalError        RejectCode = "internal_error"
+	// RejectReconciledAbsent closes out an order whose outcome was unknown and
+	// which reconciliation then found the venue had never accepted. It is not
+	// an internal error: nothing went wrong locally, and the order genuinely
+	// did not happen.
+	RejectReconciledAbsent RejectCode = "reconciled_absent_at_venue"
 )
 
 // Rejection is a structured refusal with an explanation safe to show a user.

@@ -309,6 +309,23 @@ func (s *TradingStore) CountOpenOrders(ctx context.Context, accountID uuid.UUID)
 func (s *TradingStore) TransitionOrderTx(ctx context.Context, tx pgx.Tx, orderID uuid.UUID,
 	expectedVersion int64, to domain.OrderStatus, reason string, actorType string, actorUserID *uuid.UUID) (domain.Order, error) {
 
+	return s.TransitionOrderWithCodeTx(ctx, tx, orderID, expectedVersion, to, "", reason, actorType, actorUserID)
+}
+
+// TransitionOrderWithCodeTx transitions an order and, when the destination is
+// REJECTED, records the machine-readable code alongside the reason.
+//
+// This exists because `orders_reject_pair_ck` requires a rejected order to
+// carry a code, and an order that says REJECTED with no reason is unusable as
+// evidence. Reconciliation hit this: it moved a FAILED order the venue had no
+// record of to REJECTED without a code, the constraint refused the write, and
+// the whole reconciliation run failed — which permanently blocked automated
+// trading for the account, in exactly the recovery path the FAILED state
+// exists to serve.
+func (s *TradingStore) TransitionOrderWithCodeTx(ctx context.Context, tx pgx.Tx, orderID uuid.UUID,
+	expectedVersion int64, to domain.OrderStatus, code domain.RejectCode, reason string,
+	actorType string, actorUserID *uuid.UUID) (domain.Order, error) {
+
 	current, err := s.OrderByIDTx(ctx, tx, orderID)
 	if err != nil {
 		return domain.Order{}, err
@@ -329,12 +346,27 @@ func (s *TradingStore) TransitionOrderTx(ctx context.Context, tx pgx.Tx, orderID
 		submittedAt = "COALESCE(submitted_at, now())"
 	}
 
+	// A rejected order must carry a code. COALESCE preserves the original
+	// code when one is already present, so a re-transition cannot overwrite
+	// the reason an order was first refused.
+	rejectCode := any(nil)
+	rejectReason := any(nil)
+	if to == domain.OrderRejected {
+		if code == "" {
+			code = domain.RejectInternalError
+		}
+		rejectCode = string(code)
+		rejectReason = reason
+	}
+
 	tag, err := tx.Exec(ctx, fmt.Sprintf(`
 		UPDATE orders
 		SET status = $2, updated_at = now(), version = version + 1,
-		    closed_at = %s, submitted_at = %s
+		    closed_at = %s, submitted_at = %s,
+		    reject_code = COALESCE(reject_code, $4),
+		    reject_reason = COALESCE(NULLIF(reject_reason, ''), $5)
 		WHERE id = $1 AND version = $3`, closedAt, submittedAt),
-		orderID, to, expectedVersion)
+		orderID, to, expectedVersion, rejectCode, rejectReason)
 	if err != nil {
 		return domain.Order{}, mapError(err)
 	}

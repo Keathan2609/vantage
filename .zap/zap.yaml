@@ -1,0 +1,35 @@
+env:
+  contexts:
+  - excludePaths: []
+    name: baseline
+    urls:
+    - http://host.docker.internal:3002
+  parameters:
+    failOnError: true
+    progressToStdout: false
+jobs:
+- parameters:
+    enableTags: false
+    maxAlertsPerRule: 10
+  type: passiveScan-config
+- parameters:
+    maxDuration: 1
+    url: http://host.docker.internal:3002
+  type: spider
+- parameters:
+    maxDuration: 0
+  type: passiveScan-wait
+- parameters:
+    format: Short
+    summaryFile: /home/zap/zap_out.json
+  rules:
+  - action: IGNORE
+    customMessage: ''
+    id: 10049
+  - action: IGNORE
+    customMessage: ''
+    id: 10109
+  - action: WARN
+    customMessage: ''
+    id: 10055
+  type: outputSummary

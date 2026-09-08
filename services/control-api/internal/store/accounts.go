@@ -157,14 +157,56 @@ func (s *AccountStore) AppendTransactionTx(ctx context.Context, tx pgx.Tx, t dom
 	return out, nil
 }
 
+// LockAccountTx takes the account's exclusive row lock.
+//
+// # The lock order, and why it has to be declared
+//
+// This is the OUTERMOST lock for every transaction that writes anything
+// belonging to an account. It must be taken BEFORE any other row in that
+// account's graph — before positions, before fills, before the ledger.
+//
+// That rule is not stylistic. It was written after a concurrency test placed
+// eight orders at once on one account and six of them died with
+// "deadlock detected (SQLSTATE 40P01)", surfaced to the client as HTTP 500 —
+// on an order-placement call, which is the worst possible place to return an
+// answer that means nothing.
+//
+// The cycle was subtle, because no two statements appeared to lock in
+// different orders. Every table in this graph carries
+// `account_id REFERENCES accounts (id)`, so INSERTing a fill silently takes a
+// FOR KEY SHARE lock on the account row. The sequence was:
+//
+//	T1  INSERT fill        -> KEY SHARE on accounts (implicit, via the FK)
+//	T1  SELECT position    -> FOR UPDATE on positions          [held]
+//	T2  INSERT fill        -> KEY SHARE on accounts (granted; compatible)
+//	T2  SELECT position    -> waits for T1's positions lock
+//	T1  SELECT account     -> FOR UPDATE, conflicts with T2's KEY SHARE
+//	                          -> waits for T2. Cycle.
+//
+// So the implicit lock came first and the explicit one came last, with the
+// positions lock wedged between them. Taking the exclusive account lock up
+// front collapses that: every writer queues on one row, in one order, and
+// there is no cycle left to detect.
+//
+// The cost is real and accepted: writes to one account serialise. For a
+// single-operator platform that is the correct trade — a lost fill is
+// unrecoverable, a queued one is merely slower.
+func (s *AccountStore) LockAccountTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID) error {
+	var locked uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, accountID).Scan(&locked); err != nil {
+		return mapError(err)
+	}
+	return nil
+}
+
 // BalanceTx returns the account's current balance from the ledger's most
 // recent entry, taking a row lock so a concurrent writer waits.
 func (s *AccountStore) BalanceTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, ccy money.Currency) (money.Amount, error) {
-	// Lock the account row first: this is the serialisation point for all
-	// ledger writes on this account.
-	var locked uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, accountID).Scan(&locked); err != nil {
-		return money.Amount{}, mapError(err)
+	// Idempotent when the caller already holds it, which it should: see
+	// LockAccountTx for the lock order this is part of.
+	if err := s.LockAccountTx(ctx, tx, accountID); err != nil {
+		return money.Amount{}, err
 	}
 
 	var balance decimal.Decimal
@@ -405,4 +447,18 @@ func AssertPaperMode(mode domain.ExecutionMode) error {
 		return fmt.Errorf("refusing to persist a %s-mode financial record: this build is paper-only", mode)
 	}
 	return nil
+}
+
+// OwnerOf returns the user who owns an account.
+//
+// Used to route an account-scoped alert to the person it concerns rather than
+// to everyone.
+func (s *AccountStore) OwnerOf(ctx context.Context, accountID uuid.UUID) (uuid.UUID, error) {
+	var userID uuid.UUID
+	err := s.pool.QueryRow(ctx,
+		`SELECT user_id FROM accounts WHERE id = $1`, accountID).Scan(&userID)
+	if err != nil {
+		return uuid.Nil, mapError(err)
+	}
+	return userID, nil
 }

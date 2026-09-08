@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -27,9 +28,19 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-BASE = "http://127.0.0.1:8080"
+BASE = os.environ.get("VANTAGE_SMOKE_API_BASE_URL", "http://127.0.0.1:8080")
 API = BASE + "/api/v1"
-ORIGIN = "http://localhost:3000"
+
+# The Origin header the control plane will accept.
+#
+# This must match VANTAGE_PUBLIC_WEB_ORIGIN on the running API. It was
+# hardcoded to :3000, and on a machine where another project already held that
+# port -- so the terminal ran on :3001 and the API was configured for :3001 --
+# every request was rejected at the origin check and the suite died with
+# "ConnectionResetError: [WinError 10054]". That error says nothing about
+# origins, so make it configurable rather than leaving the next person to
+# rediscover it.
+ORIGIN = os.environ.get("VANTAGE_SMOKE_WEB_ORIGIN", "http://localhost:3000")
 TRADER = ("trader@vantage.local", "dev-Trader-Passw0rd!")
 
 passed = 0

@@ -68,12 +68,29 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, payload any) 
 // endpoint into an enumeration oracle.
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error, notFoundMessage string) {
 	log := logging.FromContext(r.Context())
+	var illegalTransition domain.ErrIllegalTransition
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", notFoundMessage)
 	case errors.Is(err, store.ErrStaleVersion):
 		writeError(w, r, http.StatusConflict, "stale_version",
 			"This record changed while you were editing it. Reload and try again.")
+	case errors.As(err, &illegalTransition):
+		// A state-machine refusal is a CONFLICT with the record's current
+		// state, not an internal error.
+		//
+		// Eight concurrent cancels of one order produced one 200 and seven
+		// HTTP 500s before this case existed: the first moved the order to
+		// CANCEL_PENDING and the rest were told "illegal order state
+		// transition CANCEL_PENDING -> CANCEL_PENDING", which fell through to
+		// the default branch. The platform behaved correctly — exactly one
+		// cancel took effect — but reported the normal outcome of a race as a
+		// server fault, which is how a caller learns to retry something it
+		// should not.
+		writeError(w, r, http.StatusConflict, "illegal_state_transition",
+			fmt.Sprintf("This order is %s and cannot move to %s. It may already have "+
+				"been cancelled or filled; reload to see its current state.",
+				illegalTransition.From, illegalTransition.To))
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrConstraint):
 		// The constraint name is logged, not returned: it describes the schema.
 		log.Warn("constraint violation", "error", err.Error(), "path", r.URL.Path)

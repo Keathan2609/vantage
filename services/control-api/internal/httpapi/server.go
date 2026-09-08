@@ -24,6 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/vantage/control-api/internal/broker"
+	brokermock "github.com/vantage/control-api/internal/broker/mock"
 	"github.com/vantage/control-api/internal/config"
 	"github.com/vantage/control-api/internal/crypto"
 	"github.com/vantage/control-api/internal/db"
@@ -32,6 +33,7 @@ import (
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/marketdata"
 	"github.com/vantage/control-api/internal/metrics"
+	"github.com/vantage/control-api/internal/notify"
 	"github.com/vantage/control-api/internal/oms"
 	"github.com/vantage/control-api/internal/orchestrator"
 	"github.com/vantage/control-api/internal/portfolio"
@@ -54,6 +56,8 @@ type Deps struct {
 	Portfolio    *portfolio.Service
 	Ingestor     *marketdata.Ingestor
 	EconData     *econdata.Ingestor
+	Alerter      *notify.Alerter
+	MockBroker   *brokermock.Broker
 	Reconciler   *reconcile.Service
 	Quant        *quant.Client
 	Orchestrator *orchestrator.Service
@@ -76,6 +80,8 @@ type Server struct {
 	portfolio    *portfolio.Service
 	ingestor     *marketdata.Ingestor
 	econData     *econdata.Ingestor
+	alerter      *notify.Alerter
+	mockBroker   *brokermock.Broker
 	reconciler   *reconcile.Service
 	quant        *quant.Client
 	orchestrator *orchestrator.Service
@@ -95,7 +101,9 @@ func NewServer(d Deps) (*Server, error) {
 	s := &Server{
 		cfg: d.Config, log: d.Logger, pool: d.Pool, store: d.Store, keyring: d.Keyring,
 		limiter: d.Limiter, brokers: d.Brokers, oms: d.OMS, portfolio: d.Portfolio,
-		ingestor: d.Ingestor, econData: d.EconData, reconciler: d.Reconciler, quant: d.Quant,
+		ingestor: d.Ingestor, econData: d.EconData, alerter: d.Alerter,
+		mockBroker: d.MockBroker,
+		reconciler: d.Reconciler, quant: d.Quant,
 		orchestrator: d.Orchestrator,
 		clock:        d.Clock, marketClock: d.MarketClock,
 		version: d.Version, commit: d.Commit, startedAt: time.Now(),
@@ -261,6 +269,23 @@ func (s *Server) routes() chi.Router {
 			sec.Post("/auth/mfa/disable", s.handleMFADisable)
 			sec.Post("/auth/sessions/{sessionID}/revoke", s.handleRevokeSession)
 		})
+
+		// ---- Development-only ------------------------------------------------
+		// Broker fault injection. Gated on the environment inside each
+		// handler as well as here, because a route that exists only in
+		// development is one deployment away from existing everywhere.
+		if s.cfg.IsDevelopment() {
+			api.Group(func(dev chi.Router) {
+				dev.Use(s.requireAuth)
+				dev.Use(s.csrfProtect)
+				dev.Use(s.requireRole(domain.RoleTrader, domain.RoleAdmin))
+				dev.Use(s.rateLimit(ratelimit.RuleControlChange))
+
+				dev.Get("/dev/broker-faults", s.handleListBrokerFaults)
+				dev.Post("/dev/broker-faults", s.handleArmBrokerFault)
+				dev.Post("/dev/broker-faults/reset", s.handleResetBrokerFaults)
+			})
+		}
 
 		// ---- Administration --------------------------------------------------
 		api.Group(func(admin chi.Router) {

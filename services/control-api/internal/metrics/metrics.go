@@ -61,6 +61,16 @@ var (
 		Help: "Orders whose venue outcome is unknown and awaiting reconciliation.",
 	}, []string{"symbol"})
 
+	// OrderPersistDeadlocks must stay at zero. A non-zero value means two
+	// order-placement transactions formed a lock cycle, which the declared
+	// lock order (store.LockAccountTx) is supposed to make impossible. It is
+	// counted rather than only logged so that a regression is visible on a
+	// dashboard instead of buried in a log line.
+	OrderPersistDeadlocks = factory.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "trading", Name: "order_persist_deadlocks_total",
+		Help: "Deadlocks while persisting an accepted order. Expected to be zero.",
+	})
+
 	FillsRecorded = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "trading", Name: "fills_total",
 		Help: "Executions recorded.",
@@ -211,6 +221,22 @@ var (
 )
 
 // Build information, so a dashboard can show what is actually deployed.
+// Alerting. AlertsRaised counts every event the platform judged worth telling
+// someone about; AlertsSuppressed counts the repeats a cooldown swallowed. The
+// ratio is the signal: a kind that is almost all suppressions has a cooldown
+// that is too short or a detector that is too twitchy.
+var (
+	AlertsRaised = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "alerts", Name: "raised_total",
+		Help: "Events raised, by kind and severity.",
+	}, []string{"kind", "severity"})
+
+	AlertsSuppressed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "alerts", Name: "suppressed_total",
+		Help: "Repeat events suppressed by a cooldown, by kind.",
+	}, []string{"kind"})
+)
+
 var BuildInfo = factory.NewGaugeVec(prometheus.GaugeOpts{
 	Namespace: namespace, Name: "build_info",
 	Help: "Build metadata. Always 1; the labels carry the information.",

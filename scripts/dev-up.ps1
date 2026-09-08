@@ -33,6 +33,33 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $compose = Join-Path $root 'infra/docker/docker-compose.yml'
+
+function Invoke-Docker {
+    <#
+        Runs docker and fails on its EXIT CODE rather than on whether it wrote
+        anything to stderr.
+
+        docker compose reports progress on stderr. PowerShell 5.1 turns a
+        native command's stderr into ErrorRecords, which $ErrorActionPreference
+        = 'Stop' then treats as terminating -- so a successful teardown looked
+        like a failure and stopped the script mid-way.
+
+        Redirecting with 2>&1 does NOT fix it: in 5.1 the redirection still
+        produces NativeCommandError records. The preference itself has to be
+        relaxed for the duration of the call, and restored afterwards, so the
+        rest of the script keeps its fail-fast behaviour.
+    #>
+    param([string]$What, [string[]]$DockerArgs)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & docker @DockerArgs 2>&1 | ForEach-Object { Write-Host "  $_" }
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($LASTEXITCODE -ne 0) { Write-Error "$What failed (exit $LASTEXITCODE)" }
+}
+
 $envFile = Join-Path $root '.env'
 
 if (-not (Test-Path $envFile)) {
@@ -65,13 +92,45 @@ if ($env:VANTAGE_EXECUTION_MODE -and $env:VANTAGE_EXECUTION_MODE -ne 'paper') {
 
 if ($Reset) {
     Write-Host 'Destroying the database volume. All local data will be lost.' -ForegroundColor Yellow
-    docker compose -f $compose --env-file $envFile down -v
-    if ($LASTEXITCODE -ne 0) { Write-Error 'docker compose down failed' }
+    # Invoke-Docker, not a bare call: `docker compose` writes its progress
+    # ("Container vantage-postgres Stopping") to STDERR, and PowerShell 5.1
+    # wraps a native command's stderr in an ErrorRecord. With
+    # $ErrorActionPreference = 'Stop' that turns normal progress output into a
+    # fatal NativeCommandError, so `-Reset` aborted half way through a
+    # teardown. The exit code is the only reliable signal here.
+    Invoke-Docker 'docker compose down -v' @('compose', '-f', $compose, '--env-file', $envFile, 'down', '-v')
+}
+
+# Load .env into THIS process, so the `go run` commands below see it.
+#
+# --env-file only configures docker compose; it does nothing for a Go process
+# started from PowerShell. The control plane reads its configuration from the
+# environment and has no dotenv loader, so without this the migrate step fails
+# with "VANTAGE_DATABASE_URL is required" on a machine where the operator has
+# not exported the variables by hand. That made the documented one-command
+# setup work only for someone who had already set it up.
+Get-Content $envFile | ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z0-9_]+)\s*=\s*(.*)$') {
+        [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim(), 'Process')
+    }
+}
+
+# Migrations need the OWNER role. vantage_app has no CREATE on schema public by
+# design, so falling back to it produces "permission denied for schema public"
+# rather than anything that hints at the cause.
+if (-not $env:VANTAGE_MIGRATION_DATABASE_URL) {
+    Write-Error @"
+VANTAGE_MIGRATION_DATABASE_URL is not set in $envFile
+
+Migrations run as vantage_owner, not as the application role. Copy the line
+from .env.example:
+
+    VANTAGE_MIGRATION_DATABASE_URL=postgres://vantage_owner:vantage_owner_dev_password@localhost:5432/vantage?sslmode=disable
+"@
 }
 
 Write-Host 'Starting Postgres and Redis...' -ForegroundColor Cyan
-docker compose -f $compose --env-file $envFile up -d postgres redis
-if ($LASTEXITCODE -ne 0) { Write-Error 'docker compose up failed' }
+Invoke-Docker 'docker compose up' @('compose', '-f', $compose, '--env-file', $envFile, 'up', '-d', 'postgres', 'redis')
 
 # Wait for the health check rather than sleeping a fixed interval: a slow
 # machine should wait longer, not fail.

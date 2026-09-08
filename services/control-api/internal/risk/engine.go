@@ -182,10 +182,29 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	})
 
 	// --- Position and order counts ----------------------------------------
-	// An order that reduces or closes an existing position does not consume a
-	// new position slot; refusing it would trap the account in exposure it is
-	// trying to shed.
-	reducing := in.ExistingPosition != nil && in.ExistingPosition.Side != in.Intent.Side
+	// reducing means STRICTLY reducing: the order is on the opposite side of an
+	// existing position AND is no larger than that position.
+	//
+	// Both halves matter, and the second was missing.
+	//
+	// Why "opposite side" alone is not enough: an account long 0.08 lots could
+	// send a SELL of 5.00 lots, which is not a reduction at all — it closes
+	// 0.08 and opens 4.92 in the other direction. Treating that as reducing
+	// let it skip the gross-exposure, per-instrument and concentration checks
+	// entirely, which is a hole in exactly the control that is supposed to cap
+	// exposure.
+	//
+	// Why the concept is needed at all: an order that genuinely reduces
+	// exposure must never be refused BY an exposure limit. Otherwise a
+	// position built up by several individually-permitted orders can grow past
+	// the per-order cap and then become impossible to close — the limit that
+	// exists to contain risk would prevent shedding it, and the bigger the
+	// position, the harder the exit. A flatten of a 3866 ZAR position was
+	// refused for "Order notional 3866.77 against a limit of 2500.00" before
+	// this was applied consistently.
+	reducing := in.ExistingPosition != nil &&
+		in.ExistingPosition.Side != in.Intent.Side &&
+		in.Intent.Quantity.LessThanOrEqual(in.ExistingPosition.Quantity)
 	positionsOK := reducing || in.OpenPositions < in.Limits.MaxOpenPositions ||
 		(in.ExistingPosition != nil && in.ExistingPosition.Side == in.Intent.Side)
 	add(domain.RiskCheckResult{
@@ -219,7 +238,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Code: domain.RejectRiskLimit,
 	})
 
-	execPrice := in.Quote.ExecutionPrice(in.Intent.Side)
+	execPrice := referencePrice(in)
 	notionalQuote := in.Instrument.Notional(in.Intent.Quantity, execPrice)
 	notionalAcct, convErr := e.toAccount(ctx, notionalQuote, in.Account.Currency)
 	if convErr != nil {
@@ -235,8 +254,11 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	}
 
 	add(domain.RiskCheckResult{
-		Name:     domain.CheckOrderNotional,
-		Passed:   notionalAcct.Decimal().LessThanOrEqual(in.Limits.MaxOrderNotional.Decimal()),
+		Name: domain.CheckOrderNotional,
+		// A closing order's notional is the size of the position already held,
+		// not new exposure being taken on. See the note on `reducing`.
+		Passed: reducing ||
+			notionalAcct.Decimal().LessThanOrEqual(in.Limits.MaxOrderNotional.Decimal()),
 		Limit:    in.Limits.MaxOrderNotional.String(),
 		Observed: notionalAcct.String(),
 		Message: fmt.Sprintf("Order notional %s against a limit of %s.",
@@ -280,8 +302,12 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	signedNotional := notionalAcct.MulDecimal(in.Intent.Side.SignedMultiplier())
 	projectedNet := in.Snapshot.State.NetExposure.MustAdd(signedNotional)
 	add(domain.RiskCheckResult{
-		Name:     domain.CheckNetExposure,
-		Passed:   projectedNet.Abs().Decimal().LessThanOrEqual(in.Limits.MaxNetExposure.Decimal()),
+		Name: domain.CheckNetExposure,
+		// A strictly reducing order moves net exposure toward zero, so it can
+		// only improve this measure. It is safe to skip precisely BECAUSE
+		// `reducing` excludes an over-closing side flip.
+		Passed: reducing ||
+			projectedNet.Abs().Decimal().LessThanOrEqual(in.Limits.MaxNetExposure.Decimal()),
 		Limit:    in.Limits.MaxNetExposure.String(),
 		Observed: projectedNet.String(),
 		Message: fmt.Sprintf("Net exposure would be %s against a limit of %s.",
@@ -464,6 +490,41 @@ func (e *Engine) toAccount(ctx context.Context, amount money.Amount, target mone
 		return money.Amount{}, err
 	}
 	return conv.To, nil
+}
+
+// referencePrice is the price this order would actually transact at, which is
+// what every size, margin and risk figure must be measured against.
+//
+// Using the current market price for every order type is wrong, and wrong in a
+// way that is easy to miss: a limit order 20% below the market with a stop
+// just under its limit has a tiny real risk, but measuring the stop distance
+// from the MARKET price makes it look like a fifth of the account. The order
+// is then refused for a risk it does not carry.
+//
+// The reference is therefore the worst price the order could fill at:
+//
+//	market      the current executable price, crossing the spread
+//	limit       the limit price — the order cannot fill worse than this
+//	stop        the stop price — where the order becomes a market order
+//	stop_limit  the limit price — the worst fill the order permits
+//
+// Where the price the type requires is missing, the market price is used, and
+// the instrument-rule gate earlier in the pipeline has already refused an
+// order whose required price is absent.
+func referencePrice(in Input) decimal.Decimal {
+	market := in.Quote.ExecutionPrice(in.Intent.Side)
+
+	switch in.Intent.Type {
+	case domain.OrderTypeLimit, domain.OrderTypeStopLimit:
+		if in.Intent.LimitPrice != nil && in.Intent.LimitPrice.IsPositive() {
+			return *in.Intent.LimitPrice
+		}
+	case domain.OrderTypeStop:
+		if in.Intent.StopPrice != nil && in.Intent.StopPrice.IsPositive() {
+			return *in.Intent.StopPrice
+		}
+	}
+	return market
 }
 
 func boolCheck(name domain.RiskCheckName, passed bool, msg string, code domain.RejectCode, kv ...string) domain.RiskCheckResult {

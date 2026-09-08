@@ -117,6 +117,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if lerr != nil {
 			log.Error("failed to record login failure", "error", lerr.Error())
 		}
+		if s.alerter != nil {
+			// The attempted password is never recorded. The address and the
+			// count are what an operator needs to tell a typo from an attack.
+			s.alerter.RepeatedAuthFailure(r.Context(), user.Email,
+				user.FailedLoginCount+1, locked, clientIP(r))
+		}
 		s.auditAuth(r, &user.ID, domain.AuditLoginFailed, domain.AuditFailure, map[string]any{
 			"reason": "bad_password", "locked": locked,
 		})

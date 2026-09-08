@@ -1,44 +1,23 @@
 /**
  * Next.js configuration.
  *
- * The interesting part is the header set. The terminal is a single-origin
- * application that loads no third-party script, font or frame, so the policy
- * can be strict enough to be worth having rather than a list of allowances.
- *
- * `connect-src` includes the control-plane origin because the API is served
- * from a different port in development. It is read from the environment rather
- * than hardcoded so a deployment does not have to patch this file.
+ * The static, request-independent headers live here. The
+ * Content-Security-Policy does not: it carries a per-request nonce and is set
+ * by middleware.ts.
  */
 
-/** @type {string} */
-const apiOrigin = process.env.NEXT_PUBLIC_VANTAGE_API_BASE_URL ?? "http://localhost:8080";
-
-// Next.js's development server evaluates strings as JavaScript for hot
-// reloading, which needs 'unsafe-eval'. That relaxation is confined to the dev
-// server: a production build does not use eval, and shipping the allowance
-// would hand any injected string a way to execute.
-const devEval = process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'";
-
-const csp = [
-  "default-src 'self'",
-  // Next.js injects inline bootstrap and hydration scripts. 'unsafe-inline'
-  // is required for those in the App Router's default setup; it is scoped to
-  // scripts from this origin only, and no third-party script is loaded at all.
-  `script-src 'self' 'unsafe-inline'${devEval}`,
-  // React's inline style attributes (the meter widths, the sparkline colours).
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self'",
-  `connect-src 'self' ${apiOrigin}`,
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-].join("; ");
-
+// Content-Security-Policy is deliberately NOT here. It needs a per-request
+// nonce, which only middleware can generate, and two CSP headers would be
+// enforced as their intersection — the static one has no nonce, so nothing
+// would run. See middleware.ts.
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: csp },
   { key: "X-Content-Type-Options", value: "nosniff" },
+  // Cross-origin isolation. Set here rather than in middleware so it also
+  // covers /_next/static, which the middleware matcher deliberately skips —
+  // a ZAP baseline scan flagged exactly that gap on the static chunks.
+  { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "no-referrer" },
   {
@@ -54,6 +33,15 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Next 16 writes AGENTS.md and CLAUDE.md into this directory on every dev
+  // start. They are turned off deliberately.
+  //
+  // A generated CLAUDE.md is not inert: it becomes directory-scoped
+  // instructions for anyone working in apps/web, competing with the one at the
+  // repository root that was actually written on purpose. Framework-authored
+  // guidance that nobody reviewed is worse than none, and a file that
+  // reappears on every `npm run dev` is a permanent dirty working tree.
+  agentRules: false,
   // A standalone build is what the container image copies; it keeps the image
   // to the server plus the modules actually imported.
   output: "standalone",

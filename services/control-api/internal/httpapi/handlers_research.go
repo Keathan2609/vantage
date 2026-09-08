@@ -269,6 +269,23 @@ func (s *Server) handleRunStrategy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The instrument is validated HERE rather than being left to the foreign
+	// key. An unvalidated value reached the database and came back as
+	// "strategy_runs_instrument_id_fkey rejected the write", which the handler
+	// then reported as HTTP 500 "The strategy could not be evaluated" — an
+	// internal error for what is plainly a bad request. A caller cannot tell
+	// "you named an instrument that does not exist" from "the platform is
+	// broken", and only one of those is their problem to fix.
+	if req.InstrumentID == "" {
+		writeError(w, r, http.StatusUnprocessableEntity, "instrument_required",
+			"instrument_id is required: a strategy is evaluated against one instrument.")
+		return
+	}
+	if _, err := s.store.Market.Instrument(r.Context(), req.InstrumentID); err != nil {
+		writeStoreError(w, r, err, "Unknown instrument: "+req.InstrumentID+".")
+		return
+	}
+
 	result, err := s.orchestratorRun(r, account, strategyID, req.InstrumentID, req.Version, !req.DryRun)
 	if err != nil {
 		if errors.Is(err, quant.ErrUnavailable) || errors.Is(err, quant.ErrCircuitOpen) {

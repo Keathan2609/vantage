@@ -65,6 +65,19 @@ var (
 	// ErrConstraint covers check-constraint violations, which indicate the
 	// application tried to persist a state the schema forbids.
 	ErrConstraint = errors.New("store: constraint violation")
+	// ErrDeadlock means PostgreSQL killed this transaction to break a lock
+	// cycle (SQLSTATE 40P01).
+	//
+	// The transaction was rolled back in full, so no partial write survives.
+	// That makes it SAFE TO RETRY only where the whole unit of work can be
+	// replayed. It is NOT safe to retry blindly after a broker call has
+	// already succeeded: the venue's answer is not reproducible, and a retry
+	// that fails again must end as an unknown outcome for reconciliation,
+	// never as a rejection.
+	//
+	// A deadlock reaching a caller at all means a lock-order rule was broken.
+	// See LockAccountTx in accounts.go for the declared order.
+	ErrDeadlock = errors.New("store: deadlock detected")
 )
 
 // ConstraintError names the specific database constraint that rejected a write.
@@ -101,6 +114,14 @@ func mapError(err error) error {
 			return ConstraintError{Constraint: "append_only", Table: pgErr.TableName, Detail: pgErr.Message}
 		case "40001": // serialization_failure
 			return fmt.Errorf("%w: serialisation conflict, retry", ErrStaleVersion)
+		case "40P01": // deadlock_detected
+			// Classified explicitly, because it was previously unclassified
+			// and therefore surfaced as a bare HTTP 500 on order placement.
+			// A deadlocked transaction is rolled back WHOLE, so nothing was
+			// written — but see the note on ErrDeadlock: whether it is safe to
+			// retry depends entirely on which phase it happened in, and only
+			// the caller knows that.
+			return fmt.Errorf("%w: %s", ErrDeadlock, pgErr.Message)
 		}
 	}
 	return err

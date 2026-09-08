@@ -281,3 +281,106 @@ def test_indicators_are_length_preserving_and_aligned(ohlc: pd.DataFrame) -> Non
     ):
         assert len(series) == len(ohlc)
         assert series.index.equals(ohlc.index)
+
+
+# --- the two indicators the parameterised property test cannot reach --------
+#
+# `support_resistance` returns lists of levels rather than a series, and
+# `rolling_correlation` takes two series. Both were outside the parameterised
+# test above, and support_resistance is the one indicator in the module that
+# uses `shift(-1)` — so it is exactly the one that most needed checking.
+
+
+def test_support_resistance_levels_depend_on_the_window_given() -> None:
+    """A characterisation test, not an aspiration.
+
+    `support_resistance` clusters swing points and reports the MEAN of each
+    cluster. Adding later bars adds swing points, which changes cluster
+    membership and therefore moves the reported level. The estimator is
+    window-dependent, and this test pins that down rather than pretending
+    otherwise: a first run of this test asserted stability and failed, with a
+    level from 400 bars sitting 159 points away from anything in the 600-bar
+    answer.
+
+    Why this is NOT look-ahead: nothing in the module or the strategies calls
+    this function today, and the backtester hands every strategy a strict
+    prefix (`bars.iloc[: i + 1]`), so a caller can only ever see levels derived
+    from bars that had already happened.
+
+    Why it still matters: anyone who starts using this must pass a prefix and
+    must not compare a level computed over one window with a level computed
+    over another. Treating these as stable price memory would be wrong.
+    """
+    rng = np.random.default_rng(7)
+    closes = 2000 + np.cumsum(rng.normal(0, 4, 600))
+    frame = pd.DataFrame(
+        {
+            "high": closes + rng.uniform(1, 3, 600),
+            "low": closes - rng.uniform(1, 3, 600),
+        },
+        index=pd.date_range("2026-01-01", periods=600, freq="h", tz="UTC"),
+    )
+
+    prefix_high, _ = ind.support_resistance(
+        frame["high"].iloc[:400], frame["low"].iloc[:400]
+    )
+    full_high, _ = ind.support_resistance(frame["high"], frame["low"])
+
+    assert prefix_high, "the prefix produced no resistance levels at all"
+    assert full_high, "the full series produced no resistance levels at all"
+
+    # The documented property: the answers differ. If this ever starts passing
+    # as "identical", the clustering has changed to something incremental and
+    # the caveat above can be removed.
+    assert prefix_high != full_high, (
+        "support_resistance returned identical levels for a 400-bar and a 600-bar "
+        "window. If the implementation is now incremental, update the caveat in "
+        "docs/MACHINE_LEARNING.md and docs/BACKTESTING.md."
+    )
+
+
+def test_support_resistance_cannot_mark_the_final_bar_as_a_swing() -> None:
+    """The last bar must never be a swing point.
+
+    Identifying a swing at the final bar would require the bar after it, which
+    does not exist. `shift(-1)` yields NaN there and the comparison is false,
+    which is the correct behaviour — this test pins it, because an
+    implementation that filled NaN forward would silently start claiming the
+    most recent bar as a confirmed level.
+    """
+    # A monotonic rise ending at the highest point: if the final bar could be a
+    # swing high, it would be one here.
+    highs = pd.Series(
+        [100.0 + i for i in range(60)],
+        index=pd.date_range("2026-01-01", periods=60, freq="h", tz="UTC"),
+    )
+    lows = highs - 2
+
+    resistance, _ = ind.support_resistance(highs, lows, touches=1)
+    final = float(highs.iloc[-1])
+    assert all(abs(level - final) > 1e-9 for level in resistance), (
+        "the final bar was reported as a resistance level; confirming a swing there "
+        "requires the bar after it, which has not happened yet"
+    )
+
+
+def test_rolling_correlation_has_no_lookahead() -> None:
+    """Correlation at bar i must not depend on bars after i."""
+    rng = np.random.default_rng(11)
+    a = pd.Series(
+        np.cumsum(rng.normal(0, 1, 500)),
+        index=pd.date_range("2026-01-01", periods=500, freq="h", tz="UTC"),
+    )
+    b = pd.Series(a.to_numpy() * 0.7 + np.cumsum(rng.normal(0, 1, 500)), index=a.index)
+
+    cutoff = 300
+    full = ind.rolling_correlation(a, b, period=60)
+    prefix = ind.rolling_correlation(a.iloc[:cutoff], b.iloc[:cutoff], period=60)
+
+    x = full.iloc[:cutoff].to_numpy(dtype="float64")
+    y = prefix.to_numpy(dtype="float64")
+    comparable = ~(np.isnan(x) & np.isnan(y))
+    np.testing.assert_allclose(
+        x[comparable], y[comparable], rtol=1e-9, atol=1e-9,
+        err_msg="rolling_correlation changed a historical value when future bars were added",
+    )

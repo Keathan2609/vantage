@@ -120,6 +120,10 @@ type Broker struct {
 
 	mu  sync.Mutex
 	rng *rand.Rand
+
+	// faults is a deterministic fault-injection layer, disabled unless a test
+	// or a development request arms it. See faults.go.
+	faults *FaultInjector
 }
 
 // New builds the mock venue.
@@ -135,6 +139,7 @@ func New(pool *db.Pool, quotes QuoteSource, market MarketStatusSource, clock dom
 		market: market,
 		cfg:    cfg,
 		rng:    rand.New(rand.NewSource(seed)),
+		faults: NewFaultInjector(),
 	}
 }
 
@@ -189,6 +194,18 @@ func (b *Broker) EnsureAccount(ctx context.Context, accountRef, currency string,
 func (b *Broker) PlaceOrder(ctx context.Context, req broker.PlaceOrderRequest) (broker.OrderAck, error) {
 	if err := b.simulateLatency(ctx); err != nil {
 		return broker.OrderAck{}, err
+	}
+
+	// Injected faults are evaluated before anything is written, so a refusal
+	// or a disconnect leaves the venue exactly as it was. The one exception is
+	// FaultLostResponse, which must leave a REAL order behind: preSubmit
+	// signals it and the answer is dropped after the write commits.
+	loseResponse := false
+	if err := b.preSubmit(ctx); err != nil {
+		if !errors.Is(err, errInjectedLostResponse) {
+			return broker.OrderAck{}, err
+		}
+		loseResponse = true
 	}
 
 	// Venue-side idempotency. A retry after a lost response finds the order
@@ -280,8 +297,14 @@ func (b *Broker) PlaceOrder(ctx context.Context, req broker.PlaceOrderRequest) (
 		qty := req.Quantity
 		firstQty := qty
 		partial := b.cfg.PartialFillThreshold.IsPositive() && qty.GreaterThan(b.cfg.PartialFillThreshold)
+		fraction := b.cfg.PartialFillFraction
+		if forced, ok := b.injectedPartialFill(); ok {
+			// Forced regardless of size, so a minimum-size order can still
+			// exercise the partial-fill path.
+			partial, fraction = true, forced
+		}
 		if partial {
-			firstQty = inst.Spec.NormaliseQuantity(qty.Mul(b.cfg.PartialFillFraction))
+			firstQty = inst.Spec.NormaliseQuantity(qty.Mul(fraction))
 			if firstQty.IsZero() || firstQty.GreaterThanOrEqual(qty) {
 				partial = false
 				firstQty = qty
@@ -318,6 +341,15 @@ func (b *Broker) PlaceOrder(ctx context.Context, req broker.PlaceOrderRequest) (
 	if err != nil {
 		return broker.OrderAck{}, err
 	}
+
+	// The order exists at the venue and the caller will never hear about it.
+	// This is the case the FAILED order state and reconciliation exist for:
+	// the caller must NOT resubmit, and FetchOrderByClientID is how the order
+	// is found again.
+	if loseResponse && b.consumeLostResponse() {
+		return broker.OrderAck{}, fmt.Errorf(
+			"%w: injected lost response after venue acceptance", broker.ErrUnknownOutcome)
+	}
 	return ack, nil
 }
 
@@ -326,7 +358,30 @@ func (b *Broker) PlaceOrder(ctx context.Context, req broker.PlaceOrderRequest) (
 // flatters every strategy that trades frequently.
 func (b *Broker) executionPrice(q domain.Quote, side domain.OrderSide, inst domain.Instrument) decimal.Decimal {
 	base := q.ExecutionPrice(side)
+
+	// A widened spread moves the execution price further from the mid on the
+	// side being crossed, which is what a release actually does to a book.
+	if mult, ok := b.injectedSpreadMultiplier(); ok {
+		half := q.Spread().Div(decimal.NewFromInt(2))
+		extra := half.Mul(mult.Sub(decimal.NewFromInt(1)))
+		if side == domain.SideBuy {
+			base = base.Add(extra)
+		} else {
+			base = base.Sub(extra)
+		}
+	}
+
 	slip := b.cfg.SlippageFraction
+	if injected, ok := b.injectedSlippage(); ok {
+		// Replaces the configured slippage rather than adding to it, so the
+		// injected number is the number a test can assert on.
+		slip = injected
+		adj := base.Mul(slip)
+		if side == domain.SideBuy {
+			return inst.Spec.RoundPrice(base.Add(adj))
+		}
+		return inst.Spec.RoundPrice(base.Sub(adj))
+	}
 	if !b.cfg.Deterministic && b.cfg.SlippageJitter.IsPositive() {
 		b.mu.Lock()
 		j := b.rng.Float64()*2 - 1 // [-1, 1)

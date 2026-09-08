@@ -37,7 +37,18 @@ type Service struct {
 	store   *store.Store
 	brokers *broker.Registry
 	clock   domain.Clock
+	alerter Alerter
 }
+
+// Alerter is the subset of internal/notify this service needs, declared here
+// so reconcile does not import notify.
+type Alerter interface {
+	ReconciliationMismatch(ctx context.Context, accountID uuid.UUID, critical, total int, kinds []string)
+	ReconciliationClean(ctx context.Context, accountID uuid.UUID)
+}
+
+// SetAlerter attaches an alerter after construction.
+func (s *Service) SetAlerter(a Alerter) { s.alerter = a }
 
 // New builds the reconciliation service.
 func New(s *store.Store, brokers *broker.Registry, clock domain.Clock) *Service {
@@ -170,10 +181,27 @@ func (s *Service) Run(ctx context.Context, account domain.Account, trigger Trigg
 		log.Warn("reconciliation found discrepancies",
 			"account_id", account.ID.String(), "count", len(report.Discrepancies),
 			"critical", report.CriticalCount(), "trigger", trigger)
+		if s.alerter != nil {
+			kinds := make([]string, 0, len(report.Discrepancies))
+			seen := map[string]bool{}
+			for _, d := range report.Discrepancies {
+				if !seen[d.Kind] {
+					seen[d.Kind] = true
+					kinds = append(kinds, d.Kind)
+				}
+			}
+			s.alerter.ReconciliationMismatch(ctx, account.ID,
+				report.CriticalCount(), len(report.Discrepancies), kinds)
+		}
 	} else {
 		log.Info("reconciliation clean",
 			"account_id", account.ID.String(), "orders", ordersCompared,
 			"positions", positionsCompared, "trigger", trigger)
+		if s.alerter != nil {
+			// Only fires if a mismatch was previously raised, so a permanently
+			// healthy account is silent.
+			s.alerter.ReconciliationClean(ctx, account.ID)
+		}
 	}
 	return report, nil
 }
@@ -242,7 +270,8 @@ func (s *Service) reconcileOrders(ctx context.Context, account domain.Account, a
 					Description:  "Order marked FAILED never reached the venue; marking it rejected.",
 					AutoResolved: true,
 				}
-				if err := s.transition(ctx, local, domain.OrderRejected,
+				if err := s.transitionWithCode(ctx, local, domain.OrderRejected,
+					domain.RejectReconciledAbsent,
 					"reconciliation: venue has no record of this order"); err != nil {
 					return out, compared, err
 				}
@@ -252,11 +281,52 @@ func (s *Service) reconcileOrders(ctx context.Context, account domain.Account, a
 				}
 				continue
 			}
+			// An open order that never received a venue identifier, and which
+			// the venue does not recognise by its client id either, never
+			// reached the market. It is closed out on the same evidence the
+			// FAILED branch above uses: a direct lookup by client id, not a
+			// gap in a paginated list.
+			//
+			// This case exists because a crash or a rolled-back transaction
+			// between persisting the order and recording the venue's answer
+			// leaves it in ACCEPTED with no venue id. Before this branch, such
+			// an order was UNRESOLVABLE: cancellation refuses it
+			// ("order_not_at_venue"), no endpoint resolves a discrepancy by
+			// hand, and it kept consuming the account's pending-order budget
+			// forever. Six of them accumulated during a concurrency test and
+			// took the account from "can trade" to "every order refused for
+			// max_pending_orders" permanently.
+			//
+			// An order that DOES hold a venue identifier the venue denies is a
+			// different and much more alarming thing, and stays critical and
+			// manual.
+			if local.BrokerOrderID == nil || *local.BrokerOrderID == "" {
+				d := Discrepancy{
+					Kind: "order_never_reached_venue", Severity: "warning",
+					OrderID: &local.ID, InstrumentID: local.InstrumentID,
+					VantageValue: string(local.Status), BrokerValue: "absent",
+					Description: "Order holds no venue identifier and the venue does not " +
+						"recognise its client id; it never reached the market. Marking it rejected.",
+					AutoResolved: true,
+				}
+				if err := s.transitionWithCode(ctx, local, domain.OrderRejected,
+					domain.RejectReconciledAbsent,
+					"reconciliation: order never reached the venue"); err != nil {
+					return out, compared, err
+				}
+				out = append(out, d)
+				if err := s.record(ctx, runID, account.ID, d); err != nil {
+					return out, compared, err
+				}
+				continue
+			}
+
 			d := Discrepancy{
 				Kind: "order_missing_at_broker", Severity: "critical",
 				OrderID: &local.ID, InstrumentID: local.InstrumentID,
 				VantageValue: string(local.Status), BrokerValue: "absent",
-				Description: "Vantage believes this order is working, but the venue has no record of it.",
+				Description: "Vantage believes this order is working and holds a venue " +
+					"identifier for it, but the venue has no record of it.",
 			}
 			out = append(out, d)
 			if err := s.record(ctx, runID, account.ID, d); err != nil {
@@ -419,6 +489,14 @@ func (s *Service) reconcilePositions(ctx context.Context, account domain.Account
 
 // transition applies a reconciliation-driven state change.
 func (s *Service) transition(ctx context.Context, order domain.Order, to domain.OrderStatus, reason string) error {
+	return s.transitionWithCode(ctx, order, to, "", reason)
+}
+
+// transitionWithCode applies a state change, carrying a reject code where the
+// destination requires one.
+func (s *Service) transitionWithCode(ctx context.Context, order domain.Order,
+	to domain.OrderStatus, code domain.RejectCode, reason string) error {
+
 	return s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
 		current, err := s.store.Trading.OrderByIDTx(ctx, tx, order.ID)
 		if err != nil {
@@ -427,8 +505,8 @@ func (s *Service) transition(ctx context.Context, order domain.Order, to domain.
 		if !domain.CanTransition(current.Status, to) {
 			return nil
 		}
-		_, err = s.store.Trading.TransitionOrderTx(ctx, tx, current.ID, current.Version, to, reason,
-			"system", nil)
+		_, err = s.store.Trading.TransitionOrderWithCodeTx(ctx, tx, current.ID, current.Version,
+			to, code, reason, "system", nil)
 		return err
 	})
 }

@@ -245,10 +245,55 @@ def test_a_model_that_does_not_beat_the_baseline_says_so() -> None:
     )
 
 
-def test_zero_embargo_is_warned_about() -> None:
+def test_an_embargo_narrower_than_the_label_horizon_is_refused() -> None:
+    """A leakage defect found by audit, now closed.
+
+    `train` accepted `horizon` and `embargo_bars` independently, and the API
+    exposed both. With horizon=5 and embargo=2, the last three training rows
+    are labelled from closes that fall inside the validation window: the model
+    is trained on the outcome of the very bars it is then scored against, and
+    the validation number measures nothing.
+
+    The defaults (horizon 1, embargo 2) were always safe. The combination was
+    reachable in one HTTP request.
+    """
     bars = make_bars(900)
-    model = ml.train(bars, key="no_embargo", embargo_bars=0, seed=1)
-    assert any("No embargo" in w for w in model.warnings)
+    with pytest.raises(ValueError, match="smaller than the label horizon"):
+        ml.train(bars, key="leaky", horizon=5, embargo_bars=2, seed=1)
+
+
+def test_a_zero_embargo_is_refused_because_the_horizon_is_never_zero() -> None:
+    """A label always looks at least one bar forward, so a zero gap always leaks."""
+    with pytest.raises(ValueError, match="smaller than the label horizon"):
+        ml.train(make_bars(900), key="no_embargo", embargo_bars=0, seed=1)
+
+
+def test_an_embargo_that_covers_the_horizon_trains_and_says_it_is_minimal() -> None:
+    """The boundary case is allowed, and reported rather than passed silently."""
+    model = ml.train(make_bars(900), key="tight", horizon=3, embargo_bars=3, seed=1)
+    assert any("exactly equals the label horizon" in w for w in model.warnings)
+
+
+def test_the_refused_split_would_genuinely_have_overlapped() -> None:
+    """Proves the arithmetic behind the refusal, not just that it refuses.
+
+    Without this, the guard could be off by one in either direction and the
+    test above would still pass.
+    """
+    horizon = 5
+    embargo = 2
+    split = ml.chronological_split(900, 0.6, 0.2, embargo_bars=embargo)
+
+    # The last training row's label is read from this many bars later.
+    last_train_row = split.train.stop - 1
+    label_read_at = last_train_row + horizon
+
+    assert label_read_at >= split.validation.start, (
+        "the guard is rejecting a split that does not actually overlap"
+    )
+    # And with an embargo equal to the horizon, it does not overlap.
+    safe = ml.chronological_split(900, 0.6, 0.2, embargo_bars=horizon)
+    assert (safe.train.stop - 1) + horizon < safe.validation.start
 
 
 def test_unknown_algorithm_is_rejected() -> None:

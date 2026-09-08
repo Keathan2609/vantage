@@ -188,6 +188,14 @@ func (c Config) IsProduction() bool {
 	return c.Env == EnvProduction || c.Env == EnvStaging
 }
 
+// IsDevelopment reports whether development-only affordances are permitted:
+// the seed, and the broker fault-injection endpoint. Anything gated on this
+// must be harmless if it somehow ran elsewhere, because the gate is the only
+// thing standing between it and a deployment.
+func (c Config) IsDevelopment() bool {
+	return c.Env == EnvDevelopment || c.Env == EnvTest
+}
+
 // SimulatedFunds reports whether all balances in this process are simulated.
 // It is always true in this build and is surfaced to clients so no interface
 // can present paper numbers as real by omission.

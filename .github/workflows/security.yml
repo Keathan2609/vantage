@@ -261,11 +261,21 @@ jobs:
           VANTAGE_DATA_ENCRYPTION_KEY_VERSION: '1'
           VANTAGE_PUBLIC_WEB_ORIGIN: http://localhost:3000
         run: |
-          export VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-          export VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          # Declared and assigned separately (SC2155): `export VAR="$(cmd)"`
+          # returns export's status, not the command's, so a failing openssl
+          # would silently produce an empty key and surface much later as a
+          # confusing configuration error.
+          VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          export VANTAGE_DATA_ENCRYPTION_KEY VANTAGE_SESSION_SIGNING_KEY
           go run ./cmd/control-api migrate
           go run ./cmd/control-api serve &
-          for i in $(seq 1 40); do
+          # `while` rather than `for i in $(seq ...)`: the counter was never
+          # used, which shellcheck flags (SC2034) and which is fair -- it read
+          # as though the attempt number mattered.
+          attempts=0
+          while [ "$attempts" -lt 40 ]; do
+            attempts=$((attempts + 1))
             if curl -sf http://127.0.0.1:8080/health/live > /dev/null; then
               echo "control plane is up"
               exit 0
@@ -277,14 +287,17 @@ jobs:
 
       # The target is 127.0.0.1 inside this runner and nothing else. No
       # external host is ever supplied here.
-      - name: ZAP baseline
+      - name: ZAP baseline (control plane)
         uses: zaproxy/action-baseline@v0.13.0
         with:
           target: 'http://127.0.0.1:8080'
           # A baseline scan is passive: it crawls and inspects responses. It
           # does not attack, which is the correct posture for a scan running
           # unattended against a stack holding a database.
-          cmd_options: '-a -j -l WARN'
+          # -c points at the triage file, so a finding that has been accepted
+          # with a written reason does not reappear as noise, and anything NEW
+          # stands out.
+          cmd_options: '-a -c .zap/baseline.conf -l WARN'
           allow_issue_writing: false
           fail_action: false
 
@@ -339,8 +352,17 @@ jobs:
 
       - name: No TODO or FIXME in trading-critical code
         run: |
-          paths="services/control-api/internal/oms services/control-api/internal/risk services/control-api/internal/broker services/control-api/internal/store"
-          if git grep -nE 'TODO|FIXME|XXX|HACK' -- $paths ; then
+          # An array, not a space-separated string. Word splitting is what we
+          # want here, but relying on an unquoted expansion to provide it
+          # (SC2086) also invites globbing; an array says "these are separate
+          # arguments" without that.
+          paths=(
+            services/control-api/internal/oms
+            services/control-api/internal/risk
+            services/control-api/internal/broker
+            services/control-api/internal/store
+          )
+          if git grep -nE 'TODO|FIXME|XXX|HACK' -- "${paths[@]}" ; then
             echo "FAIL: unresolved markers in trading-critical code"
             exit 1
           fi

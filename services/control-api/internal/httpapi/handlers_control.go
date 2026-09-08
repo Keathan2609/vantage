@@ -649,6 +649,20 @@ func (s *Server) handleActivateKillSwitch(w http.ResponseWriter, r *http.Request
 	logging.FromContext(r.Context()).Warn("kill switch activated",
 		"scope", string(scope), "reason", req.Reason, "user_id", p.User.ID.String())
 
+	if s.alerter != nil {
+		target := ""
+		if req.TargetID != nil {
+			target = *req.TargetID
+		}
+		var accountID *uuid.UUID
+		if scope == domain.KillScopeAccount && req.TargetID != nil {
+			if id, err := uuid.Parse(*req.TargetID); err == nil {
+				accountID = &id
+			}
+		}
+		s.alerter.KillSwitchActivated(r.Context(), string(scope), target, req.Reason, accountID)
+	}
+
 	writeJSON(w, r, http.StatusCreated, map[string]any{
 		"kill_switch": ks,
 		"message": "New orders are halted within this scope. Open positions are NOT closed: " +
