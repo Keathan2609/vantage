@@ -48,7 +48,9 @@ Package layout, inner to outer:
 | `risk` | `domain`, `fx` | The risk engine: a pure function from state to a decision |
 | `store` | `domain`, pgx | Every SQL statement, one file per context |
 | `broker` | `domain` | The adapter interface; `broker/mock` is the paper venue |
+| `booking` | `domain`, `store` | The single accounting path: a fill becomes a position, a ledger entry and a balance, once |
 | `oms` | all of the above | The order pipeline |
+| `reconcile` | `store`, `broker`, `booking` | Snapshots both sides, classifies divergence, applies only provable repairs |
 | `orchestrator` | `oms`, `quant` | Turns a research signal into a reviewed order intent |
 | `httpapi` | everything | HTTP, middleware, serialisation |
 | `scheduler` | everything | Periodic jobs under leases |
@@ -56,6 +58,24 @@ Package layout, inner to outer:
 Dependencies point inwards only. `domain` cannot import `store`, so a domain
 rule cannot be quietly satisfied by a database query, and the rules are
 testable without a database.
+
+Two of those rows carry a constraint an architecture test enforces, because
+both are the kind of rule that decays the moment it is only a convention:
+
+- **`booking` holds no broker adapter.** It cannot ask the venue anything. It
+  is given a fill and told where the fill came from, so the accounting cannot
+  depend on who is calling — which is the whole point of there being one
+  accounting path for ordinary execution and for recovery.
+- **`booking` is the only package that appends a fill.** Any second writer
+  would be a second, subtly different, opinion about money.
+
+`TestBookingHoldsNoBrokerAdapter` and `TestOnlyBookingAppendsFills` in
+`internal/arch` fail the build if either stops being true.
+
+Reconciliation is the outermost financial package on purpose. It reads
+snapshots, decides using pure functions in `domain` and `reconcile.Classify`,
+and writes only through `booking` and a narrow repair path in `store`. It has
+no privileged route into the ledger.
 
 ### Research plane — `services/quant` (Python, FastAPI)
 
@@ -76,7 +96,7 @@ a size or a P&L figure. Money arrives as decimal strings and stays strings;
 
 ### Storage — PostgreSQL
 
-57 tables. The database is not a passive store; it is the last line of several
+60 tables. The database is not a passive store; it is the last line of several
 invariants:
 
 - `accounts_paper_only_ck`, `broker_connections_mock_only_ck` — mode ceilings
@@ -85,6 +105,15 @@ invariants:
 - `positions_one_open_per_instrument_uniq` — no accidental parallel positions
 - `transactions_account_sequence_uniq` — a gapless per-account ledger sequence
 - `kill_switches_active_global_uniq` — one active global switch, not five
+- `reconciliation_issues_open_fingerprint_uniq` — a partial unique index over
+  `(account_id, fingerprint) WHERE resolved_at IS NULL`: one open issue per
+  distinct problem, however many times it is re-detected, while the same
+  problem recurring after a resolution is a new incident with its own history
+- `order_state_transitions_repair_ck` — a transition claiming to be a repair
+  must name the reconciliation issue that justified it, so a reconstructed
+  state change can never be mistaken for one the venue reported at the time
+- `fills_ingest_source_ck` — every fill declares how it arrived
+  (`execution_response`, `execution_poll` or `reconciliation_import`)
 - `risk_limits_risk_ceiling_ck` — no risk-per-trade above 10%, ever
 - `strategy_versions_paper_ceiling_ck` — no strategy above PAPER in this build
 - append-only triggers on `audit_events`, `transactions`, `fills`,
@@ -128,6 +157,35 @@ If a signal is actionable, the orchestrator sizes it **from the account's risk
 budget, ignoring whatever size the strategy suggested**, and submits an order
 intent through the same OMS pipeline a human uses. A strategy cannot skip a
 gate because there is no other pipeline to skip it into.
+
+## Data flow: a reconciliation run
+
+A run is a comparison, then a decision, then at most a repair. The order of the
+first three steps is the design:
+
+1. Take the **local** snapshot first — orders, fills already booked, positions,
+   balances, the ledger-derived balance.
+2. Take the **broker** snapshot, using the local snapshot to know what to ask
+   about: `FetchOpenOrders` omits filled orders, so every local order the open
+   list does not cover is resolved individually by client id. Skipping that
+   step made a filled order look like it had vanished from the venue.
+3. `reconcile.Classify(local, broker, tolerance)` — a **pure function**
+   returning findings. No database handle, no adapter, no clock. Every branch
+   of the taxonomy is unit-testable by constructing two snapshots.
+4. Persist each finding as an issue, deduplicated by fingerprint.
+5. Repair only what `domain.PolicyFor` classifies as automatically safe, each
+   repair inside its own transaction under the account lock, writing through
+   `booking`.
+6. Everything else is left open, the account is halted at the narrowest scope
+   the issue justifies, and an operator is alerted.
+
+Both snapshots are captured before any repair, so a run reasons about one
+consistent picture and can be re-run against the same evidence without
+guessing differently the second time. Runs cannot overlap per account: a
+PostgreSQL session advisory lock is held across the whole run, and a second
+caller is told it declined rather than being made to wait.
+
+`docs/RECONCILIATION.md` is the full treatment.
 
 ## Messaging: a transactional outbox, not a broker
 

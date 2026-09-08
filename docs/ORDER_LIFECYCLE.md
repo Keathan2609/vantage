@@ -125,8 +125,57 @@ whether a retry is ever safe:
 
 Retrying an unknown outcome is how one intended trade becomes two positions.
 Vantage does not do it. It records `FAILED`, blocks automated trading for the
-account, and waits for reconciliation to establish the truth. Resolution is an
-explicit operator action.
+account, and waits for reconciliation to establish the truth.
+
+The decision is a pure function, `oms.ClassifyBrokerError`, separated from the
+write so every branch is reachable without a database or a venue. Its default
+case is the important one: **anything not explicitly recognised as definitive is
+UNKNOWN.** A new sentinel added to the adapter package therefore fails closed,
+where an `errors.Is` chain ending in "assume rejected" would silently release
+the risk budget for live positions.
+
+### The order is marked uncertain, not merely failed
+
+In the same transaction that moves an order to `FAILED`, Vantage sets
+`orders.reconciliation_required`. `FAILED` already means "the outcome is
+unknown", but the name reads as a closed failure and an operator needs to see
+uncertainty as uncertainty. The flag makes it queryable, so the order appears in
+the operations view, counts toward the readiness verdict, and is picked up by
+the next reconciliation run even though the state machine no longer considers
+it open.
+
+It is deliberately a flag rather than a new status: a status would mean
+widening the transition table for every ordinary execution in order to describe
+an exceptional condition.
+
+### Recovery transitions are a separate state machine
+
+Reconciliation needs `ACCEPTED → FILLED`, which is the state a lost response
+leaves behind. That transition is **not** added to the table above: `ACCEPTED`
+means "persisted, not yet sent", so a fill arriving there during ordinary
+execution is an OMS bug, and the state machine refusing it is how that bug gets
+caught.
+
+Recovery therefore has its own table, `domain.CanRepairTransition`. Every
+normal transition is also a legal repair; the converse does not hold. Leaving a
+terminal state stays forbidden either way — a FILLED order does not become
+CANCELLED because a snapshot disagreed.
+
+Every repair is stamped `is_repair` in `order_state_transitions` and names the
+issue that justified it, so reading `SUBMITTED → FILLED` can distinguish "the
+venue told us at the time" from "we reconstructed this afterwards". See
+`docs/RECONCILIATION.md`.
+
+### Automated orders are refused while an account is halted
+
+The OMS re-reads the reconciliation halt **inside** the transaction that
+persists the order, after taking the account row lock a repair also takes. An
+automated order is then refused with `reconciliation_required` — a temporary
+refusal, not a verdict on the order: nothing is wrong with what was asked for,
+and the same request is accepted once the account's records are known to agree
+with the venue. Its idempotency key stays free for that retry.
+
+Manual orders are not gated. An operator can see the warning and decide.
 
 ## Fills and the ledger
 
@@ -172,9 +221,40 @@ than an error, so a duplicate click is harmless.
 Closing a position is a separate, explicitly confirmed action
 (`POST /positions/{id}/flatten`, with `confirm: true`), and it is *not* what a
 kill switch does. It submits a market order in the opposite direction for the
-open quantity, through the same nineteen gates. It
-carries `source = manual`, and the event-risk blackout applies only to
-automated orders. That exemption is not specific to flattening: any manual
-order passes the blackout with the event surfaced in the interface, on the
-grounds that the operator has been told and that blocking a human from closing
-a position before a release would be worse than the risk it prevents.
+open quantity, through the same nineteen gates. It carries
+`source = risk_control`.
+
+### A risk control must never prevent reducing risk
+
+This paragraph used to say a flatten carries `source = manual`, and used that
+to explain why the event-risk blackout does not block it. That was **wrong** —
+`risk_control` is not `manual` — and the error was not academic: during a
+high-impact release an operator could not close a position, refused with
+`event_risk_blackout`, in exactly the window when they most want out.
+
+It was the third instance of one mistake. The other two:
+
+- the per-order **notional cap** refused a flatten of a position larger than
+  the cap, so a position built by several individually permitted orders became
+  impossible to close
+- the **daily-loss ceiling** refused a flatten once breached, locking the
+  account into the losing position that caused the breach while it went on
+  losing
+
+The general rule, now stated in `internal/risk/engine.go` and asserted by
+tests: **a check whose purpose is to LIMIT exposure or loss must never refuse
+an order that strictly reduces exposure.** Checks about whether trading is
+possible at all — account enabled, instrument tradable, market open, feed
+healthy, kill switch, authority — still apply, because without them there is
+no price to close at.
+
+"Strictly reducing" means the order is on the opposite side of an existing
+position **and** no larger than it. Both halves matter: "opposite side" alone
+let an account long 0.08 lots sell 5.00 and skip the exposure checks entirely,
+because 0.08 of that is a close and 4.92 is a large new short. A side flip is
+not a reduction and is measured like any other new exposure.
+
+Manual orders remain exempt from the blackout for the original reason — the
+operator has been told and is deciding anyway — and an automated strategy still
+cannot **open** a position through a release, which is what the blackout is
+for.

@@ -28,6 +28,50 @@ func (s *Server) accountForRequest(w http.ResponseWriter, r *http.Request, param
 	return account, true
 }
 
+// accountForOperations resolves an account for the reconciliation and
+// operations endpoints, widening to any account for an ADMIN.
+//
+// # Why this differs from accountForRequest
+//
+// accountForRequest scopes strictly to what the caller owns, which is right
+// for every trading and reporting route: an operations view is not a reason to
+// widen who can see whose balances.
+//
+// Reconciliation is the exception, and it has to be. Admin is the incident
+// role -- it is deliberately barred from placing orders (separation of duties)
+// and it is the role permitted to resolve a divergence. But in this build an
+// admin owns no trading account, so scoping by ownership made the admin-only
+// resolve endpoint unreachable: every call answered "Account not found",
+// including from the one role allowed to use it. The endpoint existed and
+// could not be called.
+//
+// So an admin may address any account here. Every use is audited with the
+// actor, the account, the action and the operator's stated reason, which is
+// what makes the wider reach accountable rather than merely broader.
+func (s *Server) accountForOperations(w http.ResponseWriter, r *http.Request, param string) (domain.Account, bool) {
+	p, _ := principalFrom(r.Context())
+	id, ok := parseUUID(w, r, chi.URLParam(r, param), "Account id")
+	if !ok {
+		return domain.Account{}, false
+	}
+
+	if p.User.Role == domain.RoleAdmin {
+		account, err := s.store.Accounts.AccountByIDUnscoped(r.Context(), id)
+		if err != nil {
+			writeStoreError(w, r, err, "Account not found.")
+			return domain.Account{}, false
+		}
+		return account, true
+	}
+
+	account, err := s.store.Accounts.AccountForUser(r.Context(), p.User.ID, id)
+	if err != nil {
+		writeStoreError(w, r, err, "Account not found.")
+		return domain.Account{}, false
+	}
+	return account, true
+}
+
 type accountResponse struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
@@ -553,9 +597,13 @@ func (s *Server) handleMarkNotificationRead(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, r, http.StatusOK, map[string]string{"status": "read"})
 }
 
-// handleReconciliationStatus reports the last run and open discrepancies.
+// handleReconciliationStatus reports the last run and open issues.
+//
+// accountForOperations, for the same reason as the run endpoint: this is the
+// operations surface, and an admin must be able to read the state of the
+// account they are being asked to fix.
 func (s *Server) handleReconciliationStatus(w http.ResponseWriter, r *http.Request) {
-	account, ok := s.accountForRequest(w, r, "accountID")
+	account, ok := s.accountForOperations(w, r, "accountID")
 	if !ok {
 		return
 	}
@@ -564,15 +612,21 @@ func (s *Server) handleReconciliationStatus(w http.ResponseWriter, r *http.Reque
 		writeStoreError(w, r, err, "Account not found.")
 		return
 	}
-	unresolved, err := s.store.Research.UnresolvedDiscrepancies(r.Context(), account.ID)
+	// Reads the ISSUE store, not the dropped reconciliation_discrepancies
+	// table. Migration 0010 replaced that table and this handler kept
+	// querying it, which produced a 500 on the dashboard -- the one page every
+	// session loads first.
+	unresolved, err := s.store.Reconcile.OpenIssues(r.Context(), account.ID)
 	if err != nil {
 		writeStoreError(w, r, err, "Account not found.")
 		return
 	}
 	resp := map[string]any{
-		"automation_blocked":     blocked,
+		"automation_blocked": blocked,
+		// Kept under its original name so existing clients do not break; the
+		// richer view is /reconciliation/{id}/issues.
 		"critical_discrepancies": len(critical),
-		"unresolved":             unresolved,
+		"unresolved":             issueViews(unresolved),
 	}
 	if last, err := s.store.Research.LatestReconciliation(r.Context(), account.ID); err == nil {
 		resp["last_run"] = last

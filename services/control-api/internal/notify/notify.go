@@ -71,6 +71,22 @@ const (
 	KindOrderFailed         Kind = "order_outcome_unknown"
 	KindAuditChainBroken    Kind = "audit_chain_broken"
 	KindAutomationSuspended Kind = "automation_suspended"
+	// KindReconciliationIssue is one newly raised divergence. Distinct from
+	// KindReconciliation, which is the per-run summary: a run that finds the
+	// same three issues every minute should announce them once, not announce
+	// "three issues" every minute.
+	KindReconciliationIssue Kind = "reconciliation_issue_raised"
+	// KindReconciliationRepair records an automatic repair. Announced because
+	// software writing to the ledger is worth knowing about even when it is
+	// correct -- especially then.
+	KindReconciliationRepair Kind = "reconciliation_repaired"
+	// KindReconciliationFailed means reconciliation itself could not run.
+	// Never suppressed: while it cannot run, nothing is confirming that
+	// Vantage's records match the venue.
+	KindReconciliationFailed Kind = "reconciliation_failed"
+	// KindTradingHalted and KindTradingResumed bracket an automation stop.
+	KindTradingHalted  Kind = "trading_halted"
+	KindTradingResumed Kind = "trading_resumed"
 )
 
 // Cooldowns per kind. Chosen from how fast the underlying condition is
@@ -87,6 +103,20 @@ var cooldowns = map[Kind]time.Duration{
 	KindOrderFailed:         0, // never suppressed: each one needs resolving
 	KindAuditChainBroken:    0, // never suppressed
 	KindAutomationSuspended: 5 * time.Minute,
+	// Per-issue alerts are deduplicated by the ISSUE's fingerprint rather than
+	// by time: the alerter's key is the issue id, and an issue is raised once.
+	// A cooldown as well would suppress a genuinely new second issue arriving
+	// in the same window, which is the opposite of what is wanted.
+	KindReconciliationIssue: 0,
+	// A repair is a discrete event that happened once. Suppressing the second
+	// of two repairs would hide a real ledger write.
+	KindReconciliationRepair: 0,
+	// Rate-limited, because a venue that is down fails every scheduled run and
+	// would otherwise produce an alert per minute. The suppressed count still
+	// reports how many, so "it has been failing for an hour" is visible.
+	KindReconciliationFailed: 5 * time.Minute,
+	KindTradingHalted:        0, // never suppressed: automation stopping is the headline
+	KindTradingResumed:       0,
 }
 
 // Event is one thing worth telling someone about.

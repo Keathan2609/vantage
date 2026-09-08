@@ -731,9 +731,15 @@ func (s *Server) handleSetTradingEnabled(w http.ResponseWriter, r *http.Request)
 }
 
 // handleRunReconciliation compares Vantage's records with the venue's.
+//
+// accountForOperations, not accountForRequest: an admin owns no trading
+// account in this build, so ownership scoping made this unreachable for the
+// one role that exists to respond to an incident. It answered "Account not
+// found" to the operator, which is both wrong and the least useful thing it
+// could have said.
 func (s *Server) handleRunReconciliation(w http.ResponseWriter, r *http.Request) {
 	p, _ := principalFrom(r.Context())
-	account, ok := s.accountForRequest(w, r, "accountID")
+	account, ok := s.accountForOperations(w, r, "accountID")
 	if !ok {
 		return
 	}
@@ -744,16 +750,27 @@ func (s *Server) handleRunReconciliation(w http.ResponseWriter, r *http.Request)
 			"Reconciliation could not complete. The venue may be unreachable.")
 		return
 	}
+	if report.Skipped {
+		// Overlap prevention, not a failure. A 409 rather than a 200 so a
+		// caller does not read an empty report as "nothing was wrong".
+		writeError(w, r, http.StatusConflict, "reconciliation_in_progress",
+			"A reconciliation run is already in progress for this account. "+
+				"Runs are not queued, because a run that waited would eventually "+
+				"reconcile from a stale snapshot.")
+		return
+	}
 	s.auditAuth(r, &p.User.ID, domain.AuditReconciliationRun, domain.AuditSuccess, map[string]any{
 		"account_id": account.ID.String(), "status": report.Status,
-		"discrepancies": len(report.Discrepancies),
+		"issues": len(report.Issues), "repaired": report.Repaired,
 	})
 	writeJSON(w, r, http.StatusOK, map[string]any{
 		"run_id":             report.RunID.String(),
 		"status":             report.Status,
 		"orders_compared":    report.OrdersCompared,
 		"positions_compared": report.PositionsCompared,
-		"discrepancies":      report.Discrepancies,
+		"executions_seen":    report.ExecutionsSeen,
+		"issues":             issueViews(report.Issues),
+		"repaired":           report.Repaired,
 		"clean":              report.Clean(),
 		"critical":           report.CriticalCount(),
 	})

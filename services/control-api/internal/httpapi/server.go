@@ -201,6 +201,13 @@ func (s *Server) routes() chi.Router {
 			auth.Get("/notifications", s.handleNotifications)
 			auth.Get("/connections", s.handleConnections)
 			auth.Get("/reconciliation/{accountID}", s.handleReconciliationStatus)
+			// Seeing that your own account has halted is not a privileged act,
+			// and hiding it would leave an operator wondering why nothing
+			// trades. Resolving an issue IS privileged; see the admin group.
+			auth.Get("/reconciliation/{accountID}/issues", s.handleReconciliationIssues)
+			auth.Get("/reconciliation/{accountID}/issues/{issueID}", s.handleReconciliationIssue)
+			auth.Get("/reconciliation/taxonomy", s.handleReconciliationTaxonomy)
+			auth.Get("/operations", s.handleOperationsOverview)
 		})
 
 		// ---- Trading (trader role, CSRF, tight limits) -----------------------
@@ -298,6 +305,13 @@ func (s *Server) routes() chi.Router {
 			admin.Post("/admin/users/{userID}/role", s.handleAdminSetRole)
 			admin.Post("/admin/users/{userID}/disabled", s.handleAdminSetDisabled)
 			admin.Get("/admin/audit/verify", s.handleVerifyAuditChain)
+
+			// The most dangerous route in this API: it can book an execution
+			// into an append-only ledger. ADMIN only, and the role is enforced
+			// by this group rather than by a check inside the handler, so it
+			// cannot be lost in a refactor of the handler body.
+			admin.Post("/reconciliation/{accountID}/issues/{issueID}/resolve",
+				s.handleResolveReconciliationIssue)
 		})
 	})
 
@@ -347,6 +361,12 @@ type readinessResponse struct {
 	ExecutionMode string            `json:"execution_mode"`
 	Checks        map[string]string `json:"checks"`
 	Degraded      []string          `json:"degraded,omitempty"`
+	// TradingState answers a question process health cannot: is this system's
+	// picture of the market trustworthy enough to trade on. See below.
+	TradingState      string `json:"trading_state"`
+	AutomationAllowed bool   `json:"automation_allowed"`
+	HaltedAccounts    int    `json:"halted_accounts"`
+	OpenIssues        int    `json:"open_reconciliation_issues"`
 }
 
 // handleReadiness reports whether the service can serve traffic.
@@ -355,6 +375,20 @@ type readinessResponse struct {
 // makes the service not ready. Redis and the quant service are not required —
 // the platform degrades without them — so they are reported but do not fail
 // the probe.
+//
+// # Why trading state is reported here and does not fail the probe
+//
+// An HTTP server and a database that are both alive say NOTHING about whether
+// this system's records agree with the venue. Reporting "ready" on that basis
+// is how an operator comes to believe a halted account is trading, so the
+// trading verdict is reported alongside — HEALTHY, DEGRADED,
+// RECONCILIATION_REQUIRED or TRADING_HALTED.
+//
+// It deliberately does NOT make the probe fail. A halted account is a state
+// this service must stay up to SERVE: the operator needs the operations view,
+// the issue evidence and the resolve endpoint precisely then. Failing
+// readiness would have an orchestrator restart or remove the one process that
+// can fix the problem, and restarting changes nothing about a divergence.
 func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -400,6 +434,30 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fail closed on the trading verdict specifically. If the verdict cannot
+	// be computed, "we do not know whether it is safe to trade" is reported as
+	// unsafe, not omitted.
+	resp.TradingState = string(domain.TradingReconciliationRequired)
+	resp.AutomationAllowed = false
+	if s.reconciler != nil {
+		verdict, err := s.reconciler.System(ctx)
+		if err != nil {
+			resp.Checks["reconciliation"] = "unavailable"
+			resp.Degraded = append(resp.Degraded, "reconciliation")
+		} else {
+			resp.TradingState = string(verdict.State)
+			resp.AutomationAllowed = verdict.State.AutomationAllowed()
+			resp.HaltedAccounts = verdict.HaltedAccounts
+			resp.OpenIssues = verdict.OpenIssues
+			resp.Checks["reconciliation"] = string(verdict.State)
+			if !resp.AutomationAllowed {
+				resp.Degraded = append(resp.Degraded, "automation:"+string(verdict.State))
+			}
+			metrics.AutomationAllowed.Set(boolGauge(resp.AutomationAllowed))
+			metrics.HaltedAccounts.Set(float64(verdict.HaltedAccounts))
+		}
+	}
+
 	writeJSON(w, r, status, resp)
 }
 
@@ -421,4 +479,12 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		SimulatedFunds:       s.cfg.SimulatedFunds(),
 		LiveTradingAvailable: config.BuildAllowsLiveExecution,
 	})
+}
+
+// boolGauge renders a boolean for Prometheus, which has no boolean type.
+func boolGauge(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
 }

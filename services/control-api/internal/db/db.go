@@ -121,6 +121,68 @@ func (p *Pool) InSerializableTx(ctx context.Context, fn func(pgx.Tx) error) erro
 	return nil
 }
 
+// SessionLock is a held advisory lock. Release it when the work is done.
+type SessionLock struct {
+	conn    *pgxpool.Conn
+	classID int32
+	objID   int32
+}
+
+// Release unlocks and returns the connection to the pool.
+//
+// Safe to call twice, so `defer lock.Release()` alongside an early explicit
+// release is not a bug.
+func (l *SessionLock) Release(ctx context.Context) {
+	if l == nil || l.conn == nil {
+		return
+	}
+	// A detached context, so a cancelled request still releases the lock
+	// rather than leaving it held until the connection is recycled.
+	_, _ = l.conn.Exec(context.WithoutCancel(ctx),
+		`SELECT pg_advisory_unlock($1, $2)`, l.classID, l.objID)
+	l.conn.Release()
+	l.conn = nil
+}
+
+// TryAcquireSessionLock takes a SESSION-scoped advisory lock without blocking.
+//
+// # Why session-scoped and not transaction-scoped
+//
+// A reconciliation run spans several transactions by design: it reads a venue
+// snapshot with no transaction open, then repairs each issue in its own unit of
+// work so one failure does not roll back the others. A transaction-scoped lock
+// would therefore be released between the snapshot and the repairs, which is
+// exactly the window a second run must not be allowed into.
+//
+// # Why an advisory lock rather than a row
+//
+// It is enforced by PostgreSQL across processes, so two control planes cannot
+// both decide they hold it, and it is released automatically if the process
+// dies — a `locked_until` column in a table would leave a stale lock that
+// needs a timeout to clear, and picking that timeout means guessing how long a
+// run should take.
+//
+// The connection is held for the lock's lifetime. That is one connection out
+// of the pool per concurrently reconciling account, which is why RunAll
+// reconciles accounts in sequence rather than fanning out.
+func (p *Pool) TryAcquireSessionLock(ctx context.Context, class AdvisoryLockKey, object int32) (*SessionLock, bool, error) {
+	conn, err := p.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("db: acquire connection for session lock: %w", err)
+	}
+	var acquired bool
+	if err := conn.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock($1, $2)`, int32(class), object).Scan(&acquired); err != nil {
+		conn.Release()
+		return nil, false, fmt.Errorf("db: try session advisory lock: %w", err)
+	}
+	if !acquired {
+		conn.Release()
+		return nil, false, nil
+	}
+	return &SessionLock{conn: conn, classID: int32(class), objID: object}, true, nil
+}
+
 // AdvisoryLockKey namespaces the 64-bit advisory lock space so unrelated
 // subsystems cannot collide.
 type AdvisoryLockKey int64
@@ -133,6 +195,12 @@ const (
 	LockMigrations AdvisoryLockKey = 8_100_002
 	// LockOutboxDispatch keeps one dispatcher active at a time.
 	LockOutboxDispatch AdvisoryLockKey = 8_100_003
+	// LockReconciliationAccount namespaces the per-account reconciliation
+	// lock. Unlike the keys above it is used with the two-argument advisory
+	// lock form, so this value is the class and the account's hash is the
+	// object -- which keeps every account's lock distinct while remaining
+	// obviously a reconciliation lock in pg_locks.
+	LockReconciliationAccount AdvisoryLockKey = 8_100_004
 )
 
 // TryAdvisoryLock attempts to take a transaction-scoped advisory lock without

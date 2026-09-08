@@ -36,10 +36,14 @@ const (
 	marketDataInterval     = 2 * time.Second
 	strategyInterval       = 30 * time.Second
 	reconciliationInterval = 5 * time.Minute
-	outboxInterval         = 3 * time.Second
-	cleanupInterval        = 1 * time.Hour
-	econDataInterval       = 15 * time.Minute
-	leaseTTL               = 2 * time.Minute
+	// reconciliationTimeout bounds one whole pass over every account. Shorter
+	// than the interval so an overrunning pass is abandoned rather than
+	// queued behind the next one.
+	reconciliationTimeout = 4 * time.Minute
+	outboxInterval        = 3 * time.Second
+	cleanupInterval       = 1 * time.Hour
+	econDataInterval      = 15 * time.Minute
+	leaseTTL              = 2 * time.Minute
 )
 
 // Deps are the scheduler's collaborators.
@@ -267,9 +271,39 @@ func (s *Scheduler) runStrategies(ctx context.Context) error {
 }
 
 // runReconciliation compares every account against its venue.
+//
+// Three separate mechanisms keep this bounded, and each covers a case the
+// others do not:
+//
+//   - the LEASE stops two control-plane instances reconciling at once
+//   - the per-account ADVISORY LOCK stops a scheduled run overlapping a manual
+//     one, or overlapping the previous tick if it is still going
+//   - the TIMEOUT here stops a venue that accepts a connection and then never
+//     answers from holding the lease until the process restarts
+//
+// Without the timeout the first two are worthless: a run blocked on a socket
+// holds both the lease and the lock indefinitely, and reconciliation silently
+// stops happening while reporting no error at all.
+//
+// Deliberately shorter than the interval, so a tick that overruns is abandoned
+// rather than queued behind the next one.
 func (s *Scheduler) runReconciliation(ctx context.Context) error {
 	return s.withLease(ctx, "reconciliation", func(ctx context.Context) error {
-		_, err := s.deps.Reconciler.RunAll(ctx, reconcile.TriggerScheduled)
+		bounded, cancel := context.WithTimeout(ctx, reconciliationTimeout)
+		defer cancel()
+
+		_, err := s.deps.Reconciler.RunAll(bounded, reconcile.TriggerScheduled)
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Reported, not swallowed. A reconciliation pass that ran out of
+			// time left some accounts unchecked, and their readiness will say
+			// RECONCILIATION_REQUIRED until a later pass reaches them -- which
+			// is the correct outcome, but only if someone is told why.
+			s.deps.Log.Warn("reconciliation pass exceeded its timeout",
+				"timeout", reconciliationTimeout.String(),
+				"consequence", "accounts not reached this pass report "+
+					"RECONCILIATION_REQUIRED until a later pass completes")
+			return nil
+		}
 		return err
 	})
 }

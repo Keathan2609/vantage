@@ -57,7 +57,11 @@ const (
 	AuditOrderFilled              AuditAction = "order.filled"
 	AuditOrderDuplicateSuppressed AuditAction = "order.duplicate_suppressed"
 
-	AuditReconciliationRun         AuditAction = "reconciliation.run"
+	AuditReconciliationRun AuditAction = "reconciliation.run"
+	// AuditReconciliationResolve records an operator resolving a divergence.
+	// Written on refusal as well as success: an audit trail that records only
+	// successes cannot answer "did anyone try".
+	AuditReconciliationResolve     AuditAction = "reconciliation.resolve"
 	AuditReconciliationDiscrepancy AuditAction = "reconciliation.discrepancy"
 
 	AuditAdminAction   AuditAction = "admin.action"

@@ -1,4 +1,5 @@
-// Package reconcile compares Vantage's view of an account with the venue's.
+// Package reconcile compares Vantage's view of an account with the venue's,
+// repairs what it can prove, and holds open what it cannot.
 //
 // The premise: Vantage's state is a CACHE of the venue's, and caches go stale.
 // Responses get lost, processes die mid-write, brokers cancel orders on their
@@ -6,26 +7,42 @@
 // assumes its local records match the venue will eventually size a position
 // against exposure that does not exist.
 //
-// Reconciliation runs at start-up, on a schedule, after a reconnect, and after
-// any order whose outcome was unknown. Where it finds a difference, the VENUE
-// WINS: it holds the money.
+// # The shape of a run
 //
-// Unresolved critical discrepancies halt automated trading for the account.
-// That is deliberate. Trading on a position book that is known to be wrong is
-// worse than not trading.
+//  1. take the account's reconciliation lock, or decline to run
+//  2. capture the venue's snapshot
+//  3. capture Vantage's snapshot
+//  4. classify the differences (pure; see classify.go)
+//  5. persist each as an issue, deduplicated by fingerprint
+//  6. apply the repairs the domain policy calls provable
+//  7. record the run and update readiness
+//
+// Steps 2 and 3 happen before any repair, so a run is a pure function of two
+// snapshots plus the repair policy — which is what makes it reproducible and
+// unit-testable.
+//
+// # Where the difference goes
+//
+// The VENUE WINS, but only where the correct repair is provable. Where it is
+// not, the issue stays open and automated trading for the account stops.
+// Trading on a position book known to be wrong is worse than not trading, and
+// guessing at an ambiguous execution is worse than both.
 package reconcile
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/vantage/control-api/internal/booking"
 	"github.com/vantage/control-api/internal/broker"
+	"github.com/vantage/control-api/internal/db"
 	"github.com/vantage/control-api/internal/domain"
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/metrics"
@@ -36,8 +53,14 @@ import (
 type Service struct {
 	store   *store.Store
 	brokers *broker.Registry
+	booking *booking.Service
 	clock   domain.Clock
 	alerter Alerter
+
+	// balanceTolerance bounds an acceptable balance difference. Explicit
+	// rather than assumed, because in paper mode the venue computes its own
+	// balance and some difference is expected by design.
+	balanceTolerance decimal.Decimal
 }
 
 // Alerter is the subset of internal/notify this service needs, declared here
@@ -45,14 +68,25 @@ type Service struct {
 type Alerter interface {
 	ReconciliationMismatch(ctx context.Context, accountID uuid.UUID, critical, total int, kinds []string)
 	ReconciliationClean(ctx context.Context, accountID uuid.UUID)
+	ReconciliationIssueRaised(ctx context.Context, accountID uuid.UUID, issueType, severity, description string)
+	ReconciliationRepaired(ctx context.Context, accountID uuid.UUID, issueType, action, detail string)
+	ReconciliationFailed(ctx context.Context, accountID uuid.UUID, consecutive int, cause string)
+	TradingHalted(ctx context.Context, accountID uuid.UUID, scope, reason string)
+	TradingResumed(ctx context.Context, accountID uuid.UUID)
 }
 
 // SetAlerter attaches an alerter after construction.
 func (s *Service) SetAlerter(a Alerter) { s.alerter = a }
 
 // New builds the reconciliation service.
-func New(s *store.Store, brokers *broker.Registry, clock domain.Clock) *Service {
-	return &Service{store: s, brokers: brokers, clock: clock}
+func New(s *store.Store, brokers *broker.Registry, bk *booking.Service, clock domain.Clock) *Service {
+	return &Service{
+		store: s, brokers: brokers, booking: bk, clock: clock,
+		// Two currency units. Wide enough that paper-mode rounding does not
+		// raise an issue every minute, narrow enough that a missing execution
+		// on a R500 account does not hide inside it.
+		balanceTolerance: decimal.RequireFromString("2.00"),
+	}
 }
 
 // Trigger describes why a run happened.
@@ -74,489 +108,711 @@ type Report struct {
 	Status            string
 	OrdersCompared    int
 	PositionsCompared int
-	Discrepancies     []Discrepancy
-	Resolved          int
+	ExecutionsSeen    int
+	Issues            []store.Issue
+	Repaired          int
 	StartedAt         time.Time
 	FinishedAt        time.Time
+	// Skipped is true when another run held the lock. Not a failure: it is
+	// overlap prevention working.
+	Skipped bool
 }
 
-// Clean reports whether the two views agreed.
-func (r Report) Clean() bool { return len(r.Discrepancies) == 0 }
+// Clean reports whether the two views agreed, or every difference was
+// repaired.
+func (r Report) Clean() bool {
+	for _, i := range r.Issues {
+		if i.Open() {
+			return false
+		}
+	}
+	return true
+}
 
-// CriticalCount counts discrepancies that should halt automation.
+// CriticalCount counts unresolved issues that halt automation.
 func (r Report) CriticalCount() int {
 	n := 0
-	for _, d := range r.Discrepancies {
-		if d.Severity == "critical" {
+	for _, i := range r.Issues {
+		if i.Open() && i.Severity == domain.SeverityCriticalIssue {
 			n++
 		}
 	}
 	return n
 }
 
-// Discrepancy is one difference between the two views.
-type Discrepancy struct {
-	Kind         string
-	Severity     string
-	OrderID      *uuid.UUID
-	InstrumentID string
-	VantageValue string
-	BrokerValue  string
-	Description  string
-	// AutoResolved is true when reconciliation could safely correct Vantage's
-	// record itself — for example adopting the venue's terminal status for an
-	// order Vantage had marked FAILED.
-	AutoResolved bool
+// ErrRunInProgress means another run holds the account's lock.
+var ErrRunInProgress = errors.New("reconcile: a run is already in progress for this account")
+
+// accountLockObject derives the advisory lock object id for an account.
+//
+// A 64-bit UUID hashed into 32 bits collides eventually. A collision here
+// costs one account waiting for another's run — a small, self-correcting
+// serialisation, not a correctness problem — which is the right trade for a
+// lock that PostgreSQL enforces across processes.
+func accountLockObject(accountID uuid.UUID) int32 {
+	h := fnv.New32a()
+	_, _ = h.Write(accountID[:])
+	return int32(h.Sum32()) //nolint:gosec // intentional truncation; see above
 }
 
 // Run reconciles one account.
+//
+// Declines rather than queues when another run is in progress. A scheduled run
+// that piled up behind a slow one would eventually run against a stale
+// snapshot, and reconciling from stale data is how a repair gets applied twice.
 func (s *Service) Run(ctx context.Context, account domain.Account, trigger Trigger) (Report, error) {
 	log := logging.FromContext(ctx)
-	started := s.clock.Now()
+	report := Report{AccountID: account.ID, Trigger: trigger, StartedAt: s.clock.Now()}
 
-	report := Report{AccountID: account.ID, Trigger: trigger, StartedAt: started}
+	lock, acquired, err := s.store.Pool().TryAcquireSessionLock(
+		ctx, db.LockReconciliationAccount, accountLockObject(account.ID))
+	if err != nil {
+		return report, fmt.Errorf("reconcile: acquire account lock: %w", err)
+	}
+	if !acquired {
+		metrics.ReconciliationOverlapsPrevented.Inc()
+		log.Info("reconciliation skipped: a run is already in progress",
+			"account_id", account.ID.String(), "trigger", trigger)
+		report.Skipped = true
+		report.Status = "skipped"
+		report.FinishedAt = s.clock.Now()
+		return report, nil
+	}
+	defer lock.Release(ctx)
+
+	return s.runLocked(ctx, account, trigger, report)
+}
+
+// runLocked performs a run with the account lock already held.
+func (s *Service) runLocked(ctx context.Context, account domain.Account,
+	trigger Trigger, report Report) (Report, error) {
+
+	log := logging.FromContext(ctx)
 
 	adapter, err := s.brokers.Get(account.BrokerName)
 	if err != nil {
 		return report, fmt.Errorf("reconcile: %w", err)
 	}
 
-	runID, err := s.store.Research.StartReconciliationRun(ctx, account.ID, account.BrokerName, string(trigger))
+	runID, err := s.store.Research.StartReconciliationRun(
+		ctx, account.ID, account.BrokerName, string(trigger))
 	if err != nil {
 		return report, fmt.Errorf("reconcile: start run: %w", err)
 	}
 	report.RunID = runID
+	if err := s.store.Reconcile.RecordRunStarted(ctx, account.ID, account.BrokerName, runID); err != nil {
+		return report, fmt.Errorf("reconcile: record run start: %w", err)
+	}
 
 	accountRef := account.ID.String()
 	if account.BrokerAcctRef != nil && *account.BrokerAcctRef != "" {
 		accountRef = *account.BrokerAcctRef
 	}
 
-	// A venue that cannot be reached is not a clean reconciliation. Recording
-	// it as failed keeps automation halted rather than letting a silent error
-	// look like agreement.
-	venueOrders, err := adapter.FetchOpenOrders(ctx, accountRef)
+	// Resume execution polling from the stored cursor. On a first run there is
+	// none, so a bounded lookback is used rather than the beginning of time:
+	// replaying every execution ever recorded would be correct but slow, and
+	// anything older than the lookback is already reflected in the position
+	// book or has been an open issue for a week.
+	state, err := s.store.Reconcile.AccountStateFor(ctx, account.ID)
 	if err != nil {
-		_ = s.store.Research.FinishReconciliationRun(ctx, runID, "failed", 0, 0, 0, err.Error())
-		metrics.ReconciliationRuns.WithLabelValues(string(trigger), "failed").Inc()
-		return report, fmt.Errorf("reconcile: fetch venue orders: %w", err)
+		return report, fmt.Errorf("reconcile: load account state: %w", err)
 	}
-	venuePositions, err := adapter.FetchPositions(ctx, accountRef)
-	if err != nil {
-		_ = s.store.Research.FinishReconciliationRun(ctx, runID, "failed", 0, 0, 0, err.Error())
-		metrics.ReconciliationRuns.WithLabelValues(string(trigger), "failed").Inc()
-		return report, fmt.Errorf("reconcile: fetch venue positions: %w", err)
-	}
-
-	orderDiscrepancies, ordersCompared, err := s.reconcileOrders(ctx, account, adapter, accountRef, venueOrders, runID)
-	if err != nil {
-		return report, err
-	}
-	positionDiscrepancies, positionsCompared, err := s.reconcilePositions(ctx, account, venuePositions, runID)
-	if err != nil {
-		return report, err
+	since := s.clock.Now().Add(-7 * 24 * time.Hour)
+	if state.ExecutionsCursor != nil && state.ExecutionsCursor.After(since) {
+		// Overlap the cursor slightly. An execution recorded with a timestamp
+		// marginally before the cursor would otherwise be skipped forever, and
+		// re-seeing one is free: the unique index refuses the duplicate.
+		since = state.ExecutionsCursor.Add(-time.Minute)
 	}
 
-	report.OrdersCompared = ordersCompared
-	report.PositionsCompared = positionsCompared
-	report.Discrepancies = append(orderDiscrepancies, positionDiscrepancies...)
-	report.FinishedAt = s.clock.Now()
+	// Local first, so the venue capture knows which client order ids to
+	// resolve directly. FetchOpenOrders omits filled and cancelled orders, and
+	// an order absent from that list is not thereby unknown to the venue --
+	// see captureBroker.
+	local, err := s.captureLocal(ctx, account)
+	if err != nil {
+		s.failRun(ctx, account, runID, err)
+		return report, fmt.Errorf("reconcile: capture local snapshot: %w", err)
+	}
+	clientIDs := make([]string, 0, len(local.Orders))
+	for _, o := range local.Orders {
+		clientIDs = append(clientIDs, o.CommandID.String())
+	}
+
+	remote, err := s.captureBroker(ctx, adapter, accountRef, since, clientIDs)
+	if err != nil {
+		s.failRun(ctx, account, runID, err)
+		return report, fmt.Errorf("reconcile: capture venue snapshot: %w", err)
+	}
+
+	report.OrdersCompared = len(local.Orders) + len(remote.Orders)
+	report.PositionsCompared = len(local.Positions) + len(remote.Positions)
+	report.ExecutionsSeen = len(remote.Executions)
+
+	findings := Classify(local, remote, s.balanceTolerance)
+
+	correlationID := logging.CorrelationID(ctx)
+	for _, f := range findings {
+		issue, repaired, err := s.persistAndRepair(ctx, account, runID, correlationID, f, local, remote)
+		if err != nil {
+			// One issue failing to persist or repair must not abandon the
+			// others: the remaining findings may include the very execution
+			// that explains this one.
+			log.Error("reconciliation could not process a finding",
+				"account_id", account.ID.String(), "issue_type", string(f.Type),
+				"error", err.Error())
+			continue
+		}
+		report.Issues = append(report.Issues, issue)
+		if repaired {
+			report.Repaired++
+		}
+	}
+
+	// Close issues whose divergence is gone.
+	//
+	// Nothing else does this, and without it every TRANSIENT divergence halts
+	// an account permanently: a snapshot taken mid-execution raises a
+	// PARTIAL_FILL_MISMATCH, the next run finds the quantities agree, and the
+	// original issue stays open forever because no code path ever revisits it.
+	//
+	// It is also how a repair applied later in the SAME run tidies up after
+	// itself. Classification happens before any repair, so an order-level
+	// mismatch is classified from the pre-repair snapshot and is stale the
+	// moment the missing execution is imported a few findings later.
+	detected := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		detected[f.Fingerprint] = true
+	}
+	if err := s.closeVanishedIssues(ctx, account, runID, correlationID, detected,
+		report.StartedAt); err != nil {
+		log.Error("reconciliation could not close resolved issues",
+			"account_id", account.ID.String(), "error", err.Error())
+	}
+
+	// Clear the unknown-outcome flag on orders no longer referenced by any
+	// unresolved issue. Without this an order stays flagged after its issue is
+	// resolved, and the readiness verdict never recovers.
+	if err := s.refreshOrderFlags(ctx, account); err != nil {
+		log.Error("reconciliation could not refresh order flags",
+			"account_id", account.ID.String(), "error", err.Error())
+	}
 
 	status := "clean"
-	if len(report.Discrepancies) > 0 {
+	if report.CriticalCount() > 0 || !report.Clean() {
 		status = "discrepancies_found"
 	}
 	report.Status = status
+	report.FinishedAt = s.clock.Now()
 
+	cursor := remote.FetchedAt
 	if err := s.store.Research.FinishReconciliationRun(ctx, runID, status,
-		ordersCompared, positionsCompared, len(report.Discrepancies), ""); err != nil {
+		report.OrdersCompared, report.PositionsCompared, len(report.Issues), ""); err != nil {
+		return report, err
+	}
+	if err := s.store.Reconcile.RecordRunFinished(ctx, account.ID, status, true, &cursor); err != nil {
 		return report, err
 	}
 
 	metrics.ReconciliationRuns.WithLabelValues(string(trigger), status).Inc()
-	unresolved, _ := s.store.Research.UnresolvedDiscrepancies(ctx, account.ID)
-	metrics.UnresolvedDiscrepancies.WithLabelValues(account.ID.String()).Set(float64(len(unresolved)))
+	open, _ := s.store.Reconcile.OpenIssues(ctx, account.ID)
+	metrics.UnresolvedDiscrepancies.WithLabelValues(account.ID.String()).Set(float64(len(open)))
 
-	if len(report.Discrepancies) > 0 {
-		log.Warn("reconciliation found discrepancies",
-			"account_id", account.ID.String(), "count", len(report.Discrepancies),
-			"critical", report.CriticalCount(), "trigger", trigger)
-		if s.alerter != nil {
-			kinds := make([]string, 0, len(report.Discrepancies))
-			seen := map[string]bool{}
-			for _, d := range report.Discrepancies {
-				if !seen[d.Kind] {
-					seen[d.Kind] = true
-					kinds = append(kinds, d.Kind)
-				}
-			}
-			s.alerter.ReconciliationMismatch(ctx, account.ID,
-				report.CriticalCount(), len(report.Discrepancies), kinds)
-		}
-	} else {
-		log.Info("reconciliation clean",
-			"account_id", account.ID.String(), "orders", ordersCompared,
-			"positions", positionsCompared, "trigger", trigger)
-		if s.alerter != nil {
-			// Only fires if a mismatch was previously raised, so a permanently
-			// healthy account is silent.
-			s.alerter.ReconciliationClean(ctx, account.ID)
-		}
-	}
+	s.announce(ctx, account, report, open)
 	return report, nil
 }
 
-// reconcileOrders compares open orders both ways.
-func (s *Service) reconcileOrders(ctx context.Context, account domain.Account, adapter broker.Adapter,
-	accountRef string, venueOrders []broker.VenueOrder, runID uuid.UUID) ([]Discrepancy, int, error) {
+// failRun records a failed run and alerts on repeated failure.
+//
+// A failed run leaves the account's last_success_at untouched, so readiness
+// reports RECONCILIATION_REQUIRED rather than falling back to "no open issues,
+// therefore healthy". A venue we cannot reach is not agreement.
+func (s *Service) failRun(ctx context.Context, account domain.Account, runID uuid.UUID, cause error) {
+	log := logging.FromContext(ctx)
+	_ = s.store.Research.FinishReconciliationRun(ctx, runID, "failed", 0, 0, 0, cause.Error())
+	_ = s.store.Reconcile.RecordRunFinished(ctx, account.ID, "failed", false, nil)
+	metrics.ReconciliationRuns.WithLabelValues("any", "failed").Inc()
 
-	localOrders, err := s.store.Trading.ListOrdersForUser(ctx, account.UserID, store.OrderFilter{
-		AccountID: &account.ID, OpenOnly: true, Limit: 500,
-	})
-	if err != nil {
-		return nil, 0, fmt.Errorf("reconcile: list local orders: %w", err)
+	state, err := s.store.Reconcile.AccountStateFor(ctx, account.ID)
+	consecutive := 1
+	if err == nil {
+		consecutive = state.ConsecutiveFailures
 	}
-
-	// Orders Vantage does not consider open but which may still be unresolved.
-	failedOrders, err := s.store.Trading.ListOrdersForUser(ctx, account.UserID, store.OrderFilter{
-		AccountID: &account.ID, Status: []domain.OrderStatus{domain.OrderFailed}, Limit: 200,
-	})
-	if err != nil {
-		return nil, 0, fmt.Errorf("reconcile: list failed orders: %w", err)
+	log.Error("reconciliation failed",
+		"account_id", account.ID.String(), "consecutive_failures", consecutive,
+		"error", cause.Error())
+	if s.alerter != nil {
+		s.alerter.ReconciliationFailed(ctx, account.ID, consecutive, cause.Error())
 	}
-	localOrders = append(localOrders, failedOrders...)
-
-	byBrokerID := map[string]broker.VenueOrder{}
-	byClientID := map[string]broker.VenueOrder{}
-	for _, vo := range venueOrders {
-		byBrokerID[vo.BrokerOrderID] = vo
-		byClientID[vo.ClientOrderID] = vo
-	}
-
-	var out []Discrepancy
-	compared := 0
-
-	for _, local := range localOrders {
-		compared++
-
-		var venue broker.VenueOrder
-		var found bool
-		if local.BrokerOrderID != nil {
-			venue, found = byBrokerID[*local.BrokerOrderID]
-		}
-		if !found {
-			// Resolve by client id: this is how an order whose acknowledgement
-			// was lost is discovered to be live at the venue after all.
-			venue, found = byClientID[local.CommandID.String()]
-			if !found {
-				vo, err := adapter.FetchOrderByClientID(ctx, accountRef, local.CommandID.String())
-				if err == nil {
-					venue, found = vo, true
-				} else if !errors.Is(err, broker.ErrNotFound) {
-					return out, compared, fmt.Errorf("reconcile: fetch order by client id: %w", err)
-				}
-			}
-		}
-
-		if !found {
-			// The venue has no record. A FAILED order that never reached the
-			// venue is good news and can be closed out; an order Vantage
-			// believes is working is a genuine mismatch.
-			if local.Status == domain.OrderFailed {
-				d := Discrepancy{
-					Kind: "order_missing_at_broker", Severity: "info",
-					OrderID: &local.ID, InstrumentID: local.InstrumentID,
-					VantageValue: string(local.Status), BrokerValue: "absent",
-					Description:  "Order marked FAILED never reached the venue; marking it rejected.",
-					AutoResolved: true,
-				}
-				if err := s.transitionWithCode(ctx, local, domain.OrderRejected,
-					domain.RejectReconciledAbsent,
-					"reconciliation: venue has no record of this order"); err != nil {
-					return out, compared, err
-				}
-				out = append(out, d)
-				if err := s.record(ctx, runID, account.ID, d); err != nil {
-					return out, compared, err
-				}
-				continue
-			}
-			// An open order that never received a venue identifier, and which
-			// the venue does not recognise by its client id either, never
-			// reached the market. It is closed out on the same evidence the
-			// FAILED branch above uses: a direct lookup by client id, not a
-			// gap in a paginated list.
-			//
-			// This case exists because a crash or a rolled-back transaction
-			// between persisting the order and recording the venue's answer
-			// leaves it in ACCEPTED with no venue id. Before this branch, such
-			// an order was UNRESOLVABLE: cancellation refuses it
-			// ("order_not_at_venue"), no endpoint resolves a discrepancy by
-			// hand, and it kept consuming the account's pending-order budget
-			// forever. Six of them accumulated during a concurrency test and
-			// took the account from "can trade" to "every order refused for
-			// max_pending_orders" permanently.
-			//
-			// An order that DOES hold a venue identifier the venue denies is a
-			// different and much more alarming thing, and stays critical and
-			// manual.
-			if local.BrokerOrderID == nil || *local.BrokerOrderID == "" {
-				d := Discrepancy{
-					Kind: "order_never_reached_venue", Severity: "warning",
-					OrderID: &local.ID, InstrumentID: local.InstrumentID,
-					VantageValue: string(local.Status), BrokerValue: "absent",
-					Description: "Order holds no venue identifier and the venue does not " +
-						"recognise its client id; it never reached the market. Marking it rejected.",
-					AutoResolved: true,
-				}
-				if err := s.transitionWithCode(ctx, local, domain.OrderRejected,
-					domain.RejectReconciledAbsent,
-					"reconciliation: order never reached the venue"); err != nil {
-					return out, compared, err
-				}
-				out = append(out, d)
-				if err := s.record(ctx, runID, account.ID, d); err != nil {
-					return out, compared, err
-				}
-				continue
-			}
-
-			d := Discrepancy{
-				Kind: "order_missing_at_broker", Severity: "critical",
-				OrderID: &local.ID, InstrumentID: local.InstrumentID,
-				VantageValue: string(local.Status), BrokerValue: "absent",
-				Description: "Vantage believes this order is working and holds a venue " +
-					"identifier for it, but the venue has no record of it.",
-			}
-			out = append(out, d)
-			if err := s.record(ctx, runID, account.ID, d); err != nil {
-				return out, compared, err
-			}
-			continue
-		}
-
-		// Both know the order. Compare status and filled quantity.
-		venueStatus, mappable := venue.Status.ToOrderStatus()
-		if mappable && venueStatus != local.Status {
-			severity := "warning"
-			autoResolved := false
-			// Where the venue reports a terminal state and Vantage's state
-			// machine permits the move, adopt it: the venue is authoritative.
-			if domain.CanTransition(local.Status, venueStatus) {
-				if err := s.transition(ctx, local, venueStatus,
-					"reconciliation: venue reported "+string(venue.Status)); err != nil {
-					return out, compared, err
-				}
-				autoResolved = true
-				severity = "info"
-			} else {
-				severity = "critical"
-			}
-			d := Discrepancy{
-				Kind: "order_status_mismatch", Severity: severity,
-				OrderID: &local.ID, InstrumentID: local.InstrumentID,
-				VantageValue: string(local.Status), BrokerValue: string(venue.Status),
-				Description:  "Vantage and the venue disagree about this order's status.",
-				AutoResolved: autoResolved,
-			}
-			out = append(out, d)
-			if err := s.record(ctx, runID, account.ID, d); err != nil {
-				return out, compared, err
-			}
-		}
-
-		if !venue.FilledQuantity.Equal(local.FilledQuantity) {
-			d := Discrepancy{
-				Kind: "fill_quantity_mismatch", Severity: "critical",
-				OrderID: &local.ID, InstrumentID: local.InstrumentID,
-				VantageValue: local.FilledQuantity.String(),
-				BrokerValue:  venue.FilledQuantity.String(),
-				Description: "The venue reports a different filled quantity. " +
-					"Executions are missing from Vantage's records.",
-			}
-			out = append(out, d)
-			if err := s.record(ctx, runID, account.ID, d); err != nil {
-				return out, compared, err
-			}
-		}
-	}
-
-	// Orders the venue is working that Vantage has never heard of. This is
-	// what a trade placed directly in the broker's own terminal looks like.
-	localByBrokerID := map[string]bool{}
-	localByCommandID := map[string]bool{}
-	for _, l := range localOrders {
-		if l.BrokerOrderID != nil {
-			localByBrokerID[*l.BrokerOrderID] = true
-		}
-		localByCommandID[l.CommandID.String()] = true
-	}
-	for _, vo := range venueOrders {
-		if localByBrokerID[vo.BrokerOrderID] || localByCommandID[vo.ClientOrderID] {
-			continue
-		}
-		compared++
-		d := Discrepancy{
-			Kind: "order_unknown_to_vantage", Severity: "critical",
-			InstrumentID: vo.Symbol,
-			VantageValue: "absent", BrokerValue: string(vo.Status),
-			Description: fmt.Sprintf(
-				"The venue is working an order (%s %s %s) that Vantage did not place.",
-				vo.Side, vo.Quantity, vo.Symbol),
-		}
-		out = append(out, d)
-		if err := s.record(ctx, runID, account.ID, d); err != nil {
-			return out, compared, err
-		}
-	}
-	return out, compared, nil
 }
 
-// reconcilePositions compares the position books both ways.
-func (s *Service) reconcilePositions(ctx context.Context, account domain.Account,
-	venuePositions []broker.VenuePosition, runID uuid.UUID) ([]Discrepancy, int, error) {
+// persistAndRepair records a finding as an issue and applies its repair where
+// the domain policy says the repair is provable.
+//
+// The issue is written BEFORE the repair, in its own transaction, so that:
+//
+//   - the repair can reference the issue id, which the schema requires of any
+//     transition claiming to be a repair
+//   - a repair that fails leaves the issue open rather than leaving no record
+//     that anything was wrong
+func (s *Service) persistAndRepair(ctx context.Context, account domain.Account,
+	runID uuid.UUID, correlationID string, f Finding,
+	local LocalSnapshot, remote BrokerSnapshot) (store.Issue, bool, error) {
 
-	localPositions, err := s.store.Trading.OpenPositions(ctx, account.ID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("reconcile: list local positions: %w", err)
+	policy := domain.PolicyFor(f.Type)
+
+	initialStatus := domain.IssueOpen
+	if policy.Repair != domain.RepairAutomaticallySafe {
+		initialStatus = domain.IssueOperatorActionRequired
 	}
 
-	venueBySymbol := map[string]broker.VenuePosition{}
-	for _, vp := range venuePositions {
-		venueBySymbol[vp.Symbol] = vp
+	in := store.Issue{
+		RunID:          runID,
+		AccountID:      account.ID,
+		BrokerName:     account.BrokerName,
+		Type:           f.Type,
+		Severity:       f.Severity,
+		Status:         initialStatus,
+		RepairClass:    policy.Repair,
+		OrderID:        f.OrderID,
+		PositionID:     f.PositionID,
+		Description:    f.Description,
+		Fingerprint:    f.Fingerprint,
+		CorrelationID:  correlationID,
+		LocalSnapshot:  evidenceJSON(f.LocalEvidence),
+		BrokerSnapshot: evidenceJSON(f.BrokerEvidence),
+		Evidence:       evidenceJSON(f.Evidence),
 	}
-	localBySymbol := map[string]domain.Position{}
-	for _, lp := range localPositions {
-		localBySymbol[lp.InstrumentID] = lp
+	if f.InstrumentID != "" {
+		v := f.InstrumentID
+		in.InstrumentID = &v
 	}
-
-	var out []Discrepancy
-	compared := 0
-
-	for _, local := range localPositions {
-		compared++
-		venue, found := venueBySymbol[local.InstrumentID]
-		if !found {
-			d := Discrepancy{
-				Kind: "position_missing_at_broker", Severity: "critical",
-				InstrumentID: local.InstrumentID,
-				VantageValue: fmt.Sprintf("%s %s", local.Side, local.Quantity),
-				BrokerValue:  "flat",
-				Description: "Vantage holds a position the venue does not. " +
-					"Risk sizing is being computed against exposure that does not exist.",
-			}
-			out = append(out, d)
-			if err := s.record(ctx, runID, account.ID, d); err != nil {
-				return out, compared, err
-			}
-			continue
-		}
-		if venue.Side != local.Side || !venue.Quantity.Equal(local.Quantity) {
-			d := Discrepancy{
-				Kind: "position_quantity_mismatch", Severity: "critical",
-				InstrumentID: local.InstrumentID,
-				VantageValue: fmt.Sprintf("%s %s", local.Side, local.Quantity),
-				BrokerValue:  fmt.Sprintf("%s %s", venue.Side, venue.Quantity),
-				Description:  "Vantage and the venue disagree about this position's size or direction.",
-			}
-			out = append(out, d)
-			if err := s.record(ctx, runID, account.ID, d); err != nil {
-				return out, compared, err
-			}
-		}
+	if f.BrokerOrderID != "" {
+		v := f.BrokerOrderID
+		in.BrokerOrderID = &v
+	}
+	if f.BrokerExecutionID != "" {
+		v := f.BrokerExecutionID
+		in.BrokerExecutionID = &v
 	}
 
-	for _, venue := range venuePositions {
-		if _, found := localBySymbol[venue.Symbol]; found {
-			continue
-		}
-		compared++
-		d := Discrepancy{
-			Kind: "position_unknown_to_vantage", Severity: "critical",
-			InstrumentID: venue.Symbol,
-			VantageValue: "flat",
-			BrokerValue:  fmt.Sprintf("%s %s", venue.Side, venue.Quantity),
-			Description: "The venue holds a position Vantage does not know about. " +
-				"It may have been opened outside Vantage, or an execution was missed.",
-		}
-		out = append(out, d)
-		if err := s.record(ctx, runID, account.ID, d); err != nil {
-			return out, compared, err
-		}
-	}
-	return out, compared, nil
-}
-
-// transition applies a reconciliation-driven state change.
-func (s *Service) transition(ctx context.Context, order domain.Order, to domain.OrderStatus, reason string) error {
-	return s.transitionWithCode(ctx, order, to, "", reason)
-}
-
-// transitionWithCode applies a state change, carrying a reject code where the
-// destination requires one.
-func (s *Service) transitionWithCode(ctx context.Context, order domain.Order,
-	to domain.OrderStatus, code domain.RejectCode, reason string) error {
-
-	return s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
-		current, err := s.store.Trading.OrderByIDTx(ctx, tx, order.ID)
+	var issue store.Issue
+	var isNew bool
+	err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		issue, isNew, err = s.store.Reconcile.UpsertIssue(ctx, tx, in)
 		if err != nil {
 			return err
 		}
-		if !domain.CanTransition(current.Status, to) {
+		if !isNew {
 			return nil
 		}
-		_, err = s.store.Trading.TransitionOrderWithCodeTx(ctx, tx, current.ID, current.Version,
-			to, code, reason, "system", nil)
-		return err
+		return s.store.Reconcile.AppendIssueEventTx(ctx, tx, store.IssueEvent{
+			IssueID:       issue.ID,
+			Action:        "DETECTED",
+			ToStatus:      string(initialStatus),
+			ActorType:     "system",
+			Reason:        f.Description,
+			Evidence:      evidenceJSON(f.Evidence),
+			CorrelationID: correlationID,
+		})
 	})
+	if err != nil {
+		return store.Issue{}, false, fmt.Errorf("persist issue: %w", err)
+	}
+
+	if isNew {
+		metrics.ReconciliationIssues.WithLabelValues(string(f.Type), string(f.Severity)).Inc()
+		if s.alerter != nil {
+			s.alerter.ReconciliationIssueRaised(ctx, account.ID,
+				string(f.Type), string(f.Severity), f.Description)
+		}
+	}
+
+	// Flag the order while the issue is open, so uncertainty is visible in the
+	// UI and countable in readiness without inferring it from a status name.
+	if issue.OrderID != nil && issue.Open() && policy.Halt != domain.HaltNone {
+		if err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+			return s.store.Trading.SetOrderReconciliationRequiredTx(ctx, tx, *issue.OrderID, true)
+		}); err != nil {
+			return issue, false, fmt.Errorf("flag order for reconciliation: %w", err)
+		}
+	}
+
+	if policy.Repair != domain.RepairAutomaticallySafe || f.Repair == nil {
+		return issue, false, nil
+	}
+
+	repaired, err := s.applyRepair(ctx, account, issue, f, local, remote, correlationID, nil)
+	if err != nil {
+		return issue, false, err
+	}
+	return repaired, true, nil
 }
 
-func (s *Service) record(ctx context.Context, runID, accountID uuid.UUID, d Discrepancy) error {
-	metrics.ReconciliationMismatches.WithLabelValues(d.Kind, d.Severity).Inc()
+// applyRepair executes a repair plan and closes the issue.
+//
+// actorUserID is nil for an automatic repair and set for an operator action.
+// Everything else about the two paths is identical, deliberately: an operator
+// importing a fill and reconciliation importing a fill must produce the same
+// accounting, and the way to guarantee that is for them to be the same code.
+func (s *Service) applyRepair(ctx context.Context, account domain.Account, issue store.Issue,
+	f Finding, local LocalSnapshot, remote BrokerSnapshot, correlationID string,
+	actorUserID *uuid.UUID) (store.Issue, error) {
 
-	instrument := d.InstrumentID
-	rec := store.Discrepancy{
-		RunID: runID, AccountID: accountID, Kind: d.Kind, Severity: d.Severity,
-		OrderID: d.OrderID, Description: d.Description,
+	plan := f.Repair
+	if plan == nil {
+		return issue, errors.New("reconcile: no repair plan")
 	}
-	if instrument != "" {
-		rec.InstrumentID = &instrument
+
+	actorType := "system"
+	actorLabel := "automatic"
+	if actorUserID != nil {
+		actorType = "user"
+		actorLabel = "operator"
 	}
-	if d.VantageValue != "" {
-		v := d.VantageValue
-		rec.VantageValue = &v
+
+	resolvedStatus := domain.IssueAutomaticallyRepaired
+	if actorUserID != nil {
+		resolvedStatus = domain.IssueResolved
 	}
-	if d.BrokerValue != "" {
-		b := d.BrokerValue
-		rec.BrokerValue = &b
+
+	detail := plan.Reason
+	err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		// The account row lock, first, as everywhere that writes an account's
+		// financial state. Booking touches fills, positions and the ledger,
+		// and taking those locks in a different order from the OMS is what
+		// produced a deadlock that silently created phantom fills.
+		if err := s.store.Accounts.LockAccountTx(ctx, tx, account.ID); err != nil {
+			return err
+		}
+
+		current, err := s.store.Reconcile.IssueByIDTx(ctx, tx, issue.ID)
+		if err != nil {
+			return err
+		}
+		if !current.Open() {
+			// Someone resolved it first. Not an error: re-running
+			// reconciliation against the same snapshot must be a no-op.
+			return store.ErrAlreadyResolved
+		}
+
+		switch plan.Action {
+		case domain.ActionImportBrokerFill:
+			d, err := s.importFill(ctx, tx, account, current, plan)
+			if err != nil {
+				return err
+			}
+			detail = d
+
+		case domain.ActionMarkNotExecuted, domain.ActionMarkBrokerRejected, domain.ActionRecheck:
+			if plan.TargetStatus == "" {
+				break
+			}
+			if current.OrderID == nil {
+				return errors.New("a status repair needs an order")
+			}
+			updated, err := s.store.Trading.RepairTransitionTx(ctx, tx, *current.OrderID,
+				plan.TargetStatus, plan.RejectCode, plan.Reason, current.ID,
+				actorType, actorUserID, map[string]any{
+					"broker_snapshot_at": remote.FetchedAt,
+					"evidence":           string(current.BrokerSnapshot),
+				})
+			if err != nil {
+				return err
+			}
+			detail = fmt.Sprintf("order %s set to %s", updated.ID, updated.Status)
+
+		case domain.ActionAcknowledge:
+			// Nothing to write. Used for the info-level stream observations,
+			// where the correct action is to record that the defence fired.
+
+		default:
+			return fmt.Errorf("reconcile: %s is not an automatic repair", plan.Action)
+		}
+
+		// An order whose issue is resolved is no longer uncertain.
+		if current.OrderID != nil {
+			if err := s.store.Trading.SetOrderReconciliationRequiredTx(
+				ctx, tx, *current.OrderID, false); err != nil {
+				return err
+			}
+		}
+
+		if err := s.store.Reconcile.ResolveIssueTx(ctx, tx, current.ID, resolvedStatus,
+			plan.Action, detail, actorUserID); err != nil {
+			return err
+		}
+		return s.store.Reconcile.AppendIssueEventTx(ctx, tx, store.IssueEvent{
+			IssueID:       current.ID,
+			Action:        string(plan.Action),
+			FromStatus:    strPtr(string(current.Status)),
+			ToStatus:      string(resolvedStatus),
+			ActorType:     actorType,
+			ActorUserID:   actorUserID,
+			Reason:        detail,
+			Evidence:      current.BrokerSnapshot,
+			CorrelationID: correlationID,
+		})
+	})
+	if errors.Is(err, store.ErrAlreadyResolved) {
+		return issue, nil
 	}
-	if err := s.store.Research.RecordDiscrepancy(ctx, rec); err != nil {
-		return fmt.Errorf("reconcile: record discrepancy: %w", err)
+	if err != nil {
+		return issue, fmt.Errorf("apply repair %s: %w", plan.Action, err)
+	}
+
+	metrics.ReconciliationRepairs.WithLabelValues(string(f.Type), actorLabel).Inc()
+	logging.FromContext(ctx).Info("reconciliation repaired a divergence",
+		"account_id", account.ID.String(), "issue_id", issue.ID.String(),
+		"issue_type", string(f.Type), "action", string(plan.Action),
+		"actor", actorLabel, "detail", detail)
+	if s.alerter != nil {
+		s.alerter.ReconciliationRepaired(ctx, account.ID,
+			string(f.Type), string(plan.Action), detail)
+	}
+
+	// Re-read so the caller sees the resolved row rather than the pre-repair
+	// copy, which would report the issue as still open.
+	refreshed, err := s.store.Reconcile.IssueForAccount(ctx, account.ID, issue.ID)
+	if err != nil {
+		return issue, nil
+	}
+	return refreshed, nil
+}
+
+// importFill books an execution the venue reports and Vantage lacks.
+//
+// Goes through internal/booking, which is the single accounting path shared
+// with the OMS. That is not a convenience: it is what makes the accounting
+// invariants provable. An importer with its own INSERT could create a position
+// with no ledger movement behind it, and nothing in the schema would object.
+func (s *Service) importFill(ctx context.Context, tx pgx.Tx, account domain.Account,
+	issue store.Issue, plan *RepairPlan) (string, error) {
+
+	if plan.Execution == nil {
+		return "", errors.New("no execution to import")
+	}
+	if issue.OrderID == nil {
+		return "", errors.New("cannot import an execution with no attributed order")
+	}
+
+	order, err := s.store.Trading.OrderByIDTx(ctx, tx, *issue.OrderID)
+	if err != nil {
+		return "", fmt.Errorf("load order: %w", err)
+	}
+	instrument, err := s.store.Market.Instrument(ctx, order.InstrumentID)
+	if err != nil {
+		return "", fmt.Errorf("load instrument: %w", err)
+	}
+
+	issueID := issue.ID.String()
+	result, err := s.booking.Apply(ctx, tx, booking.Request{
+		Account:    account,
+		Instrument: instrument,
+		Order:      order,
+		Execution:  *plan.Execution,
+		Source:     booking.SourceReconciliationImport,
+		IssueID:    &issueID,
+		Now:        s.clock.Now(),
+	})
+	if err != nil {
+		return "", err
+	}
+	if result.Duplicate {
+		return fmt.Sprintf("execution %s was already booked; nothing was applied twice",
+			plan.Execution.BrokerFillID), nil
+	}
+
+	// The order's state follows its fills. Recompute from the aggregate rather
+	// than trusting the venue's status label, so a FILLED order always has
+	// fills behind it summing to its quantity.
+	refreshed, err := s.store.Trading.OrderByIDTx(ctx, tx, order.ID)
+	if err != nil {
+		return "", err
+	}
+	target := domain.OrderPartiallyFilled
+	if refreshed.FilledQuantity.GreaterThanOrEqual(refreshed.Quantity) {
+		target = domain.OrderFilled
+	}
+	if refreshed.Status != target {
+		if _, err := s.store.Trading.RepairTransitionTx(ctx, tx, order.ID, target, "",
+			fmt.Sprintf("reconciliation imported execution %s", plan.Execution.BrokerFillID),
+			issue.ID, "system", nil, map[string]any{
+				"broker_execution_id": plan.Execution.BrokerFillID,
+				"filled_quantity":     refreshed.FilledQuantity.String(),
+			}); err != nil {
+			return "", fmt.Errorf("advance order state after import: %w", err)
+		}
+	}
+
+	return fmt.Sprintf("imported execution %s (%s %s @ %s) onto order %s; filled %s of %s",
+		plan.Execution.BrokerFillID, plan.Execution.Side, plan.Execution.Quantity,
+		plan.Execution.Price, order.ID, refreshed.FilledQuantity, refreshed.Quantity), nil
+}
+
+// closeVanishedIssues resolves open issues that this run did not re-detect.
+//
+// # Why "did not re-detect" is the right test
+//
+// A run captures both snapshots first and classifies them completely, so the
+// set of fingerprints it produced IS the set of divergences that exist. An
+// open issue whose fingerprint is absent from that set describes a problem
+// that is no longer there.
+//
+// # Why only issues detected before this run started
+//
+// An issue raised by THIS run is obviously in the detected set, so the filter
+// is belt and braces — but it also guards the case where a repair inside this
+// run created a new issue after classification finished. Closing that would
+// discard a live finding.
+//
+// # What this does NOT do
+//
+// It does not touch financial state. A vanished divergence needs no repair by
+// definition: the two views agree now. What it writes is the record that they
+// agree, which is what releases the halt.
+func (s *Service) closeVanishedIssues(ctx context.Context, account domain.Account,
+	runID uuid.UUID, correlationID string, detected map[string]bool,
+	runStartedAt time.Time) error {
+
+	open, err := s.store.Reconcile.OpenIssues(ctx, account.ID)
+	if err != nil {
+		return err
+	}
+
+	for _, issue := range open {
+		if detected[issue.Fingerprint] {
+			continue
+		}
+		if issue.DetectedAt.After(runStartedAt) {
+			continue
+		}
+
+		reason := fmt.Sprintf(
+			"The divergence is gone: reconciliation run %s compared both views in full "+
+				"and did not find it. Seen %d time(s) before it cleared.",
+			runID, issue.CheckCount)
+
+		err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+			current, err := s.store.Reconcile.IssueByIDTx(ctx, tx, issue.ID)
+			if err != nil {
+				return err
+			}
+			if !current.Open() {
+				return nil
+			}
+			if err := s.store.Reconcile.ResolveIssueTx(ctx, tx, current.ID,
+				domain.IssueResolved, domain.ActionRecheck, reason, nil); err != nil {
+				return err
+			}
+			return s.store.Reconcile.AppendIssueEventTx(ctx, tx, store.IssueEvent{
+				IssueID:       current.ID,
+				Action:        string(domain.ActionRecheck),
+				FromStatus:    strPtr(string(current.Status)),
+				ToStatus:      string(domain.IssueResolved),
+				ActorType:     "system",
+				Reason:        reason,
+				CorrelationID: correlationID,
+			})
+		})
+		if errors.Is(err, store.ErrAlreadyResolved) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		logging.FromContext(ctx).Info("reconciliation closed a divergence that is gone",
+			"account_id", account.ID.String(), "issue_id", issue.ID.String(),
+			"issue_type", string(issue.Type))
 	}
 	return nil
 }
 
-// AutomationBlocked reports whether unresolved critical discrepancies should
-// stop automated trading on an account.
-//
-// Consulted by the orchestrator before every scheduled strategy run. A human
-// may still trade manually — they can see the warning and decide — but an
-// algorithm must not act on a position book known to be wrong.
-func (s *Service) AutomationBlocked(ctx context.Context, accountID uuid.UUID) (bool, []store.Discrepancy, error) {
-	unresolved, err := s.store.Research.UnresolvedDiscrepancies(ctx, accountID)
+// refreshOrderFlags clears the unknown-outcome flag on orders no longer
+// referenced by an unresolved issue.
+func (s *Service) refreshOrderFlags(ctx context.Context, account domain.Account) error {
+	flagged, err := s.store.Trading.OrdersRequiringReconciliation(ctx, account.ID)
 	if err != nil {
-		return false, nil, err
+		return err
 	}
-	var critical []store.Discrepancy
-	for _, d := range unresolved {
-		if d.Severity == "critical" {
-			critical = append(critical, d)
+	if len(flagged) == 0 {
+		return nil
+	}
+	open, err := s.store.Reconcile.OpenIssues(ctx, account.ID)
+	if err != nil {
+		return err
+	}
+	referenced := map[uuid.UUID]bool{}
+	for _, i := range open {
+		if i.OrderID != nil {
+			referenced[*i.OrderID] = true
 		}
 	}
-	return len(critical) > 0, critical, nil
+	for _, o := range flagged {
+		if referenced[o.ID] {
+			continue
+		}
+		// A FAILED order with no open issue is still uncertain: nothing has
+		// established what the venue did. Only a resolved order clears.
+		if o.Status == domain.OrderFailed {
+			continue
+		}
+		if err := s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+			return s.store.Trading.SetOrderReconciliationRequiredTx(ctx, tx, o.ID, false)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// RunAll reconciles every account, used at start-up and on a schedule.
+// announce emits the run-level alerts.
+func (s *Service) announce(ctx context.Context, account domain.Account,
+	report Report, open []store.Issue) {
+
+	log := logging.FromContext(ctx)
+	if s.alerter == nil {
+		return
+	}
+
+	critical := 0
+	kinds := make([]string, 0, len(open))
+	seen := map[string]bool{}
+	for _, i := range open {
+		if i.Severity == domain.SeverityCriticalIssue {
+			critical++
+		}
+		if !seen[string(i.Type)] {
+			seen[string(i.Type)] = true
+			kinds = append(kinds, string(i.Type))
+		}
+	}
+
+	if len(open) > 0 {
+		log.Warn("reconciliation left unresolved issues",
+			"account_id", account.ID.String(), "open", len(open),
+			"critical", critical, "repaired", report.Repaired, "trigger", report.Trigger)
+		s.alerter.ReconciliationMismatch(ctx, account.ID, critical, len(open), kinds)
+		return
+	}
+
+	log.Info("reconciliation clean",
+		"account_id", account.ID.String(), "orders", report.OrdersCompared,
+		"positions", report.PositionsCompared, "executions", report.ExecutionsSeen,
+		"repaired", report.Repaired, "trigger", report.Trigger)
+	// Only fires if a mismatch was previously raised, so a permanently healthy
+	// account stays silent.
+	s.alerter.ReconciliationClean(ctx, account.ID)
+}
+
+// RunAll reconciles every account.
+//
+// Sequential, deliberately. Each run holds a pooled connection for its
+// advisory lock, so fanning out across accounts would consume the pool in
+// proportion to account count and starve the request path. Reconciliation is
+// not latency-critical.
 func (s *Service) RunAll(ctx context.Context, trigger Trigger) ([]Report, error) {
 	accounts, err := s.store.Accounts.ListAllAccounts(ctx)
 	if err != nil {
@@ -564,6 +820,11 @@ func (s *Service) RunAll(ctx context.Context, trigger Trigger) ([]Report, error)
 	}
 	var reports []Report
 	for _, a := range accounts {
+		if ctx.Err() != nil {
+			// Shutdown or timeout. Stop cleanly rather than reporting failures
+			// for every remaining account.
+			return reports, ctx.Err()
+		}
 		report, err := s.Run(ctx, a, trigger)
 		if err != nil {
 			// One account's failure must not stop the others being checked.
@@ -576,27 +837,4 @@ func (s *Service) RunAll(ctx context.Context, trigger Trigger) ([]Report, error)
 	return reports, nil
 }
 
-// CompareBalances checks the venue's balance against Vantage's ledger.
-//
-// Reported as informational rather than critical: in paper mode the two are
-// computed differently by design (the venue simulates its own book), and a
-// small difference is expected. A large one is worth investigating, which is
-// why the threshold is explicit rather than assumed.
-func (s *Service) CompareBalances(ctx context.Context, account domain.Account, venue broker.VenueAccount,
-	tolerance decimal.Decimal) (bool, string) {
-
-	ledgerBalance, err := s.store.Accounts.Balance(ctx, account.ID, account.Currency)
-	if err != nil {
-		return false, "ledger balance unavailable"
-	}
-	if string(account.Currency) != venue.Currency {
-		return false, fmt.Sprintf("currency mismatch: ledger in %s, venue in %s",
-			account.Currency, venue.Currency)
-	}
-	diff := ledgerBalance.Decimal().Sub(venue.Balance).Abs()
-	if diff.GreaterThan(tolerance) {
-		return false, fmt.Sprintf("balance differs by %s (ledger %s, venue %s)",
-			diff.StringFixed(2), ledgerBalance.StringFixed(), venue.Balance.StringFixed(2))
-	}
-	return true, ""
-}
+func strPtr(s string) *string { return &s }

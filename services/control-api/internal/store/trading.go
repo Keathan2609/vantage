@@ -166,7 +166,8 @@ const orderColumns = `o.id, o.account_id, o.user_id, o.instrument_id, i.symbol, 
 	o.time_in_force, o.status, o.quantity, o.filled_quantity, o.avg_fill_price, o.limit_price,
 	o.stop_price, o.stop_loss, o.take_profit, o.source, o.strategy_id, o.strategy_version,
 	o.decision_id, o.command_id, o.idempotency_key, o.broker_name, o.broker_order_id,
-	o.reject_code, o.reject_reason, o.version, o.created_at, o.updated_at, o.submitted_at, o.closed_at`
+	o.reject_code, o.reject_reason, o.version, o.created_at, o.updated_at, o.submitted_at,
+	o.closed_at, o.reconciliation_required`
 
 func scanOrder(row pgx.Row) (domain.Order, error) {
 	var o domain.Order
@@ -174,7 +175,8 @@ func scanOrder(row pgx.Row) (domain.Order, error) {
 		&o.TimeInForce, &o.Status, &o.Quantity, &o.FilledQuantity, &o.AvgFillPrice, &o.LimitPrice,
 		&o.StopPrice, &o.StopLoss, &o.TakeProfit, &o.Source, &o.StrategyID, &o.StrategyVersion,
 		&o.DecisionID, &o.CommandID, &o.IdempotencyKey, &o.BrokerName, &o.BrokerOrderID,
-		&o.RejectCode, &o.RejectReason, &o.Version, &o.CreatedAt, &o.UpdatedAt, &o.SubmittedAt, &o.ClosedAt)
+		&o.RejectCode, &o.RejectReason, &o.Version, &o.CreatedAt, &o.UpdatedAt, &o.SubmittedAt,
+		&o.ClosedAt, &o.ReconciliationRequired)
 	if err != nil {
 		return domain.Order{}, mapError(err)
 	}
@@ -413,6 +415,26 @@ func (s *TradingStore) RejectOrderTx(ctx context.Context, tx pgx.Tx, orderID uui
 	return s.OrderByIDTx(ctx, tx, orderID)
 }
 
+// OrderByBrokerOrderIDTx finds an account's order by the venue identifier it
+// holds.
+//
+// Used before linking a venue order to a Vantage order, to refuse a link that
+// would give one venue execution two claimants. Scoped to the account, so the
+// check cannot be satisfied or defeated by an order belonging to someone else.
+func (s *TradingStore) OrderByBrokerOrderIDTx(ctx context.Context, tx pgx.Tx,
+	accountID uuid.UUID, brokerOrderID string) (domain.Order, error) {
+
+	if brokerOrderID == "" {
+		return domain.Order{}, ErrNotFound
+	}
+	row := tx.QueryRow(ctx, `
+		SELECT `+orderColumns+`
+		FROM orders o JOIN instruments i ON i.id = o.instrument_id
+		WHERE o.account_id = $1 AND o.broker_order_id = $2
+		ORDER BY o.created_at LIMIT 1`, accountID, brokerOrderID)
+	return scanOrder(row)
+}
+
 // SetBrokerOrderIDTx records the broker's identifier for an order.
 func (s *TradingStore) SetBrokerOrderIDTx(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, brokerOrderID string) error {
 	_, err := tx.Exec(ctx, `
@@ -448,12 +470,21 @@ type OrderTransition struct {
 	Reason     *string
 	ActorType  string
 	OccurredAt time.Time
+	// IsRepair marks a transition applied by reconciliation reconstructing
+	// what the venue did, rather than received from the venue at the time.
+	// Reading `SUBMITTED -> FILLED` without this cannot tell the two apart.
+	IsRepair bool
+	// ReconciliationIssueID names the issue that justified a repair. A repair
+	// with nothing to point at is not evidence of anything, and a CHECK
+	// constraint refuses one.
+	ReconciliationIssueID *uuid.UUID
 }
 
 // OrderTransitions returns an order's history, oldest first.
 func (s *TradingStore) OrderTransitions(ctx context.Context, orderID uuid.UUID) ([]OrderTransition, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT from_status, to_status, reason, actor_type, occurred_at
+		SELECT from_status, to_status, reason, actor_type, occurred_at,
+		       is_repair, reconciliation_issue_id
 		FROM order_state_transitions WHERE order_id = $1 ORDER BY occurred_at, id`, orderID)
 	if err != nil {
 		return nil, mapError(err)
@@ -462,7 +493,8 @@ func (s *TradingStore) OrderTransitions(ctx context.Context, orderID uuid.UUID) 
 	var out []OrderTransition
 	for rows.Next() {
 		var t OrderTransition
-		if err := rows.Scan(&t.FromStatus, &t.ToStatus, &t.Reason, &t.ActorType, &t.OccurredAt); err != nil {
+		if err := rows.Scan(&t.FromStatus, &t.ToStatus, &t.Reason, &t.ActorType,
+			&t.OccurredAt, &t.IsRepair, &t.ReconciliationIssueID); err != nil {
 			return nil, mapError(err)
 		}
 		out = append(out, t)
@@ -480,6 +512,26 @@ func (s *TradingStore) OrderTransitions(ctx context.Context, orderID uuid.UUID) 
 // recorded. That is a normal occurrence, not an error condition: brokers
 // replay executions after a reconnect, and the correct response is to ignore
 // the repeat rather than to book the trade twice.
+// FillExistsTx reports whether an execution has already been booked.
+//
+// Used to tell a genuine overfill from a replay: a venue re-sending an
+// execution does not increase the filled total, because the aggregate is
+// recomputed from the fills and the unique index refuses the second copy. Only
+// a NEW execution that pushes the total past the order quantity is a real
+// attribution error.
+func (s *TradingStore) FillExistsTx(ctx context.Context, tx pgx.Tx,
+	brokerName, brokerFillID string) (bool, error) {
+
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM fills WHERE broker_name = $1 AND broker_fill_id = $2
+		)`, brokerName, brokerFillID).Scan(&exists); err != nil {
+		return false, mapError(err)
+	}
+	return exists, nil
+}
+
 func (s *TradingStore) AppendFillTx(ctx context.Context, tx pgx.Tx, f domain.Fill, mode domain.ExecutionMode) (domain.Fill, error) {
 	if err := AssertPaperMode(mode); err != nil {
 		return domain.Fill{}, err
@@ -488,17 +540,25 @@ func (s *TradingStore) AppendFillTx(ctx context.Context, tx pgx.Tx, f domain.Fil
 	// Conflict-tolerant for the same reason as RegisterCommand: a replayed
 	// execution must not abort the transaction that is booking the others.
 	// A broker replaying fills after a reconnect is normal, not exceptional.
+	source := f.IngestSource
+	if source == "" {
+		// Defaulting rather than refusing, because the column has a default and
+		// an unset value from an older call site means "an ordinary execution
+		// response" — which is what it was before provenance was recorded.
+		source = "execution_response"
+	}
+
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `
 		INSERT INTO fills (order_id, account_id, instrument_id, side, quantity, price,
 			commission, commission_currency, slippage, liquidity, broker_name, broker_fill_id,
-			mode, executed_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			mode, executed_at, ingest_source, reconciliation_issue_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (broker_name, broker_fill_id) DO NOTHING
 		RETURNING id`,
 		f.OrderID, f.AccountID, f.InstrumentID, f.Side, f.Quantity, f.Price,
 		f.Commission, f.CommissionCcy, f.Slippage, f.Liquidity, f.BrokerName, f.BrokerFillID,
-		mode, f.ExecutedAt).Scan(&id)
+		mode, f.ExecutedAt, source, f.IssueID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// No row inserted: this execution is already recorded.
 		return domain.Fill{}, ErrDuplicateCommand
@@ -537,7 +597,7 @@ func (s *TradingStore) FillsForOrder(ctx context.Context, orderID uuid.UUID) ([]
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, order_id, account_id, instrument_id, side, quantity, price, commission,
 		       commission_currency, slippage, liquidity, broker_name, broker_fill_id,
-		       executed_at, recorded_at
+		       executed_at, recorded_at, ingest_source
 		FROM fills WHERE order_id = $1 ORDER BY executed_at, id`, orderID)
 	if err != nil {
 		return nil, mapError(err)
@@ -554,7 +614,7 @@ func (s *TradingStore) RecentFills(ctx context.Context, accountID uuid.UUID, lim
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, order_id, account_id, instrument_id, side, quantity, price, commission,
 		       commission_currency, slippage, liquidity, broker_name, broker_fill_id,
-		       executed_at, recorded_at
+		       executed_at, recorded_at, ingest_source
 		FROM fills WHERE account_id = $1 ORDER BY executed_at DESC LIMIT $2`, accountID, limit)
 	if err != nil {
 		return nil, mapError(err)
@@ -569,7 +629,8 @@ func scanFills(rows pgx.Rows) ([]domain.Fill, error) {
 		var f domain.Fill
 		if err := rows.Scan(&f.ID, &f.OrderID, &f.AccountID, &f.InstrumentID, &f.Side,
 			&f.Quantity, &f.Price, &f.Commission, &f.CommissionCcy, &f.Slippage,
-			&f.Liquidity, &f.BrokerName, &f.BrokerFillID, &f.ExecutedAt, &f.RecordedAt); err != nil {
+			&f.Liquidity, &f.BrokerName, &f.BrokerFillID, &f.ExecutedAt, &f.RecordedAt,
+			&f.IngestSource); err != nil {
 			return nil, mapError(err)
 		}
 		out = append(out, f)

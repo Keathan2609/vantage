@@ -47,13 +47,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/vantage/control-api/internal/booking"
 	"github.com/vantage/control-api/internal/broker"
 	"github.com/vantage/control-api/internal/crypto"
 	"github.com/vantage/control-api/internal/domain"
 	"github.com/vantage/control-api/internal/fx"
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/metrics"
-	"github.com/vantage/control-api/internal/money"
 	"github.com/vantage/control-api/internal/portfolio"
 	"github.com/vantage/control-api/internal/risk"
 	"github.com/vantage/control-api/internal/store"
@@ -65,11 +65,13 @@ type Service struct {
 	brokers     *broker.Registry
 	riskEngine  *risk.Engine
 	portfolio   *portfolio.Service
+	booking     *booking.Service
 	converter   *fx.Converter
 	clock       domain.Clock
 	marketClock *domain.MarketClock
 	mode        domain.ExecutionMode
 	alerter     Alerter
+	halt        HaltGate
 }
 
 // Alerter is the subset of internal/notify the OMS needs, declared here so
@@ -83,6 +85,30 @@ type Alerter interface {
 // SetAlerter attaches an alerter after construction.
 func (s *Service) SetAlerter(a Alerter) { s.alerter = a }
 
+// HaltGate answers "may automation trade on this account right now", inside
+// the caller's transaction.
+//
+// Declared here rather than imported so oms does not depend on reconcile: the
+// OMS must not be able to reach reconciliation's repair machinery, only to ask
+// it one question.
+type HaltGate interface {
+	AutomationBlockedTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID) (bool, string, error)
+}
+
+// SetHaltGate attaches the reconciliation halt check.
+//
+// Optional at construction so the OMS can be built in a test without a
+// reconciliation service. A nil gate means no halt is enforced, which is
+// correct for a unit test and would be wrong in the running system -- so
+// internal/app wires it unconditionally and an architecture test asserts it.
+func (s *Service) SetHaltGate(g HaltGate) { s.halt = g }
+
+// errAutomationHalted unwinds Phase B when reconciliation has halted the
+// account. A sentinel rather than a rejection because it must roll the
+// transaction back: the order was never claimed, so its idempotency key stays
+// available for a retry after the halt clears.
+var errAutomationHalted = errors.New("oms: automated trading is halted for this account")
+
 // New builds the OMS.
 //
 // The execution mode is fixed at construction from validated configuration and
@@ -93,6 +119,7 @@ func New(
 	brokers *broker.Registry,
 	riskEngine *risk.Engine,
 	pf *portfolio.Service,
+	bk *booking.Service,
 	converter *fx.Converter,
 	clock domain.Clock,
 	marketClock *domain.MarketClock,
@@ -101,8 +128,13 @@ func New(
 	if mode != domain.ModePaper {
 		return nil, fmt.Errorf("oms: refusing to construct in %s mode: this build is paper-only", mode)
 	}
+	if bk == nil {
+		return nil, errors.New("oms: a booking service is required: the OMS does not book " +
+			"executions itself, so that reconciliation and ordinary execution provably " +
+			"share one accounting path")
+	}
 	return &Service{
-		store: s, brokers: brokers, riskEngine: riskEngine, portfolio: pf,
+		store: s, brokers: brokers, riskEngine: riskEngine, portfolio: pf, booking: bk,
 		converter: converter, clock: clock, marketClock: marketClock, mode: mode,
 	}, nil
 }
@@ -241,8 +273,45 @@ func (s *Service) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (Result
 	var order domain.Order
 	var decisionID uuid.UUID
 	var duplicateResult *store.RegisteredCommand
+	var haltReason string
 
 	err = s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		// The account row lock, taken first, as in every transaction that
+		// writes an account's financial state. See store.LockAccountTx.
+		//
+		// It also serialises this transaction against a reconciliation repair,
+		// which is what makes the halt check below durable rather than
+		// timing-dependent.
+		if err := s.store.Accounts.LockAccountTx(ctx, tx, account.ID); err != nil {
+			return err
+		}
+
+		// The reconciliation halt, re-checked INSIDE the transaction.
+		//
+		// Checking it in Phase A before opening a transaction leaves a real
+		// window: an automated order can pass the check microseconds before a
+		// reconciliation repair writes a critical issue, and still commit
+		// afterwards. The window is small, and "small" is not a property to
+		// rely on when the consequence is an automated order placed against a
+		// position book known to be wrong.
+		//
+		// Reading it here, after the account lock that the repair also takes,
+		// closes the window with PostgreSQL's own serialisation: either this
+		// order commits before the issue exists, or it sees the issue.
+		//
+		// Manual orders are deliberately NOT gated. An operator can see the
+		// warning and decide; an algorithm cannot.
+		if s.halt != nil && req.Source != domain.SourceManual && req.Source != domain.SourceRiskControl {
+			blocked, why, herr := s.halt.AutomationBlockedTx(ctx, tx, account.ID)
+			if herr != nil {
+				return herr
+			}
+			if blocked {
+				haltReason = why
+				return errAutomationHalted
+			}
+		}
+
 		existing, regErr := s.store.Trading.RegisterCommand(ctx, tx, store.RegisteredCommand{
 			AccountID:      account.ID,
 			IdempotencyKey: req.IdempotencyKey,
@@ -318,6 +387,20 @@ func (s *Service) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (Result
 				"quantity": order.Quantity.String(), "source": req.Source,
 			})
 	})
+	if errors.Is(err, errAutomationHalted) {
+		// Refused, not failed. The order was never persisted and its
+		// idempotency key is still free, so the caller may retry once the
+		// account is safe -- which is the correct shape for a temporary
+		// refusal and the reason this is not recorded as a rejected order.
+		rej := domain.NewRejection(domain.RejectReconciliationRequired,
+			"Automated trading is halted for this account: "+haltReason+
+				". Manual trading is unaffected. Resolve the reconciliation issue to resume.")
+		metrics.OrdersRejected.WithLabelValues(
+			req.InstrumentID, string(domain.RejectReconciliationRequired), string(req.Source)).Inc()
+		logging.FromContext(ctx).Warn("automated order refused: reconciliation halt",
+			"account_id", account.ID.String(), "source", string(req.Source), "reason", haltReason)
+		return Result{Rejection: &rej}, nil
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -865,122 +948,32 @@ func (s *Service) applyAckTx(ctx context.Context, tx pgx.Tx, req PlaceOrderReque
 	}
 }
 
-// applyFillTx books one execution: the fill, the position and the ledger.
+// applyFillTx books one execution through the shared accounting path.
+//
+// The accounting itself lives in internal/booking, which reconciliation also
+// uses when it imports an execution discovered after a lost response. That is
+// not a refactor for tidiness: an architecture test asserts booking is the
+// only package that appends a fill, which is what makes "an imported fill goes
+// through the same invariants as a live one" a structural guarantee rather
+// than a claim.
 //
 // Returns applied=false when the venue replayed a fill Vantage already holds,
 // which is normal after a reconnect and must not double-count.
 func (s *Service) applyFillTx(ctx context.Context, tx pgx.Tx, account domain.Account,
 	inst domain.Instrument, order domain.Order, exec broker.ExecutionReport, now time.Time) (domain.Fill, bool, error) {
 
-	fill := domain.Fill{
-		OrderID:       order.ID,
-		AccountID:     account.ID,
-		InstrumentID:  inst.ID,
-		Side:          exec.Side,
-		Quantity:      exec.Quantity,
-		Price:         exec.Price,
-		Commission:    exec.Commission,
-		CommissionCcy: exec.CommissionCcy,
-		BrokerFillID:  exec.BrokerFillID,
-		BrokerName:    account.BrokerName,
-		Liquidity:     exec.Liquidity,
-		ExecutedAt:    exec.ExecutedAt,
-	}
-
-	stored, err := s.store.Trading.AppendFillTx(ctx, tx, fill, s.mode)
-	if errors.Is(err, store.ErrDuplicateCommand) {
-		return domain.Fill{}, false, nil
-	}
+	result, err := s.booking.Apply(ctx, tx, booking.Request{
+		Account:    account,
+		Instrument: inst,
+		Order:      order,
+		Execution:  exec,
+		Source:     booking.SourceExecutionResponse,
+		Now:        now,
+	})
 	if err != nil {
 		return domain.Fill{}, false, err
 	}
-
-	// Position: load, apply, persist.
-	position, perr := s.store.Trading.OpenPositionTx(ctx, tx, account.ID, inst.ID)
-	if errors.Is(perr, store.ErrNotFound) {
-		position = domain.Position{
-			AccountID:    account.ID,
-			InstrumentID: inst.ID,
-			Mode:         s.mode,
-			Quantity:     decimal.Zero,
-			Status:       domain.PositionClosed,
-			RealizedPnL:  money.Zero(inst.QuoteCcy),
-			Commission:   money.Zero(inst.QuoteCcy),
-			Swap:         money.Zero(inst.QuoteCcy),
-			StrategyID:   order.StrategyID,
-		}
-	} else if perr != nil {
-		return domain.Fill{}, false, perr
-	}
-
-	applied := domain.ApplyFill(position, inst, stored)
-	updated := applied.Position
-	updated.Mode = s.mode
-	updated.RealizedPnL = position.RealizedPnL.MustAdd(applied.RealizedQuote)
-	updated.Commission = position.Commission.MustAdd(money.New(stored.Commission, inst.QuoteCcy))
-	if updated.StrategyID == nil {
-		updated.StrategyID = order.StrategyID
-	}
-
-	savedPosition, err := s.store.Trading.UpsertPositionTx(ctx, tx, updated)
-	if err != nil {
-		return domain.Fill{}, false, err
-	}
-
-	// Ledger: realised P&L and commission, converted into the account's
-	// currency. A conversion failure aborts the whole transaction rather than
-	// booking a number whose currency nobody can name.
-	balance, err := s.store.Accounts.BalanceTx(ctx, tx, account.ID, account.Currency)
-	if err != nil {
-		return domain.Fill{}, false, err
-	}
-
-	if !applied.RealizedQuote.IsZero() {
-		conv, err := s.converter.Convert(ctx, applied.RealizedQuote, account.Currency)
-		if err != nil {
-			return domain.Fill{}, false, fmt.Errorf(
-				"oms: cannot book realised P&L: no %s/%s rate: %w",
-				applied.RealizedQuote.Currency(), account.Currency, err)
-		}
-		amount := conv.To.RoundLedger()
-		balance = balance.MustAdd(amount)
-		if _, err := s.store.Accounts.AppendTransactionTx(ctx, tx, domain.Transaction{
-			AccountID: account.ID, Type: domain.TxRealizedPnL, Amount: amount,
-			BalanceAfter: balance.RoundLedger(), OrderID: &order.ID, FillID: &stored.ID,
-			PositionID: &savedPosition.ID, Mode: s.mode,
-			Description: fmt.Sprintf("Realised P&L on %s", inst.Symbol),
-		}); err != nil {
-			return domain.Fill{}, false, err
-		}
-	}
-
-	if stored.Commission.IsPositive() {
-		commissionQuote := money.New(stored.Commission.Neg(), money.Currency(stored.CommissionCcy))
-		conv, err := s.converter.Convert(ctx, commissionQuote, account.Currency)
-		if err != nil {
-			return domain.Fill{}, false, fmt.Errorf("oms: cannot book commission: %w", err)
-		}
-		amount := conv.To.RoundLedger()
-		balance = balance.MustAdd(amount)
-		if _, err := s.store.Accounts.AppendTransactionTx(ctx, tx, domain.Transaction{
-			AccountID: account.ID, Type: domain.TxCommission, Amount: amount,
-			BalanceAfter: balance.RoundLedger(), OrderID: &order.ID, FillID: &stored.ID,
-			Mode: s.mode, Description: fmt.Sprintf("Commission on %s", inst.Symbol),
-		}); err != nil {
-			return domain.Fill{}, false, err
-		}
-	}
-
-	if err := s.store.Trading.EnqueueOutboxTx(ctx, tx, "fill", stored.ID.String(), "order.filled",
-		map[string]any{
-			"order_id": order.ID, "account_id": account.ID, "symbol": inst.Symbol,
-			"quantity": stored.Quantity.String(), "price": stored.Price.String(),
-		}, ""); err != nil {
-		return domain.Fill{}, false, err
-	}
-
-	metrics.FillsRecorded.WithLabelValues(inst.Symbol, string(stored.Side)).Inc()
-	return stored, true, nil
+	return result.Fill, result.Applied, nil
 }
 
 // handleBrokerError decides what a failed broker call means.
@@ -993,38 +986,96 @@ func (s *Service) applyFillTx(ctx context.Context, tx pgx.Tx, account domain.Acc
 func (s *Service) handleBrokerError(ctx context.Context, req PlaceOrderRequest, account domain.Account,
 	order domain.Order, brokerErr error, now time.Time) (Result, error) {
 
-	log := logging.FromContext(ctx)
+	decision := ClassifyBrokerError(brokerErr)
 
+	if decision.OutcomeKnown {
+		return s.rejectAcceptedOrder(ctx, req, account, order, decision.Rejection)
+	}
+
+	logging.FromContext(ctx).Error(
+		"broker call outcome unknown; marking order for reconciliation",
+		"order_id", order.ID, "error", brokerErr.Error())
+	return s.failOrder(ctx, req, account, order, decision.Rejection, now)
+}
+
+// BrokerErrorDecision is what a failed broker call means.
+//
+// OutcomeKnown is the only field that matters for safety. When it is true the
+// order definitively did not reach the market and can be closed out, freeing
+// its risk budget. When it is false the order MAY be live at the venue, and
+// closing it out would release budget for a position that exists.
+type BrokerErrorDecision struct {
+	// OutcomeKnown is true only where the venue's answer was definitive.
+	OutcomeKnown bool
+	Rejection    domain.Rejection
+}
+
+// ClassifyBrokerError decides what a failed broker call means.
+//
+// # Why this is a separate pure function
+//
+// It is the branch table on which "never retry an unknown outcome" rests, and
+// getting one case wrong means an order that reached the market is recorded as
+// refused — after which its risk budget is released and the position it opened
+// is invisible. The previous audit noted that three of these six branches were
+// reached by no test at all.
+//
+// Splitting the decision from the write makes every branch reachable without a
+// database, a venue, or an order to write to. The default case is the important
+// one: anything not explicitly recognised as definitive is UNKNOWN. A new
+// broker error added to the adapter package therefore fails closed, which is
+// the opposite of what an `errors.Is` chain ending in "assume rejected" would
+// do.
+func ClassifyBrokerError(brokerErr error) BrokerErrorDecision {
 	var rejErr broker.RejectionError
 	switch {
 	case errors.As(brokerErr, &rejErr):
-		rej := domain.NewRejection(domain.RejectBrokerRejected, rejErr.Reason, "venue_code", rejErr.Code)
-		return s.rejectAcceptedOrder(ctx, req, account, order, rej)
+		// The venue named a reason. The most definitive answer available.
+		return BrokerErrorDecision{
+			OutcomeKnown: true,
+			Rejection: domain.NewRejection(domain.RejectBrokerRejected, rejErr.Reason,
+				"venue_code", rejErr.Code),
+		}
 
 	case errors.Is(brokerErr, broker.ErrOrderRejected):
-		rej := domain.NewRejection(domain.RejectBrokerRejected, brokerErr.Error())
-		return s.rejectAcceptedOrder(ctx, req, account, order, rej)
+		return BrokerErrorDecision{
+			OutcomeKnown: true,
+			Rejection:    domain.NewRejection(domain.RejectBrokerRejected, brokerErr.Error()),
+		}
 
 	case errors.Is(brokerErr, broker.ErrInsufficientMargin):
-		rej := domain.NewRejection(domain.RejectInsufficientMargin, brokerErr.Error())
-		return s.rejectAcceptedOrder(ctx, req, account, order, rej)
+		return BrokerErrorDecision{
+			OutcomeKnown: true,
+			Rejection:    domain.NewRejection(domain.RejectInsufficientMargin, brokerErr.Error()),
+		}
 
 	case errors.Is(brokerErr, broker.ErrMarketClosed):
-		rej := domain.NewRejection(domain.RejectMarketClosed, brokerErr.Error())
-		return s.rejectAcceptedOrder(ctx, req, account, order, rej)
+		return BrokerErrorDecision{
+			OutcomeKnown: true,
+			Rejection:    domain.NewRejection(domain.RejectMarketClosed, brokerErr.Error()),
+		}
 
 	case errors.Is(brokerErr, broker.ErrVenueUnavailable), errors.Is(brokerErr, broker.ErrRateLimited):
-		// Definitely not delivered: safe to report as a clean refusal.
-		rej := domain.NewRejection(domain.RejectBrokerUnavailable, brokerErr.Error())
-		return s.rejectAcceptedOrder(ctx, req, account, order, rej)
+		// The request was definitely not delivered: the adapter could not
+		// reach the venue, or the venue refused it before looking at it. Safe
+		// to report as a clean refusal.
+		return BrokerErrorDecision{
+			OutcomeKnown: true,
+			Rejection:    domain.NewRejection(domain.RejectBrokerUnavailable, brokerErr.Error()),
+		}
 
 	default:
-		log.Error("broker call outcome unknown; marking order for reconciliation",
-			"order_id", order.ID, "error", brokerErr.Error())
-		return s.failOrder(ctx, req, account, order,
-			domain.NewRejection(domain.RejectBrokerUnavailable,
-				"The broker's response was lost. This order's true state is unknown and will be reconciled."),
-			now)
+		// Includes ErrUnknownOutcome, a timeout, a lost response, and anything
+		// this switch has never heard of. FAILED means "Vantage does not know",
+		// and reconciliation resolves it against venue state. It is never
+		// retried: retrying an order that did reach the market doubles the
+		// position.
+		return BrokerErrorDecision{
+			OutcomeKnown: false,
+			Rejection: domain.NewRejection(domain.RejectBrokerUnavailable,
+				"The broker's response was lost. This order's true state is unknown "+
+					"and will be reconciled."),
+		}
 	}
 }
 
@@ -1079,6 +1130,23 @@ func (s *Service) failOrder(ctx context.Context, req PlaceOrderRequest, account 
 		failed, err = s.store.Trading.TransitionOrderTx(ctx, tx, current.ID, current.Version,
 			domain.OrderFailed, rej.Message, "system", &req.ActorUserID)
 		if err != nil {
+			return err
+		}
+
+		// Mark the uncertainty explicitly.
+		//
+		// FAILED already means "the venue-side outcome is unknown", but the
+		// name reads as a closed failure, and an operator needs to see
+		// uncertainty AS uncertainty. The flag is what makes it queryable, so
+		// the order appears in the operations view, contributes to the
+		// readiness verdict, and is picked up by the next reconciliation run
+		// even though the state machine no longer considers it open.
+		//
+		// Set in the same transaction as the transition. Setting it afterwards
+		// would leave a window in which an order's outcome is unknown and
+		// nothing says so.
+		if err := s.store.Trading.SetOrderReconciliationRequiredTx(
+			ctx, tx, current.ID, true); err != nil {
 			return err
 		}
 		if err := s.store.Trading.CompleteCommand(ctx, tx, account.ID, req.IdempotencyKey,

@@ -273,3 +273,141 @@ func (a *Alerter) AuditChainBroken(ctx context.Context, brokenAtSequence int64) 
 		Fields: map[string]any{"broken_at_sequence": brokenAtSequence},
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Reconciliation recovery
+// ---------------------------------------------------------------------------
+
+// ReconciliationIssueRaised announces one newly detected divergence.
+//
+// Keyed on the issue's identity rather than the account, so a run that finds
+// the same three issues every minute announces them once. The per-run summary
+// (ReconciliationMismatch) is what reports the standing total.
+func (a *Alerter) ReconciliationIssueRaised(ctx context.Context, accountID uuid.UUID,
+	issueType, severity, description string) {
+
+	id := accountID
+	sev := SeverityWarning
+	switch severity {
+	case "critical":
+		sev = SeverityCritical
+	case "info":
+		sev = SeverityInfo
+	}
+	a.Raise(ctx, Event{
+		Kind:      KindReconciliationIssue,
+		Severity:  sev,
+		Category:  CategoryReconciliation,
+		Key:       accountID.String() + ":" + issueType,
+		Title:     "Reconciliation issue: " + issueType,
+		Body:      description,
+		AccountID: &id,
+		Fields: map[string]any{
+			"account_id": accountID.String(),
+			"issue_type": issueType, "severity": severity,
+		},
+	})
+}
+
+// ReconciliationRepaired announces an automatic repair.
+//
+// Announced even though it succeeded. Software writing to an append-only
+// ledger on the strength of a venue snapshot is worth knowing about
+// especially when it is correct: an operator who never hears about repairs
+// cannot notice that they have started happening every day.
+func (a *Alerter) ReconciliationRepaired(ctx context.Context, accountID uuid.UUID,
+	issueType, action, detail string) {
+
+	id := accountID
+	a.Raise(ctx, Event{
+		Kind:     KindReconciliationRepair,
+		Severity: SeverityWarning,
+		Category: CategoryReconciliation,
+		Key:      accountID.String() + ":" + issueType + ":" + action,
+		Title:    "Reconciliation repaired a divergence",
+		Body: "Vantage corrected its own records to match the venue (" + issueType +
+			", " + action + "): " + detail + ". The repair went through the same " +
+			"accounting path as an ordinary execution.",
+		AccountID: &id,
+		Fields: map[string]any{
+			"account_id": accountID.String(),
+			"issue_type": issueType, "action": action, "detail": detail,
+		},
+	})
+}
+
+// ReconciliationFailed reports that reconciliation could not run.
+//
+// This is not the same as finding a divergence: while reconciliation cannot
+// run, NOTHING is confirming that Vantage's records match the venue, and the
+// account's readiness reports RECONCILIATION_REQUIRED rather than healthy.
+// Repeated failure escalates to critical, because a venue that has been
+// unreachable for an hour is a different problem from one that blipped.
+func (a *Alerter) ReconciliationFailed(ctx context.Context, accountID uuid.UUID,
+	consecutive int, cause string) {
+
+	id := accountID
+	sev := SeverityWarning
+	body := "Reconciliation could not complete: " + cause +
+		". Automated trading is paused for this account until a run succeeds, because " +
+		"nothing is currently confirming that Vantage's records match the venue."
+	if consecutive >= 3 {
+		sev = SeverityCritical
+		body = "Reconciliation has failed " + itoa(consecutive) + " times in a row: " + cause +
+			". Automated trading is paused. This is no longer a transient venue problem."
+	}
+	a.Raise(ctx, Event{
+		Kind:      KindReconciliationFailed,
+		Severity:  sev,
+		Category:  CategoryReconciliation,
+		Key:       accountID.String(),
+		Title:     "Reconciliation failed",
+		Body:      body,
+		AccountID: &id,
+		Fields: map[string]any{
+			"account_id": accountID.String(), "consecutive_failures": consecutive,
+			"cause": cause,
+		},
+	})
+}
+
+// TradingHalted announces that automation stopped, and how widely.
+func (a *Alerter) TradingHalted(ctx context.Context, accountID uuid.UUID, scope, reason string) {
+	id := accountID
+	a.Raise(ctx, Event{
+		Kind:     KindTradingHalted,
+		Severity: SeverityCritical,
+		Category: CategoryReconciliation,
+		Key:      accountID.String(),
+		Title:    "Automated trading halted (" + scope + ")",
+		Body: "Automated trading is halted: " + reason +
+			". Manual trading and all read access are unaffected -- an operator can see " +
+			"the warning and decide, which an algorithm cannot.",
+		AccountID: &id,
+		Fields: map[string]any{
+			"account_id": accountID.String(), "halt_scope": scope, "reason": reason,
+		},
+	})
+}
+
+// TradingResumed announces that automation may run again.
+func (a *Alerter) TradingResumed(ctx context.Context, accountID uuid.UUID) {
+	id := accountID
+	a.Resolve(ctx, KindTradingHalted, accountID.String(),
+		"Automated trading resumed",
+		"Every divergence is resolved and reconciliation is current. Automation is permitted.",
+		&id)
+}
+
+// itoa avoids importing strconv for one call in a message.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	digits := ""
+	for n > 0 {
+		digits = string(rune('0'+n%10)) + digits
+		n /= 10
+	}
+	return digits
+}

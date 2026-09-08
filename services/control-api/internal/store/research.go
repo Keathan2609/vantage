@@ -1053,71 +1053,17 @@ func (s *ResearchStore) FinishReconciliationRun(ctx context.Context, id uuid.UUI
 	return mapError(err)
 }
 
-// Discrepancy is a mismatch between Vantage and a broker.
-type Discrepancy struct {
-	ID           uuid.UUID
-	RunID        uuid.UUID
-	AccountID    uuid.UUID
-	Kind         string
-	Severity     string
-	OrderID      *uuid.UUID
-	PositionID   *uuid.UUID
-	InstrumentID *string
-	VantageValue *string
-	BrokerValue  *string
-	Description  string
-	ResolvedAt   *time.Time
-	Resolution   *string
-	CreatedAt    time.Time
-}
-
-// RecordDiscrepancy persists a reconciliation mismatch.
-func (s *ResearchStore) RecordDiscrepancy(ctx context.Context, d Discrepancy) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO reconciliation_discrepancies (run_id, account_id, kind, severity, order_id,
-			position_id, instrument_id, vantage_value, broker_value, description)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		d.RunID, d.AccountID, d.Kind, d.Severity, d.OrderID, d.PositionID,
-		d.InstrumentID, d.VantageValue, d.BrokerValue, d.Description)
-	return mapError(err)
-}
-
-// UnresolvedDiscrepancies returns open mismatches for an account.
+// Reconciliation discrepancies moved to internal/store/reconciliation.go.
 //
-// Automated trading is expected to stop while any critical mismatch is
-// unresolved: if Vantage and the broker disagree about what is open, sizing the
-// next trade is guesswork.
-func (s *ResearchStore) UnresolvedDiscrepancies(ctx context.Context, accountID uuid.UUID) ([]Discrepancy, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, run_id, account_id, kind, severity, order_id, position_id, instrument_id,
-		       vantage_value, broker_value, description, resolved_at, resolution, created_at
-		FROM reconciliation_discrepancies
-		WHERE account_id = $1 AND resolved_at IS NULL
-		ORDER BY created_at DESC`, accountID)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	defer rows.Close()
-	var out []Discrepancy
-	for rows.Next() {
-		var d Discrepancy
-		if err := rows.Scan(&d.ID, &d.RunID, &d.AccountID, &d.Kind, &d.Severity, &d.OrderID,
-			&d.PositionID, &d.InstrumentID, &d.VantageValue, &d.BrokerValue, &d.Description,
-			&d.ResolvedAt, &d.Resolution, &d.CreatedAt); err != nil {
-			return nil, mapError(err)
-		}
-		out = append(out, d)
-	}
-	return out, mapError(rows.Err())
-}
-
-// ResolveDiscrepancy closes a mismatch with an explanation.
-func (s *ResearchStore) ResolveDiscrepancy(ctx context.Context, id uuid.UUID, resolution string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE reconciliation_discrepancies SET resolved_at = now(), resolution = $2
-		WHERE id = $1 AND resolved_at IS NULL`, id, resolution)
-	return mapError(err)
-}
+// Migration 0010 replaced reconciliation_discrepancies with
+// reconciliation_issues, which records the issue TYPE, the evidence from both
+// sides, and the resolution history -- none of which the old two-string shape
+// could express, and all of which a repair needs.
+//
+// The methods that queried the old table are deleted rather than left as
+// wrappers. They compiled perfectly and failed only when called, which is the
+// worst combination available: a reader assumes they work, and the 500 arrives
+// on the dashboard of whoever loads it first. That is precisely what happened.
 
 // LatestReconciliation summarises an account's most recent run.
 type ReconciliationSummary struct {

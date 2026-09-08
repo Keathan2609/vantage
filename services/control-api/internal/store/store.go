@@ -29,12 +29,13 @@ import (
 type Store struct {
 	pool *db.Pool
 
-	Users    *UserStore
-	Accounts *AccountStore
-	Market   *MarketStore
-	Trading  *TradingStore
-	Control  *ControlStore
-	Research *ResearchStore
+	Users     *UserStore
+	Accounts  *AccountStore
+	Market    *MarketStore
+	Trading   *TradingStore
+	Control   *ControlStore
+	Research  *ResearchStore
+	Reconcile *ReconciliationStore
 }
 
 // New builds a Store over an open pool.
@@ -46,6 +47,7 @@ func New(pool *db.Pool) *Store {
 	s.Trading = &TradingStore{pool: pool}
 	s.Control = &ControlStore{pool: pool}
 	s.Research = &ResearchStore{pool: pool}
+	s.Reconcile = &ReconciliationStore{pool: pool}
 	return s
 }
 

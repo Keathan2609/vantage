@@ -43,6 +43,17 @@ func setup(t *testing.T) (*client, string) {
 	// order is not itself refused for exceeding the pending-order limit.
 	c.cancelAllWorking(accountID)
 	c.flattenAll(accountID)
+
+	// Clear divergence an earlier test left behind. An unresolved
+	// operator-required issue halts automation for every later test, which is
+	// the platform working correctly -- so the fixture resolves it rather than
+	// the tests weakening their assertions to tolerate it.
+	c.clearReconciliationIssues(accountID,
+		"starting from a known reconciliation state before the next scenario")
+
+	// Checked LAST, after the book is clean, so an exhausted risk budget is
+	// not confused with leftover exposure.
+	c.requireRiskBudget(accountID)
 	t.Cleanup(func() {
 		c.resetFaults()
 		c.releaseAllKillSwitches()

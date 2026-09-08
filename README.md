@@ -19,10 +19,11 @@ independent places in code and again in the database — see
 | Market data | Quote and bar ingestion behind a `marketdata.Provider` interface, with per-instrument health that the risk engine consults before any order |
 | Trading | A single order pipeline: 19 ordered gates, idempotent submission, an explicit order state machine, and a paper venue that models spread, slippage, latency, partial fills and margin refusal |
 | Risk | 18 deterministic checks evaluated as a pure function; every check runs, all failures are reported, and risk may only reduce a requested size |
-| Control | Trading authority (a scoped technical mandate), kill switches, account trading flags, and reconciliation against the venue |
+| Control | Trading authority (a scoped technical mandate), kill switches, account trading flags, and a four-state trading verdict derived from real state rather than from process health |
+| Recovery | Snapshot-based reconciliation with a 13-type divergence taxonomy: provable divergence is repaired automatically through the same accounting path an ordinary fill uses, ambiguous divergence halts the narrowest scope that contains it and waits for a named operator action |
 | Research | 12 registered strategies, an honest backtester, chronological-split machine learning with baseline comparison, and an opportunity scanner |
 | Evidence | Append-only, hash-chained audit events; immutable decision snapshots; a full ledger of every balance change |
-| Interface | An 18-page Next.js terminal: dark, dense, tabular, with the execution mode visible on every page |
+| Interface | An 18-page Next.js terminal: dark, dense, tabular, with the execution mode visible on every page — including an operations view that shows unresolved divergence, its evidence, and whether automatic repair is permitted |
 
 ## Quick start
 
@@ -77,6 +78,8 @@ services/control-api      Go control plane — the only path to a broker
   internal/domain         Money, orders, positions, risk, audit: no I/O
   internal/oms            The order pipeline
   internal/risk           The risk engine (a pure function) and position sizing
+  internal/booking        The single accounting path: fill -> position, ledger, balance
+  internal/reconcile      Snapshots, a pure classifier, and bounded repair
   internal/broker         BrokerAdapter interface; broker/mock is the paper venue
   internal/store          SQL, one file per bounded context
   migrations              Numbered, forward-only SQL
@@ -126,7 +129,7 @@ start-up.
 | [RISK_ENGINE](docs/RISK_ENGINE.md) | Every check, position sizing, and what risk may not do |
 | [BROKER_ADAPTERS](docs/BROKER_ADAPTERS.md) | The adapter contract, the mock venue, and what a real adapter would need |
 | [MARKET_DATA](docs/MARKET_DATA.md) | Providers, freshness, health states, sessions and the market clock |
-| [RECONCILIATION](docs/RECONCILIATION.md) | Comparing our records with the venue's, and what a mismatch blocks |
+| [RECONCILIATION](docs/RECONCILIATION.md) | Detection, the divergence taxonomy, automatic vs operator repair, startup and periodic runs, halt scope, and what remains unresolvable |
 | [STRATEGY_ENGINE](docs/STRATEGY_ENGINE.md) | Signals, the registry, lifecycle promotion, and the boundary with execution |
 | [BACKTESTING](docs/BACKTESTING.md) | Fill assumptions, costs, metrics, and the ways a backtest lies |
 | [MACHINE_LEARNING](docs/MACHINE_LEARNING.md) | Features, splits, leakage tests, baselines, drift, fail-closed inference |
@@ -145,7 +148,16 @@ cd services/quant && python -m pytest
 cd apps/web && npm run typecheck && npm run build
 python tests/smoke/smoke.py            # against a running stack
 python tests/smoke/smoke_research.py
+cd apps/web && npm run test            # Playwright, against a running stack
+cd services/control-api && go test ./tests/race/   # concurrency and recovery
 ```
+
+The last two need credentials and a base URL in the environment; nothing is
+defaulted, and `VANTAGE_RACE_E2E=1` opts into the race suite. The race suite
+also spends the seeded account's real daily-loss budget on commission, so
+after two full runs it skips with an explicit instruction to reseed rather
+than failing as though something were broken. `./scripts/test-all.ps1 -Smoke`
+runs everything and reports every failure instead of stopping at the first.
 
 ## What this is not
 

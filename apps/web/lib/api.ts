@@ -602,6 +602,104 @@ export interface Decision {
   CreatedAt: string;
 }
 
+export interface ReconciliationIssue {
+  id: string;
+  run_id: string;
+  account_id: string;
+  broker_name: string;
+  issue_type: string;
+  severity: "info" | "warning" | "critical";
+  status:
+    | "OPEN"
+    | "AUTOMATICALLY_REPAIRED"
+    | "OPERATOR_ACTION_REQUIRED"
+    | "RESOLVED"
+    | "UNRESOLVABLE";
+  repair_class:
+    | "AUTOMATICALLY_SAFE"
+    | "OPERATOR_REVIEW_REQUIRED"
+    | "UNRESOLVABLE_AUTOMATICALLY";
+  /**
+   * Sent by the server rather than derived here. The repair policy is enforced
+   * server-side, and a terminal that re-implemented it would eventually offer
+   * an action the server refuses — which reads to an operator as a broken
+   * button rather than as a rule.
+   */
+  automatic_repair_allowed: boolean;
+  halt_scope: "NONE" | "ACCOUNT" | "BROKER_CONNECTION" | "ALL";
+  rationale: string;
+  allowed_actions: string[];
+  order_id: string | null;
+  position_id: string | null;
+  instrument_id: string | null;
+  broker_order_id: string | null;
+  broker_execution_id: string | null;
+  local_state: unknown;
+  broker_state: unknown;
+  evidence: unknown;
+  description: string;
+  detected_at: string;
+  last_checked_at: string;
+  check_count: number;
+  resolved_at: string | null;
+  resolution_action: string | null;
+  resolution_reason: string | null;
+}
+
+export type TradingState =
+  | "HEALTHY"
+  | "DEGRADED"
+  | "RECONCILIATION_REQUIRED"
+  | "TRADING_HALTED";
+
+export interface ReconciliationIssues {
+  account_id: string;
+  trading_state: TradingState;
+  automation_allowed: boolean;
+  halt_scope: string;
+  reason: string;
+  open_issues: number;
+  critical_issues: number;
+  operator_action_required: number;
+  uncertain_orders: number;
+  consecutive_failures: number;
+  last_success_at: string | null;
+  issues: ReconciliationIssue[] | null;
+}
+
+export interface OperationsAccount {
+  account_id: string;
+  broker_name: string;
+  trading_state: TradingState;
+  automation_allowed: boolean;
+  halt_scope: string;
+  reason: string;
+  open_issues: number;
+  critical_issues: number;
+  operator_action_required: number;
+  uncertain_orders: number;
+  last_success_at: string | null;
+  consecutive_failures: number;
+}
+
+export interface OperationsOverview {
+  trading_state: TradingState;
+  halted_accounts: number;
+  open_issues: number;
+  critical_issues: number;
+  accounts: OperationsAccount[] | null;
+  execution_mode: string;
+}
+
+export interface IssueEvent {
+  action: string;
+  from_status: string | null;
+  to_status: string;
+  actor_type: string;
+  reason: string;
+  occurred_at: string;
+}
+
 export interface ReconciliationStatus {
   automation_blocked: boolean;
   critical_discrepancies: number;
@@ -830,10 +928,42 @@ export const api = {
       status: string;
       orders_compared: number;
       positions_compared: number;
+      executions_seen: number;
+      repaired: number;
       clean: boolean;
       critical: number;
-      discrepancies: unknown[] | null;
+      issues: ReconciliationIssue[] | null;
     }>(`/api/v1/reconciliation/${accountId}/run`, { method: "POST" }),
+  reconciliationIssues: (accountId: string, openOnly = false) =>
+    request<ReconciliationIssues>(
+      `/api/v1/reconciliation/${accountId}/issues${openOnly ? "?open=true" : ""}`,
+    ),
+  reconciliationIssue: (accountId: string, issueId: string) =>
+    request<{ issue: ReconciliationIssue; history: IssueEvent[] | null }>(
+      `/api/v1/reconciliation/${accountId}/issues/${issueId}`,
+    ),
+  operations: () => request<OperationsOverview>("/api/v1/operations"),
+  /**
+   * Resolve a reconciliation issue. ADMIN only, enforced server-side.
+   *
+   * Note what is NOT in this signature: no quantity, no price, no target
+   * status. Every number involved comes from the issue's own recorded
+   * evidence. A caller able to supply them would be writing arbitrary values
+   * into an append-only ledger with an operator's authority attached.
+   */
+  resolveReconciliationIssue: (
+    accountId: string,
+    issueId: string,
+    body: { action: string; reason: string; broker_order_id?: string },
+  ) =>
+    request<{
+      issue: ReconciliationIssue;
+      detail: string;
+      state_changed: boolean;
+    }>(`/api/v1/reconciliation/${accountId}/issues/${issueId}/resolve`, {
+      method: "POST",
+      body,
+    }),
 
   // Research
   strategies: () =>

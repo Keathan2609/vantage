@@ -76,6 +76,62 @@ var (
 		Help: "Executions recorded.",
 	}, []string{"symbol", "side"})
 
+	// DuplicateExecutionsSuppressed counts venue executions refused as already
+	// booked. Rising is HEALTHY: it means the unique index on
+	// (broker_name, broker_fill_id) is doing its job while a venue replays a
+	// stream after a reconnect. Rising with no reconnect is worth a look.
+	DuplicateExecutionsSuppressed = factory.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "trading", Name: "duplicate_executions_suppressed_total",
+		Help: "Venue executions recognised as already booked and not applied twice.",
+	})
+
+	// RecoveredFills counts executions booked by reconciliation rather than
+	// received from a PlaceOrder response. Every one of these is a trade that
+	// happened at the venue and would otherwise have been missing from the
+	// ledger, so a non-zero value is both good news and a signal that
+	// something upstream lost a response.
+	RecoveredFills = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "reconciliation", Name: "recovered_fills_total",
+		Help: "Executions discovered and booked by reconciliation.",
+	}, []string{"symbol"})
+
+	// AutomationAllowed is 1 when automated trading may run anywhere, 0 when
+	// every account is halted or unreconciled. The single number to alert on:
+	// a dashboard showing a healthy process and a zero here is describing a
+	// system that is up and not trading.
+	AutomationAllowed = factory.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace, Subsystem: "reconciliation", Name: "automation_allowed",
+		Help: "1 when automated trading is permitted, 0 when halted or unreconciled.",
+	})
+
+	// HaltedAccounts counts accounts whose automation is stopped.
+	HaltedAccounts = factory.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace, Subsystem: "reconciliation", Name: "halted_accounts",
+		Help: "Accounts whose automated trading is currently stopped.",
+	})
+
+	// ReconciliationIssues counts issues raised, by type and severity.
+	ReconciliationIssues = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "reconciliation", Name: "issues_total",
+		Help: "Reconciliation issues raised, by type and severity.",
+	}, []string{"type", "severity"})
+
+	// ReconciliationRepairs counts repairs applied, by type and by whether a
+	// human authorised them.
+	ReconciliationRepairs = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "reconciliation", Name: "repairs_total",
+		Help: "Reconciliation repairs applied, by issue type and actor.",
+	}, []string{"type", "actor"})
+
+	// ReconciliationOverlapsPrevented counts runs that declined to start
+	// because another run held the account's lock. Expected to be small and
+	// non-zero: it means overlap prevention is working, not that anything is
+	// wrong.
+	ReconciliationOverlapsPrevented = factory.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "reconciliation", Name: "overlaps_prevented_total",
+		Help: "Reconciliation runs skipped because one was already in progress.",
+	})
+
 	// DuplicateCommandsSuppressed rising is healthy — it means idempotency is
 	// doing its job. It rising sharply means a client is retrying too eagerly.
 	DuplicateCommandsSuppressed = factory.NewCounterVec(prometheus.CounterOpts{

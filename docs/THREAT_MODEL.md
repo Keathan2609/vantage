@@ -168,9 +168,79 @@ in the UI.
 (`tests/smoke/smoke.py`).
 
 **Residual.** A broker call that times out leaves the outcome genuinely
-unknown. Vantage records `FAILED`, never retries, and blocks automation until
-reconciliation resolves it. That is the correct behaviour and it is still an
-operational burden.
+unknown. Vantage records `FAILED`, marks the order
+`reconciliation_required`, never retries, and blocks automation for that
+account until reconciliation resolves it. That is the correct behaviour and it
+is still an operational burden.
+
+## Surface: reconciliation and recovery
+
+Recovery is a privileged write path, so it is its own surface rather than a
+footnote to execution.
+
+**Attacks.** Booking an invented fill through the repair path; supplying
+fabricated quantity or price to a recovery endpoint; resolving another
+account's issue by passing its id; forging an issue id; replaying a resolution
+to book the same fill twice; a hostile or corrupted venue response steering an
+automatic repair; smuggling a payload through the reason or metadata field;
+racing two repairs, or a repair against a new order, into an inconsistent
+position.
+
+**Controls.**
+
+- **Ambiguity is never resolved automatically.** Only four issue types are
+  automatically repairable, and each is repairable because the evidence is
+  *provable*, not merely likely: a venue execution that matches exactly one
+  local order on id, instrument and side; a local order the venue reports as
+  filled; a status that trails a fill Vantage already holds; an out-of-order
+  report. An execution matching zero or more than one local order is
+  `EXTRA_BROKER_FILL` and stays open for a human. `TestAmbiguousExecutionsAreNeverAutomaticallyRepaired`
+  is the assertion.
+- **Position and balance are never written to match the venue.** A
+  `POSITION_MISMATCH` is a symptom; overwriting the quantity destroys the
+  evidence of the cause and de-links the position from the fills that built
+  it. Both types are operator-review-only, permanently.
+- **The operator supplies a decision, not data.** `IMPORT_BROKER_FILL`
+  reconstructs the execution from the evidence stored at detection time. There
+  is no field in which to pass a price.
+- **One accounting path.** Recovery books through `internal/booking`, the same
+  code an ordinary execution uses, so a recovered fill passes the same nine
+  validations, the same overfill check and the same uniqueness constraint. An
+  architecture test forbids a second writer.
+- **Duplicate application is impossible at the storage layer.**
+  `fills_broker_fill_uniq` over `(broker_name, broker_fill_id)` is a unique
+  index. Re-running reconciliation against the same snapshot is a no-op, and a
+  second concurrent resolution of the same issue gets a 409.
+- **Scope is in the query.** An issue is fetched with its account id in the
+  `WHERE` clause, so a cross-account or forged id is a 404.
+- **Repair cannot leave a terminal state.** The repair transition table is
+  separate from the OMS one and does not permit it, so a FILLED order cannot
+  be turned into a CANCELLED one by a disagreeing snapshot.
+- **Concurrency is durable, not timed.** Runs hold a PostgreSQL session
+  advisory lock per account; a repair takes the account row lock; and the OMS
+  re-reads the halt state *inside* the order transaction after taking that
+  same lock. The ordering is decided by Postgres, not by how long anything
+  takes.
+- **Mass assignment is rejected, not ignored.** The resolve request accepts
+  exactly `action`, `reason` and an optional `broker_order_id`; an unknown
+  field is a 400.
+
+**Verified.** A lost fill is discovered on restart, imported exactly once, and
+the order, position and ledger converge (`tests/race/recovery_test.go`). Five
+consecutive runs against the same divergence change nothing measurable.
+Eight concurrent runs produce one execution and seven declines. An ambiguous
+venue execution stays unresolved and is never booked. Twenty-one Playwright
+tests cover authorisation, forged ids, mass assignment, hostile reasons and
+repeat resolution.
+
+**Residual.** An operator with ADMIN can approve a wrong recovery. That is
+inherent — someone must be able to decide — and the mitigation is that the
+decision is bounded to seven named actions, is fully attributed with a reason,
+and cannot invent the numbers it books. A venue that reports a *plausible but
+false* execution matching exactly one local order would be repaired
+automatically; the mock venue is the only venue in this build, and no
+reconciliation design can distinguish a correct venue from a convincingly
+lying one without a second source.
 
 ## Surface: dependencies and build
 
@@ -178,8 +248,11 @@ operational burden.
 malicious transitive dependency; poisoned container base image.
 
 **Controls.** Pinned versions with checksums (`go.sum`, `package-lock.json`,
-`pyproject.toml`); CI runs Gitleaks, Semgrep, Trivy, OSV-Scanner,
-`govulncheck`, `pip-audit` and `npm audit`; container images run as a
+`pyproject.toml`); CI is configured to run Gitleaks, Semgrep, Trivy,
+OSV-Scanner, `govulncheck`, `pip-audit` and `npm audit` — note that GitHub
+Actions has never executed for this repository, so what has actually run is
+what `docs/ENGINEERING_REPORT.md` records as run locally, and OSV-Scanner is
+not installed on the development machine; container images run as a
 non-root user with a read-only root filesystem and no shell in the final
 stage; the web app pulls no runtime dependency beyond React and Next.
 
@@ -198,6 +271,15 @@ for closing a position.
 **Residual.** An operator with the `trader` role can widen limits up to the
 database ceiling and take a 10%-per-trade risk. That is their decision to make;
 the platform makes it visible, audited and reversible rather than impossible.
+
+**A control that prevents closing is a control that causes loss.** Three
+separate risk checks were found refusing a *flatten* — the event blackout, the
+notional cap and the daily-loss ceiling — each trapping the operator in the
+position the check existed to protect them from. The rule now stated in the
+engine is that a check whose purpose is to limit exposure or loss must never
+refuse an order that strictly reduces exposure. It is recorded here as well as
+in `docs/ORDER_LIFECYCLE.md` because the failure is invisible in normal
+operation: everything looks correct until the day someone needs out.
 
 ## What paper mode removes from this model
 

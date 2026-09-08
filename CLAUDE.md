@@ -26,9 +26,29 @@ research plane, Next.js terminal, PostgreSQL, Redis for rate limits only.
    need it, the design is wrong.
 6. **Never bypass the OMS.** Every order goes through `internal/oms`. There is
    no "internal" path, and adding one is not an optimisation.
-7. **No secrets in the repository**, in a log, in an API response, in a
+   Likewise **never bypass `internal/booking`**: it is the only code that turns
+   a fill into a position, ledger entries and a balance, and it is the only
+   code that appends a row to `fills`. Reconciliation uses it too, which is why
+   a recovered fill passes the same validations as a live one. Two arch tests
+   enforce this (`TestOnlyBookingAppendsFills`,
+   `TestBookingHoldsNoBrokerAdapter`); if one fails, the fix is to route
+   through `booking`, not to relax the test.
+7. **Never auto-repair ambiguous financial state.** Only divergence that is
+   *provable* from evidence may be repaired without a human — see
+   `domain.PolicyFor`. An execution that matches zero or several local orders,
+   a position mismatch or a balance mismatch stays open for an operator, and
+   position quantities are never written to match the venue. Do not add a
+   generic "set order status" endpoint; the answer is a named action in
+   `reconcile.Resolve`.
+8. **A check that limits exposure or loss must never refuse a reducing
+   order.** Three separate checks were found blocking a flatten and trapping
+   the operator in the position. The rule is written out in
+   `internal/risk/engine.go`. "Reducing" means opposite side **and** quantity
+   no greater than the open position — both halves, or a side flip skips the
+   exposure checks.
+9. **No secrets in the repository**, in a log, in an API response, in a
    decision snapshot, or in audit metadata.
-8. **Do not commit** market datasets, trained model binaries, or `.env`.
+10. **Do not commit** market datasets, trained model binaries, or `.env`.
 
 ## Claims and language
 
@@ -89,6 +109,7 @@ environment, and neither is defaulted:
 VANTAGE_E2E_BASE_URL=http://localhost:3001   # ONLY if the terminal is not on 3000
 VANTAGE_E2E_PASSWORD=...                     # printed by `control-api seed`
 VANTAGE_E2E_VIEWER_PASSWORD=...
+VANTAGE_E2E_ADMIN_PASSWORD=...               # reconciliation repair is admin-only
 VANTAGE_RACE_E2E=1                           # opt-in for the race suite
 ```
 
@@ -117,6 +138,29 @@ have them.
   Next prints a warning and serves anyway, which is worse than failing. Use
   `npm run dev` locally; the container runs
   `node .next/standalone/server.js`.
+
+- **The daily-loss budget is a finite fixture resource.** The seeded account's
+  limit is 15 ZAR and every order in a suite pays commission, so running the
+  race suite twice in a row spends it. After that the risk engine correctly
+  refuses every opening order and several tests fail with statuses that are all
+  409 — which looks exactly like a concurrency defect. `requireRiskBudget` in
+  the race suite detects it and skips with a reseed instruction. Do not widen
+  the limit or edit the ledger to "fix" it; run
+  `./scripts/dev-up.ps1 -Reset -Seed`.
+
+- **Reconciliation handlers must use `accountForOperations`, not
+  `accountForRequest`.** `accountForRequest` scopes through ownership, and an
+  admin owns no trading account — so every admin-only reconciliation call
+  returned "Account not found" and the endpoints were unreachable by the only
+  role permitted to use them. The bug is silent: the route answers, plausibly,
+  with the wrong thing. `TestEveryReconciliationHandlerUsesTheOperationsScope`
+  guards it now.
+
+- **`playwright.config.ts` sets a global `use.storageState`, and
+  `request.newContext()` inherits it.** A test that means to be unauthenticated
+  is silently the trader, so a 401 assertion sees a 403. Pass
+  `storageState: undefined` explicitly — for the anonymous context *and* for
+  any context that should be a different user.
 
 - **The exposure limits accumulate across a test file.** A suite that places a
   dozen 0.01-lot orders fills the 1500 ZAR per-instrument ceiling part way
@@ -162,6 +206,10 @@ services/control-api
   internal/domain       Money, orders, positions, risk, audit. No I/O.
   internal/oms          The order pipeline. The only holder of a BrokerAdapter.
   internal/risk         Pure function. 18 checks. Position sizing.
+  internal/booking      The ONLY writer of fills, positions and fill P&L.
+                        Shared by execution and reconciliation on purpose.
+  internal/reconcile    Snapshot both sides, classify with a pure function,
+                        repair only what is provable, halt the rest.
   internal/broker       Adapter interface; broker/mock is the paper venue,
                         with deterministic fault-injection modes.
   internal/econdata     Calendar and news providers.

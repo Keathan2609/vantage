@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vantage/control-api/internal/booking"
 	"github.com/vantage/control-api/internal/broker"
 	brokermock "github.com/vantage/control-api/internal/broker/mock"
 	"github.com/vantage/control-api/internal/config"
@@ -49,6 +50,7 @@ type App struct {
 	MockBroker   *brokermock.Broker
 	Converter    *fx.Converter
 	Portfolio    *portfolio.Service
+	Booking      *booking.Service
 	OMS          *oms.Service
 	Reconciler   *reconcile.Service
 	Quant        *quant.Client
@@ -168,13 +170,33 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	}
 
 	riskEngine := newRiskEngine(a.Converter)
-	a.OMS, err = oms.New(a.Store, a.Brokers, riskEngine, a.Portfolio, a.Converter,
+
+	// One booking service, shared by the OMS and by reconciliation.
+	//
+	// This is the single accounting path: an execution returned by a
+	// PlaceOrder call and an execution discovered by reconciliation after a
+	// lost response both become a fill, a position and a ledger entry through
+	// the same code. An architecture test asserts nothing else appends a fill,
+	// which is what makes that guarantee structural.
+	a.Booking, err = booking.New(a.Store, a.Converter, domain.ModePaper)
+	if err != nil {
+		return nil, err
+	}
+
+	a.OMS, err = oms.New(a.Store, a.Brokers, riskEngine, a.Portfolio, a.Booking, a.Converter,
 		a.Clock, a.MarketClock, domain.ModePaper)
 	if err != nil {
 		return nil, err
 	}
 
-	a.Reconciler = reconcile.New(a.Store, a.Brokers, a.Clock)
+	a.Reconciler = reconcile.New(a.Store, a.Brokers, a.Booking, a.Clock)
+
+	// The halt gate closes the window between reconciliation detecting unsafe
+	// divergence and an automated order slipping through. The OMS re-checks it
+	// inside the transaction that persists the order, after taking the account
+	// row lock that a repair also takes -- so the invariant is enforced by
+	// PostgreSQL's serialisation rather than by timing.
+	a.OMS.SetHaltGate(a.Reconciler)
 	a.Quant = quant.New(cfg.QuantBaseURL, cfg.QuantServiceToken, cfg.QuantTimeout)
 	a.Orchestrator = orchestrator.New(a.Store, a.Quant, a.OMS, a.Portfolio, a.Converter,
 		a.Reconciler, a.Clock, a.MarketClock)
@@ -295,9 +317,10 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		for _, rep := range reports {
 			if !rep.Clean() {
-				a.Log.Warn("start-up reconciliation found discrepancies",
+				a.Log.Warn("start-up reconciliation left unresolved divergence",
 					"account_id", rep.AccountID.String(),
-					"discrepancies", len(rep.Discrepancies), "critical", rep.CriticalCount())
+					"issues", len(rep.Issues), "repaired", rep.Repaired,
+					"critical", rep.CriticalCount())
 			}
 		}
 	}()

@@ -66,7 +66,7 @@ Three roles, checked by middleware before a handler runs:
 | --- | --- | --- |
 | `viewer` | read | change anything |
 | `trader` | read, place and cancel orders, run research, change risk limits and authority | administer users |
-| `admin` | administer users, verify the audit chain | **place an order** |
+| `admin` | administer users, verify the audit chain, resolve reconciliation issues | **place an order** |
 
 Administration and trading are deliberately disjoint. Compromising the
 administrative role does not directly move a position.
@@ -75,6 +75,33 @@ Beyond roles, every account-scoped handler resolves the account **through the
 authenticated user** (`AccountForUser`), so a valid session for user A cannot
 read or act on user B's account by passing its id. This is verified in
 `tests/smoke/smoke.py`.
+
+### Why reconciliation repair is admin, not trader
+
+An operator action such as `IMPORT_BROKER_FILL` writes to the ledger. That is
+strictly more power than placing an order: an order is checked by nineteen risk
+gates and executed by a venue, while a repair asserts that something already
+happened. Giving it to `trader` would mean the role that can lose money could
+also rewrite the record of having lost it.
+
+The separation costs something honest: an admin cannot place the order whose
+recovery they are approving, so a single-operator installation signs in twice.
+That is the intended friction.
+
+The scope resolution is deliberately different here, and it was a defect
+before it was a decision. Reconciliation handlers use `accountForOperations`
+rather than `accountForRequest`, because an admin owns no trading account and
+every repair call therefore returned "account not found" — the endpoint was
+unreachable by the only role permitted to use it. `accountForOperations`
+widens to any account **for ADMIN only**; every other role still resolves
+through ownership. `TestEveryReconciliationHandlerUsesTheOperationsScope` in
+`internal/arch` fails the build if a reconciliation handler uses the other
+one, because the failure mode is silent: the route answers, plausibly, with
+the wrong thing.
+
+Forged and cross-account issue ids are not a separate check. The account is in
+the `WHERE` clause of the issue lookup, so an issue id belonging to another
+account is simply not found — a 404, with no signal that the id exists.
 
 ## CSRF
 
@@ -177,6 +204,34 @@ truncated to microseconds before hashing (Postgres cannot store nanoseconds, so
 a nanosecond-precision hash would never re-verify), and metadata is stored in a
 `json` column rather than `jsonb` so key order and formatting survive the round
 trip.
+
+## Operator actions on financial state
+
+There is no endpoint that sets an order's status, and there will not be one. A
+generic "set status" route is a remote-code-execution equivalent for
+accounting: whatever validation the OMS performs, that route bypasses. `SET_ORDER_STATUS` is asserted **invalid** by
+`TestOnlyRecognisedActionsAreValid`.
+
+What exists instead is seven named actions, each of which knows what it means:
+`ACKNOWLEDGE`, `RECHECK`, `IMPORT_BROKER_FILL`, `MARK_BROKER_REJECTED`,
+`MARK_NOT_EXECUTED`, `LINK_BROKER_ORDER`, `RESOLVE_MANUALLY`. Each requires
+ADMIN, requires the issue to be open, requires the action to be one the issue's
+own policy permits, and requires a reason of at least ten characters — not as
+bureaucracy but because the reason is the only record of *why* a human
+overrode the system, and "ok" is not one.
+
+Three properties matter more than the list:
+
+- **The caller supplies a decision, never data.** `IMPORT_BROKER_FILL` takes no
+  quantity, price, side or instrument. It reconstructs the execution from the
+  evidence captured in the issue at detection time. A caller who could pass a
+  price could book any trade at any price and call it recovery.
+- **Failed attempts are audited too.** An illegal transition, a wrong role, a
+  closed issue: the rejection is written with the attempted action and actor.
+  An audit log that only records successes cannot show an attack that failed.
+- **Repeat resolution is a conflict, not a second write.** The resolving
+  update is conditional on the issue still being open, so two concurrent
+  approvals produce one resolution and one 409.
 
 ## Input handling
 

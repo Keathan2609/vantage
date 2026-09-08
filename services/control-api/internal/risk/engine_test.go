@@ -714,3 +714,181 @@ func TestAnAddingOrderOnTheSameSideIsNeverTreatedAsReducing(t *testing.T) {
 			"ZAR limit was approved")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Event blackout: it must not trap an operator in exposure
+// ---------------------------------------------------------------------------
+
+// blackoutInput puts the account inside a high-impact event window.
+func blackoutInput() Input {
+	in := baseInput()
+	in.EventBlackout = true
+	in.EventName = "Non-Farm Payrolls"
+	in.EventAt = testNow.Add(5 * time.Minute)
+	in.Limits.BlockOnHighImpactEvents = true
+	return in
+}
+
+// withLongPosition gives the account something to close.
+func withLongPosition(in Input, quantity string) Input {
+	in.ExistingPosition = &domain.Position{
+		AccountID:    in.Account.ID,
+		InstrumentID: "XAUUSD.m",
+		Side:         domain.SideBuy,
+		Quantity:     dec(quantity),
+		Status:       domain.PositionOpen,
+	}
+	in.OpenPositions = 1
+	return in
+}
+
+func TestAnOperatorCanCloseAPositionDuringAnEventBlackout(t *testing.T) {
+	// The defect this pins.
+	//
+	// The blackout exempted only Source `manual`, and an operator flatten
+	// carries `risk_control`. So closing a position during a high-impact
+	// release was refused with `event_risk_blackout` -- during precisely the
+	// window when an operator most wants out, and while the check's own
+	// comment claimed that blocking a human from closing "would be worse than
+	// the risk it prevents".
+	in := withLongPosition(blackoutInput(), "0.03")
+	in.Intent.Side = domain.SideSell
+	in.Intent.Quantity = dec("0.03")
+	in.Intent.StopLoss = nil
+	in.Intent.Source = domain.SourceRiskControl
+
+	d := evaluate(t, in)
+	if r := check(t, d, domain.CheckEventRisk); !r.Passed {
+		t.Fatalf("an operator flatten was refused during an event blackout: %s.\n"+
+			"The blackout exists because spreads widen and stops slip through a "+
+			"release, which is an argument FOR being able to close a position.",
+			r.Message)
+	}
+	if !d.Approved {
+		t.Fatalf("the flatten was not approved: %+v", d.FirstFailure)
+	}
+}
+
+func TestAnAutomatedStrategyStillCannotOPENDuringAnEventBlackout(t *testing.T) {
+	// The control must keep doing its job. The exemption is for reducing
+	// exposure, not for trading through a release.
+	in := blackoutInput()
+	in.Intent.Source = domain.SourceStrategy
+
+	d := evaluate(t, in)
+	if r := check(t, d, domain.CheckEventRisk); r.Passed {
+		t.Fatal("an automated strategy was allowed to OPEN a position during a " +
+			"high-impact event blackout, which is the thing the blackout is for")
+	}
+	if d.Approved {
+		t.Fatal("the order was approved during a blackout")
+	}
+}
+
+func TestAnAutomatedReducingOrderIsAllowedDuringAnEventBlackout(t *testing.T) {
+	// A strategy closing its own position is shedding exposure, and the
+	// blackout's own risk argument favours letting it.
+	in := withLongPosition(blackoutInput(), "0.03")
+	in.Intent.Side = domain.SideSell
+	in.Intent.Quantity = dec("0.02")
+	in.Intent.StopLoss = nil
+	in.Intent.Source = domain.SourceStrategy
+
+	if r := check(t, evaluate(t, in), domain.CheckEventRisk); !r.Passed {
+		t.Fatalf("a strategy reducing its own exposure was blocked by the event "+
+			"blackout: %s", r.Message)
+	}
+}
+
+func TestAnOverClosingSideFlipIsStillBlockedDuringAnEventBlackout(t *testing.T) {
+	// The exemption rides on the STRICT definition of reducing. A sell of 5.00
+	// against a 0.03 long is not a reduction; it opens a large short, and
+	// doing that through a release is exactly what the blackout prevents.
+	in := withLongPosition(blackoutInput(), "0.03")
+	in.Intent.Side = domain.SideSell
+	in.Intent.Quantity = dec("5.00")
+	in.Intent.StopLoss = nil
+	in.Intent.Source = domain.SourceStrategy
+
+	if r := check(t, evaluate(t, in), domain.CheckEventRisk); r.Passed {
+		t.Fatal("an over-closing side flip was treated as reducing and allowed " +
+			"through an event blackout")
+	}
+}
+
+func TestAManualOrderIsStillAllowedDuringAnEventBlackout(t *testing.T) {
+	// Unchanged behaviour, asserted so the new exemption cannot be mistaken
+	// for having replaced it: the operator has been told and is deciding.
+	in := blackoutInput()
+	in.Intent.Source = domain.SourceManual
+	if r := check(t, evaluate(t, in), domain.CheckEventRisk); !r.Passed {
+		t.Fatalf("a manual order was refused during an event blackout: %s", r.Message)
+	}
+}
+
+// TestALossCeilingNeverPreventsClosingAPosition.
+//
+// The third instance of one inversion, and the reason the general rule is now
+// written down in the engine: a check whose purpose is to LIMIT exposure or
+// loss must never refuse an order that strictly reduces exposure.
+//
+// A daily-loss limit that blocks a close locks the account into the losing
+// position that caused the breach, and it goes on losing. A drawdown ceiling
+// that blocks a close deepens the drawdown it is measuring.
+func TestALossCeilingNeverPreventsClosingAPosition(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		set   func(*Input)
+		check domain.RiskCheckName
+	}{
+		{
+			"daily loss breached",
+			func(in *Input) {
+				// Realised loss past the 15 ZAR limit.
+				in.Snapshot.State.RealizedPnL = zar("-20")
+				in.Snapshot.State.Equity = zar("480")
+				in.Snapshot.State.DayStartEquity = zar("500")
+			},
+			domain.CheckDailyLoss,
+		},
+		{
+			"drawdown breached",
+			func(in *Input) {
+				in.Snapshot.State.PeakEquity = zar("500")
+				in.Snapshot.State.Equity = zar("300")
+			},
+			domain.CheckDrawdown,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := withLongPosition(baseInput(), "0.03")
+			c.set(&in)
+			in.Intent.Side = domain.SideSell
+			in.Intent.Quantity = dec("0.03")
+			in.Intent.StopLoss = nil
+			in.Intent.Source = domain.SourceRiskControl
+
+			if r := check(t, evaluate(t, in), c.check); !r.Passed {
+				t.Fatalf("%s refused a position-closing order: %s.\n"+
+					"The account is now locked into the exposure that caused the breach.",
+					c.check, r.Message)
+			}
+		})
+	}
+}
+
+func TestALossCeilingStillBlocksOpeningAPosition(t *testing.T) {
+	// The control must keep working for what it is for.
+	in := baseInput()
+	in.Snapshot.State.RealizedPnL = zar("-20")
+	in.Snapshot.State.Equity = zar("480")
+	in.Snapshot.State.DayStartEquity = zar("500")
+
+	d := evaluate(t, in)
+	if r := check(t, d, domain.CheckDailyLoss); r.Passed {
+		t.Fatal("an OPENING order was allowed with the daily loss limit breached")
+	}
+	if d.Approved {
+		t.Fatal("the order was approved past its daily loss limit")
+	}
+}

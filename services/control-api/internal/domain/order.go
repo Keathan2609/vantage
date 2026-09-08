@@ -305,10 +305,19 @@ type Order struct {
 	RejectReason    *string
 	RejectCode      *string
 	Version         int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	SubmittedAt     *time.Time
-	ClosedAt        *time.Time
+	// ReconciliationRequired marks an order whose venue-side outcome Vantage
+	// cannot determine, or which an unresolved reconciliation issue concerns.
+	//
+	// Deliberately a flag rather than an order status. FAILED already means
+	// "the outcome is unknown", but the name reads as a closed failure, and an
+	// operator needs to see uncertainty as uncertainty. Adding a status would
+	// have meant widening the state machine's transition table for every
+	// ordinary execution in order to describe an exceptional condition.
+	ReconciliationRequired bool
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	SubmittedAt            *time.Time
+	ClosedAt               *time.Time
 }
 
 // RemainingQuantity is the unfilled balance.
@@ -338,6 +347,15 @@ type Fill struct {
 	ExecutedAt    time.Time
 	RecordedAt    time.Time
 	Liquidity     string
+	// IngestSource records how this execution reached Vantage: returned by a
+	// PlaceOrder call, polled, or discovered by reconciliation after a lost
+	// response. The accounting is identical either way, which is the point,
+	// but "we were told at the time" and "we reconstructed this afterwards"
+	// are different facts about the same number.
+	IngestSource string
+	// IssueID names the reconciliation issue that justified importing this
+	// fill, where it was imported. Nil for an ordinary execution.
+	IssueID *string
 }
 
 // RejectCode is a structured, machine-readable rejection reason. Every refusal
@@ -387,6 +405,15 @@ const (
 	// an internal error: nothing went wrong locally, and the order genuinely
 	// did not happen.
 	RejectReconciledAbsent RejectCode = "reconciled_absent_at_venue"
+	// RejectReconciliationRequired refuses an AUTOMATED order because
+	// reconciliation has unresolved divergence on the account.
+	//
+	// A temporary refusal, not a verdict on the order: nothing is wrong with
+	// what was asked for, and the same request will be accepted once the
+	// account's records are known to agree with the venue. Manual orders are
+	// not refused for this reason -- an operator can see the warning and
+	// decide, an algorithm cannot.
+	RejectReconciliationRequired RejectCode = "reconciliation_required"
 )
 
 // Rejection is a structured refusal with an explanation safe to show a user.

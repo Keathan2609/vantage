@@ -306,6 +306,123 @@ export async function cancelAllWorking(
   }
 }
 
+/**
+ * Creates an execution at the MOCK VENUE that Vantage has no order for.
+ *
+ * Writes to the venue's own tables via the development container, which is the
+ * only way to make the venue know something Vantage does not. Every API path
+ * necessarily creates a Vantage order first, so no sequence of API calls can
+ * produce this state — and it is exactly the state a real venue reaches when
+ * someone trades in the broker's own terminal.
+ *
+ * Classified EXTRA_BROKER_FILL or ORDER_MISSING_LOCALLY: unattributable, never
+ * repaired automatically, and therefore a reliable OPERATOR_ACTION_REQUIRED
+ * issue for the validation tests to act on.
+ *
+ * Returns false when the container is unreachable, so a run outside a
+ * development stack degrades to a skip rather than a failure.
+ */
+export function createOrphanVenueExecution(accountId: string): string | null {
+  // The venue reference is looked up here rather than passed in.
+  //
+  // An earlier version read it from the account endpoint, which does not
+  // expose it, and fell back to the account id — but the seeded account's
+  // venue reference is a DIFFERENT uuid. The fixture then wrote a venue row
+  // under a reference the venue never queries, no divergence was detected,
+  // and the tests skipped as though nothing were wrong.
+  const accountRef = venueAccountRef(accountId);
+  if (!accountRef) return null;
+
+  const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const brokerOrderId = `MOCK-E2E-ORPHAN-${stamp}`;
+  const execId = `EXEC-E2E-ORPHAN-${stamp}`;
+
+  // A UNIQUE, non-Vantage client order id. An empty one would be the purest
+  // simulation, but the venue carries UNIQUE (account_ref, client_order_id),
+  // so only one blank can exist per account — and a second attempt then
+  // silently inserts nothing. A foreign identifier is also the more realistic
+  // shape: a trade placed in a broker's terminal carries the BROKER's id.
+  const clientOrderId = `EXTERNAL-${stamp}`;
+
+  const sql = [
+    `INSERT INTO mock_venue_orders (broker_order_id, client_order_id, account_ref,`,
+    `  symbol, side, type, time_in_force, status, quantity, filled_quantity, avg_fill_price)`,
+    `VALUES ('${brokerOrderId}', '${clientOrderId}', '${accountRef}', 'XAUUSD.m',`,
+    `  'buy', 'market', 'gtc', 'filled', 0.01, 0.01, 2650) ON CONFLICT DO NOTHING;`,
+    `INSERT INTO mock_venue_fills (broker_fill_id, broker_order_id, account_ref, symbol,`,
+    `  side, quantity, price, commission, commission_ccy, liquidity, executed_at)`,
+    `VALUES ('${execId}', '${brokerOrderId}', '${accountRef}', 'XAUUSD.m', 'buy',`,
+    `  0.01, 2650, 0.1, 'USD', 'taker', now()) ON CONFLICT DO NOTHING;`,
+    `SELECT count(*) FROM mock_venue_fills WHERE broker_fill_id = '${execId}';`,
+  ].join(" ");
+
+  try {
+    const out = execFileSync(
+      "docker",
+      [
+        "exec",
+        "-e",
+        "PGPASSWORD=vantage_superuser_dev_password",
+        "-e",
+        "PGOPTIONS=-c client_min_messages=error",
+        "vantage-postgres",
+        "psql",
+        "-U",
+        "vantage_superuser",
+        "-d",
+        "vantage",
+        "-q",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-tAc",
+        sql,
+      ],
+      { timeout: 20_000, encoding: "utf8" },
+    );
+    // Confirmed by reading it back: ON CONFLICT DO NOTHING hides a skipped
+    // insert, and a fixture that silently created nothing would make the tests
+    // skip for a reason nobody could see.
+    return out.trim().endsWith("1") ? execId : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The venue-side reference for an account.
+ *
+ * Read from the database, because the API deliberately does not publish it: a
+ * venue-side identifier is of no use to the terminal, and exposing it to widen
+ * a test fixture would be the wrong trade.
+ */
+function venueAccountRef(accountId: string): string | null {
+  try {
+    const out = execFileSync(
+      "docker",
+      [
+        "exec",
+        "-e",
+        "PGPASSWORD=vantage_superuser_dev_password",
+        "-e",
+        "PGOPTIONS=-c client_min_messages=error",
+        "vantage-postgres",
+        "psql",
+        "-U",
+        "vantage_superuser",
+        "-d",
+        "vantage",
+        "-q",
+        "-tAc",
+        `SELECT COALESCE(broker_account_ref, id::text) FROM accounts WHERE id = '${accountId}'`,
+      ],
+      { timeout: 20_000, encoding: "utf8" },
+    );
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** A unique idempotency key per test run. */
 export function newKey(prefix: string): string {
   return `e2e-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

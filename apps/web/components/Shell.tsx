@@ -44,6 +44,7 @@ const NAV: Array<{ section: string; items: Array<{ href: string; label: string }
   {
     section: "Control",
     items: [
+      { href: "/operations", label: "Operations" },
       { href: "/risk", label: "Risk" },
       { href: "/authority", label: "Authority" },
       { href: "/connections", label: "Connections" },

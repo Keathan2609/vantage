@@ -24,6 +24,38 @@ import (
 
 const modulePath = "github.com/vantage/control-api"
 
+// readSource concatenates every non-test .go file under a package directory.
+//
+// Used by the tests that assert a package does NOT mention something. Reading
+// the source is cruder than parsing it, and deliberately so: a regex over the
+// text catches a reference written any way at all, where an AST walk invites
+// arguments about which node types count.
+func readSource(t *testing.T, pkgDir string) string {
+	t.Helper()
+	var b strings.Builder
+	dir := filepath.Join(repoRoot(t), filepath.FromSlash(pkgDir))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", pkgDir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") ||
+			strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		b.Write(body)
+		b.WriteString("\n")
+	}
+	if b.Len() == 0 {
+		t.Fatalf("no source found in %s; the test would pass vacuously", pkgDir)
+	}
+	return b.String()
+}
+
 // repoRoot is the control-api module root, two levels up from internal/arch.
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -130,6 +162,10 @@ func TestBrokerAdapterIsHeldByAnAllowlistOfPackagesOnly(t *testing.T) {
 		modulePath + "/internal/httpapi":     "reports adapter health on the connections endpoint",
 		modulePath + "/internal/broker/mock": "implements the interface",
 		modulePath + "/internal/broker":      "defines the interface",
+		// booking imports the package for the ExecutionReport TYPE only. It
+		// never holds an Adapter, which the test below asserts separately --
+		// so this entry does not widen who can reach a venue.
+		modulePath + "/internal/booking": "uses broker.ExecutionReport; holds no adapter",
 	}
 
 	for pkg, imports := range packageImports(t) {
@@ -142,6 +178,151 @@ func TestBrokerAdapterIsHeldByAnAllowlistOfPackagesOnly(t *testing.T) {
 					"Holding an adapter is holding the ability to trade. If this package genuinely "+
 					"needs venue state, route it through internal/oms or internal/reconcile instead.", pkg)
 			}
+		}
+	}
+}
+
+// TestBookingHoldsNoBrokerAdapter is the other half of booking's allowlist
+// entry.
+//
+// booking is on the allowlist because it needs broker.ExecutionReport, a plain
+// data type describing an execution the venue reported. That justification
+// only holds while booking cannot reach a venue at all, so it is asserted
+// rather than assumed: a future change that gave the booking service an
+// Adapter field or a Registry would create a second path to a venue, and the
+// allowlist entry would silently have permitted it.
+func TestBookingHoldsNoBrokerAdapter(t *testing.T) {
+	source := readSource(t, "internal/booking")
+
+	for _, forbidden := range []string{
+		"broker.Adapter",
+		"broker.Registry",
+		"broker.NewRegistry",
+		".PlaceOrder(",
+		".CancelOrder(",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("internal/booking references %q.\n"+
+				"It is on the broker import allowlist ONLY because it uses the "+
+				"ExecutionReport data type. Holding an adapter, or calling one, would "+
+				"make it a second path to a venue -- which is the thing internal/oms "+
+				"exists to be the only one of.", forbidden)
+		}
+	}
+}
+
+// TestOnlyBookingAppendsFills asserts there is exactly one accounting path.
+//
+// This is the structural guarantee behind the claim that an execution
+// discovered by reconciliation is booked identically to one returned by a
+// PlaceOrder call. Two implementations could not be kept identical by
+// intention; one implementation cannot diverge from itself.
+//
+// The specific failure this prevents: a reconciliation importer with its own
+// INSERT that wrote a fill and a position but skipped the ledger entry. The
+// schema would not object -- no constraint ties a position to a transaction --
+// and the account would carry a position no money movement explains.
+func TestOnlyBookingAppendsFills(t *testing.T) {
+	var offenders []string
+
+	err := filepath.Walk(filepath.Join(repoRoot(t), "internal"),
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") ||
+				strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			text := string(body)
+			if !strings.Contains(text, "AppendFillTx(") &&
+				!strings.Contains(text, "INSERT INTO fills") {
+				return nil
+			}
+
+			rel, err := filepath.Rel(repoRoot(t), path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			switch rel {
+			case "internal/booking/booking.go":
+				// The one accounting path.
+				return nil
+			case "internal/store/trading.go":
+				// Defines AppendFillTx. The statement lives with every other
+				// SQL statement, which is where it belongs.
+				return nil
+			}
+			offenders = append(offenders, rel)
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+
+	if len(offenders) > 0 {
+		t.Fatalf("a fill is appended outside internal/booking: %v\n"+
+			"Every execution -- returned by a PlaceOrder call or discovered by "+
+			"reconciliation after a lost response -- must go through the one accounting "+
+			"path, so the position, ledger and audit invariants hold for both.",
+			offenders)
+	}
+}
+
+// TestEveryReconciliationHandlerUsesTheOperationsScope.
+//
+// Reconciliation is the incident-response surface, and ADMIN is the incident
+// role -- deliberately barred from placing orders, and the only role permitted
+// to resolve a divergence. But an admin owns no trading account in this build,
+// so a handler scoped by ownership (accountForRequest) answers "Account not
+// found" to the operator.
+//
+// That is not a cosmetic problem: it made the admin-only resolve endpoint
+// unreachable, and then made the run endpoint unreachable too, which was found
+// only because seven security tests silently SKIPPED for want of an issue to
+// act on. A skip reads as a pass.
+//
+// So the rule is asserted rather than remembered: every handler that takes an
+// accountID on a reconciliation or operations route resolves it with
+// accountForOperations.
+func TestEveryReconciliationHandlerUsesTheOperationsScope(t *testing.T) {
+	source := readSource(t, "internal/httpapi")
+
+	// Each handler that serves a reconciliation or operations route.
+	handlers := []string{
+		"handleRunReconciliation",
+		"handleReconciliationStatus",
+		"handleReconciliationIssues",
+		"handleReconciliationIssue",
+		"handleResolveReconciliationIssue",
+	}
+
+	for _, name := range handlers {
+		start := strings.Index(source, "func (s *Server) "+name+"(")
+		if start < 0 {
+			t.Errorf("handler %s not found; if it was renamed, update this test rather "+
+				"than deleting the assertion", name)
+			continue
+		}
+		// The handler body up to the next top-level func.
+		end := strings.Index(source[start+1:], "\nfunc ")
+		body := source[start:]
+		if end > 0 {
+			body = source[start : start+1+end]
+		}
+
+		if !strings.Contains(body, "accountForOperations") &&
+			strings.Contains(body, "accountID") {
+			t.Errorf("%s resolves its account with something other than "+
+				"accountForOperations.\n"+
+				"An admin owns no trading account, so ownership scoping makes this "+
+				"route unreachable for the role that exists to respond to an incident.",
+				name)
 		}
 	}
 }

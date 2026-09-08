@@ -32,6 +32,19 @@
 // The stack these run against is paper-mode by construction: live execution is
 // not compiled in. Nothing here can reach a real venue, and nothing here
 // should ever be pointed at one.
+//
+// # Why this file is _test.go
+//
+// It is test-only helper code and nothing outside a test uses it. Named
+// client.go it was a NON-test file in a test package, which compiles under
+// `go test` -- test files are in scope -- but not under a plain build. The
+// symptom was govulncheck refusing to load the module at all:
+//
+//	client.go:337: undefined: instrument
+//
+// because `instrument` is declared in race_test.go. A package that only
+// builds when you happen to be running its tests is a package that will break
+// the next tool someone points at the repository.
 package race
 
 import (
@@ -266,10 +279,18 @@ func psql(t *testing.T, sql string) string {
 		"-e", "PGOPTIONS=-c client_min_messages=error",
 		"vantage-postgres",
 		"psql", "-U", "vantage_superuser", "-d", "vantage", "-q", "-tAc", sql)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Skipf("cannot reach the development database to verify (%v); "+
-			"the suite needs the vantage-postgres container", err)
+		// The stderr text is included deliberately. An earlier version reported
+		// only "exit status 1", which turned a foreign-key violation in the
+		// test's own fixture into an unexplained skip -- and a skip reads as a
+		// pass. A helper that hides why it failed costs more time than it saves.
+		t.Skipf("psql failed (%v): %s | query: %s | "+
+			"If this says 'cannot connect', the suite needs the vantage-postgres "+
+			"container; anything else is a defect in the query above.",
+			err, strings.TrimSpace(stderr.String()), sql)
 	}
 	return strings.TrimSpace(string(out))
 }
@@ -293,6 +314,60 @@ func psqlInt(t *testing.T, sql string) int {
 // syntax error.
 func quoteSQL(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+}
+
+// requireRiskBudget skips the suite when the account can no longer open a
+// position for a reason unrelated to any test.
+//
+// # Why this exists
+//
+// Every order in this suite pays commission, and the seeded account's
+// daily-loss limit is 15 ZAR. Two full runs spend it. After that the risk
+// engine correctly refuses every opening order with
+// `daily_loss_limit_reached`, three tests fail, and the statuses are all 409
+// -- which looks exactly like a concurrency defect and is not one.
+//
+// A test fixture must not widen a real risk limit to suit itself, and it must
+// not edit the ledger to reset one. The reset is a reseed. So the condition is
+// detected here and reported precisely, once, instead of being rediscovered
+// from six confusing assertions.
+func (c *client) requireRiskBudget(accountID string) {
+	c.t.Helper()
+
+	// The engine's own verdict, read from a probe order it will refuse
+	// harmlessly if the budget is spent. Cheaper and more truthful than
+	// recomputing the day's P&L here: this asks the same code the real orders
+	// go through.
+	var body struct {
+		Rejection *struct {
+			Code string `json:"code"`
+		} `json:"rejection"`
+	}
+	// A deliberately impossible quantity, so the probe cannot itself trade:
+	// it is refused on quantity long before anything is placed.
+	c.post("/api/v1/orders", newKey("budgetprobe"), map[string]string{
+		"account_id":    accountID,
+		"instrument_id": instrument,
+		"side":          "buy",
+		"type":          "market",
+		"quantity":      "0.01",
+		"stop_loss":     c.safeStop(instrument, "buy", 0.004),
+		"time_in_force": "gtc",
+	}, &body)
+
+	if body.Rejection == nil {
+		return
+	}
+	switch body.Rejection.Code {
+	case "daily_loss_limit_reached", "max_drawdown_exceeded":
+		c.t.Skipf(
+			"the account's daily-loss budget is spent (%s), so no test here can open a "+
+				"position. This is the risk engine working, not a defect. Reset the "+
+				"fixture:\n\n    ./scripts/dev-up.ps1 -Reset -Seed\n\n"+
+				"The suite pays commission on every order and the seeded limit is 15 ZAR, "+
+				"so two full runs spend it.",
+			body.Rejection.Code)
+	}
 }
 
 // clearDevRateLimits empties the development rate-limit buckets.
@@ -528,6 +603,100 @@ func (c *client) grantSeedAuthority(accountID string) {
 		c.t.Errorf("could not restore the trading authority (status %d); "+
 			"later tests will be refused until it is granted again", status)
 	}
+}
+
+// clearReconciliationIssues acknowledges every open issue on an account, as
+// an admin.
+//
+// Fixture hygiene, in the same spirit as flattenAll and cancelAllWorking: the
+// suite shares one account, and an operator-required divergence left by an
+// earlier test halts automation for every later one. That halt is CORRECT --
+// it is the platform working -- so the fixture clears it deliberately rather
+// than the tests weakening their assertions to tolerate it.
+//
+// Uses ACKNOWLEDGE, which writes no financial state. A test fixture must never
+// be able to book a trade.
+func (c *client) clearReconciliationIssues(accountID, why string) {
+	c.t.Helper()
+
+	admin := c.adminSession()
+	if admin == nil {
+		return
+	}
+
+	var body struct {
+		Issues []struct {
+			ID   string `json:"id"`
+			Type string `json:"issue_type"`
+		} `json:"issues"`
+	}
+	if status := admin.get(
+		"/api/v1/reconciliation/"+accountID+"/issues?open=true", &body); status != http.StatusOK {
+		return
+	}
+
+	for _, issue := range body.Issues {
+		status := admin.post(
+			"/api/v1/reconciliation/"+accountID+"/issues/"+issue.ID+"/resolve", "",
+			map[string]string{
+				"action": "ACKNOWLEDGE",
+				"reason": "test fixture: " + why,
+			}, nil)
+		if status != http.StatusOK && status != http.StatusConflict {
+			c.t.Logf("could not acknowledge issue %s (%s): status %d",
+				issue.ID, issue.Type, status)
+		}
+	}
+}
+
+// adminSession signs in as the admin, or returns nil when that is not possible.
+//
+// Resolving a reconciliation issue is admin-only, and correctly so. A fixture
+// that could clear issues WITHOUT the admin role would be evidence the
+// authorisation was too weak, so this signs in properly rather than reaching
+// into the database.
+func (c *client) adminSession() *client {
+	c.t.Helper()
+
+	password := os.Getenv("VANTAGE_E2E_ADMIN_PASSWORD")
+	if password == "" {
+		password = "dev-Admin-Passw0rd!"
+	}
+	email := os.Getenv("VANTAGE_E2E_ADMIN_EMAIL")
+	if email == "" {
+		email = "admin@vantage.local"
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil
+	}
+	admin := &client{
+		t:    c.t,
+		http: &http.Client{Jar: jar, Timeout: 30 * time.Second},
+		base: c.base,
+	}
+	if status := admin.post("/api/v1/auth/login", "", map[string]string{
+		"email": email, "password": password,
+	}, nil); status != http.StatusOK {
+		c.t.Logf("could not sign in as admin (%d); reconciliation issues will not be "+
+			"cleared and later assertions may see an earlier test's divergence", status)
+		return nil
+	}
+
+	u, err := url.Parse(c.base)
+	if err != nil {
+		return nil
+	}
+	for _, cookie := range jar.Cookies(u) {
+		if cookie.Name == "vantage_csrf" {
+			admin.csrf = cookie.Value
+		}
+	}
+	if admin.csrf == "" {
+		return nil
+	}
+	return admin
 }
 
 // armFault arms a deterministic venue fault. Development-only endpoint.

@@ -135,53 +135,6 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Code: domain.RejectSpreadTooWide,
 	})
 
-	// --- Event risk --------------------------------------------------------
-	// A blackout applies to automated orders. A manual order is allowed
-	// through with the event surfaced in the UI: the operator has been told,
-	// and blocking a human from closing a position before a release would be
-	// worse than the risk it prevents.
-	eventOK := true
-	if in.EventBlackout && in.Limits.BlockOnHighImpactEvents && in.Intent.Source != domain.SourceManual {
-		eventOK = false
-	}
-	add(domain.RiskCheckResult{
-		Name:     domain.CheckEventRisk,
-		Passed:   eventOK,
-		Limit:    fmt.Sprintf("%dm before / %dm after high-impact events", in.Limits.EventBlackoutBeforeMinutes, in.Limits.EventBlackoutAfterMinutes),
-		Observed: eventObserved(in),
-		Message:  eventMessage(in),
-		Code:     domain.RejectEventRisk,
-	})
-
-	// --- Loss ceilings -----------------------------------------------------
-	// Checked before sizing: an account past its daily loss limit does not get
-	// a smaller trade, it gets no trade.
-	dayPnL := in.Snapshot.State.DayPnL()
-	dailyLossBreached := dayPnL.IsNegative() &&
-		dayPnL.Abs().Decimal().GreaterThanOrEqual(in.Limits.MaxDailyLoss.Decimal())
-	add(domain.RiskCheckResult{
-		Name:     domain.CheckDailyLoss,
-		Passed:   !dailyLossBreached,
-		Limit:    in.Limits.MaxDailyLoss.String(),
-		Observed: dayPnL.String(),
-		Message: fmt.Sprintf("Daily loss %s against a limit of %s.",
-			dayPnL.Abs().String(), in.Limits.MaxDailyLoss.String()),
-		Code: domain.RejectDailyLoss,
-	})
-
-	dd := in.Snapshot.State.DrawdownFraction()
-	ddBreached := dd.GreaterThanOrEqual(in.Limits.MaxDrawdownFraction)
-	add(domain.RiskCheckResult{
-		Name:     domain.CheckDrawdown,
-		Passed:   !ddBreached,
-		Limit:    pct(in.Limits.MaxDrawdownFraction),
-		Observed: pct(dd),
-		Message: fmt.Sprintf("Drawdown from peak equity is %s against a limit of %s.",
-			pct(dd), pct(in.Limits.MaxDrawdownFraction)),
-		Code: domain.RejectDrawdown,
-	})
-
-	// --- Position and order counts ----------------------------------------
 	// reducing means STRICTLY reducing: the order is on the opposite side of an
 	// existing position AND is no larger than that position.
 	//
@@ -205,6 +158,91 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	reducing := in.ExistingPosition != nil &&
 		in.ExistingPosition.Side != in.Intent.Side &&
 		in.Intent.Quantity.LessThanOrEqual(in.ExistingPosition.Quantity)
+
+	// --- Event risk --------------------------------------------------------
+	// A blackout applies to orders that OPEN or INCREASE exposure, and only
+	// to automated ones. Two exemptions, each for its own reason:
+	//
+	//   * A MANUAL order goes through with the event surfaced in the UI. The
+	//     operator has been told and is deciding anyway.
+	//
+	//   * A REDUCING order goes through whatever its source. The blackout
+	//     exists because spreads widen and stops slip through a release --
+	//     which is an argument FOR being able to close a position, not
+	//     against it. Refusing to let exposure be shed during the riskiest
+	//     window of the day is the same inversion as refusing a flatten for
+	//     breaching an exposure limit.
+	//
+	// The second exemption was missing, and the comment above this check
+	// already claimed it: "blocking a human from closing a position before a
+	// release would be worse than the risk it prevents". It was not true. An
+	// operator flatten carries Source `risk_control`, not `manual`, so
+	// closing a position during a blackout was refused with
+	// `event_risk_blackout` -- during precisely the window when an operator
+	// most wants out.
+	eventOK := true
+	if in.EventBlackout && in.Limits.BlockOnHighImpactEvents &&
+		in.Intent.Source != domain.SourceManual && !reducing {
+		eventOK = false
+	}
+	add(domain.RiskCheckResult{
+		Name:     domain.CheckEventRisk,
+		Passed:   eventOK,
+		Limit:    fmt.Sprintf("%dm before / %dm after high-impact events", in.Limits.EventBlackoutBeforeMinutes, in.Limits.EventBlackoutAfterMinutes),
+		Observed: eventObserved(in),
+		Message:  eventMessage(in),
+		Code:     domain.RejectEventRisk,
+	})
+
+	// --- Loss ceilings -----------------------------------------------------
+	// Checked before sizing: an account past its daily loss limit does not get
+	// a smaller trade, it gets no trade.
+	//
+	// A REDUCING order is exempt, and this is the third place that exemption
+	// had to be added -- which is the point worth recording.
+	//
+	// A loss limit exists to stop losses growing. Refusing a close because the
+	// limit is already breached locks the account into whatever it holds at
+	// exactly the moment an operator most needs out, and the position that
+	// caused the breach goes on losing. The control would be producing the
+	// outcome it exists to prevent.
+	//
+	// The same inversion appeared in the per-order notional cap, and again in
+	// the event blackout. The general rule, stated once here: a check whose
+	// purpose is to LIMIT exposure or loss must never refuse an order that
+	// strictly reduces exposure. Checks about whether trading is possible at
+	// all -- account enabled, instrument tradable, market open, feed healthy,
+	// kill switch, authority -- still apply, because without them there is no
+	// price to close at.
+	dayPnL := in.Snapshot.State.DayPnL()
+	dailyLossBreached := dayPnL.IsNegative() &&
+		dayPnL.Abs().Decimal().GreaterThanOrEqual(in.Limits.MaxDailyLoss.Decimal())
+	add(domain.RiskCheckResult{
+		Name:     domain.CheckDailyLoss,
+		Passed:   reducing || !dailyLossBreached,
+		Limit:    in.Limits.MaxDailyLoss.String(),
+		Observed: dayPnL.String(),
+		Message: fmt.Sprintf("Daily loss %s against a limit of %s.",
+			dayPnL.Abs().String(), in.Limits.MaxDailyLoss.String()),
+		Code: domain.RejectDailyLoss,
+	})
+
+	dd := in.Snapshot.State.DrawdownFraction()
+	ddBreached := dd.GreaterThanOrEqual(in.Limits.MaxDrawdownFraction)
+	add(domain.RiskCheckResult{
+		Name: domain.CheckDrawdown,
+		// Reducing is exempt for the same reason as the daily loss limit
+		// above: a drawdown ceiling that prevents closing a position deepens
+		// the drawdown it is measuring.
+		Passed:   reducing || !ddBreached,
+		Limit:    pct(in.Limits.MaxDrawdownFraction),
+		Observed: pct(dd),
+		Message: fmt.Sprintf("Drawdown from peak equity is %s against a limit of %s.",
+			pct(dd), pct(in.Limits.MaxDrawdownFraction)),
+		Code: domain.RejectDrawdown,
+	})
+
+	// --- Position and order counts ----------------------------------------
 	positionsOK := reducing || in.OpenPositions < in.Limits.MaxOpenPositions ||
 		(in.ExistingPosition != nil && in.ExistingPosition.Side == in.Intent.Side)
 	add(domain.RiskCheckResult{

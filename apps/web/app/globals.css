@@ -923,3 +923,184 @@ select:disabled {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-focus);
 }
+
+/* ---------------------------------------------------------------------------
+   Operations: reconciliation issues
+   ---------------------------------------------------------------------------
+   An issue is a small dossier rather than a table row: it carries a
+   description, the classification, the reasoning behind that classification,
+   both sides' evidence, and the actions an operator may take. A table would
+   force all of that into columns and make the important part — the evidence —
+   the hardest thing to read.
+
+   The left border encodes severity, so a critical divergence is identifiable
+   before reading a word. It is a redundant cue: the Status chip already
+   carries the same information as text, so nothing depends on colour alone.
+   --------------------------------------------------------------------------- */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.issue-group {
+  margin-top: 18px;
+}
+
+.issue-group:first-of-type {
+  margin-top: 0;
+}
+
+.issue-group h3 {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0 0 2px;
+}
+
+.issue-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.issue {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 3px;
+  background: var(--bg-panel-raised);
+  padding: 11px 13px;
+}
+
+/* Severity as a border colour, keyed off the Status chip's own tone so the
+   two cannot disagree. */
+.issue:has(.status[data-tone="bad"]) {
+  border-left-color: var(--loss);
+}
+
+.issue:has(.status[data-tone="warn"]) {
+  border-left-color: var(--warn);
+}
+
+.issue:has(.status[data-tone="ok"]) {
+  border-left-color: var(--border-strong);
+}
+
+.issue-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.issue-head button {
+  margin-left: auto;
+}
+
+.issue-description {
+  margin: 9px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  /* Descriptions are full sentences explaining a financial divergence. They
+     are long on purpose, and a max width keeps them readable rather than
+     stretching across a wide monitor. */
+  max-width: 92ch;
+}
+
+.issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 22px;
+  margin: 10px 0 0;
+}
+
+.issue-meta div {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.issue-meta dt {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.issue-meta dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.issue-evidence {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+
+/* The server's own explanation of why this class of divergence is or is not
+   repaired automatically. Set apart, because an operator being asked to decide
+   needs to find it without hunting. */
+.rationale {
+  margin: 0 0 11px;
+  padding: 9px 11px;
+  border-left: 2px solid var(--accent-dim);
+  background: var(--accent-wash);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  max-width: 92ch;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 11px;
+}
+
+.evidence-grid h4 {
+  margin: 0 0 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.evidence-grid pre {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-base);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  /* Evidence is arbitrary JSON from a venue. It scrolls in its own box rather
+     than widening the page, which is the rule for every wide element here. */
+  overflow-x: auto;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.issue-actions {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.issue-actions .field {
+  max-width: 560px;
+}
