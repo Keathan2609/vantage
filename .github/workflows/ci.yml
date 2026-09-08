@@ -1,0 +1,282 @@
+# Correctness pipeline.
+#
+# Security scanning lives in security.yml so a scanner outage cannot block a
+# correctness signal, and a failing test cannot be mistaken for a
+# vulnerability.
+#
+# Jobs run in parallel and none depends on another, so one run reports every
+# problem rather than the first one.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default. A job that needs more asks for it explicitly.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27.0'
+  NODE_VERSION: '22.21.0'
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  control-api:
+    name: Control plane (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/control-api/go.sum
+
+      - name: Verify module checksums
+        working-directory: services/control-api
+        run: go mod verify
+
+      - name: Check formatting
+        working-directory: services/control-api
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        working-directory: services/control-api
+        run: go vet ./...
+
+      - name: Test
+        working-directory: services/control-api
+        run: go test -race -count=1 ./...
+
+      - name: Build
+        working-directory: services/control-api
+        run: go build ./...
+
+      # The paper-only guarantee is asserted in CI, not just documented. If
+      # this ever fails, the build has grown a live execution path.
+      - name: Assert the build cannot execute live
+        working-directory: services/control-api
+        run: |
+          if ! grep -q 'BuildAllowsLiveExecution = false' internal/config/config.go; then
+            echo "FAIL: config.BuildAllowsLiveExecution is not false"
+            exit 1
+          fi
+          if grep -rn --include='*.go' -E 'broker/(live|mt5|exness)' . ; then
+            echo "FAIL: a live broker adapter appears to be present"
+            exit 1
+          fi
+          echo "OK: no live execution path is compiled in"
+
+  quant:
+    name: Research plane (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/quant/pyproject.toml
+
+      - name: Install
+        working-directory: services/quant
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Lint
+        working-directory: services/quant
+        run: python -m ruff check .
+
+      - name: Type check
+        working-directory: services/quant
+        run: python -m mypy vantage_quant
+
+      # Warnings are errors in pytest's configuration, so a deprecation in a
+      # numeric library surfaces here rather than in a backtest result.
+      - name: Test
+        working-directory: services/quant
+        run: python -m pytest -q
+
+  web:
+    name: Terminal (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Build
+        working-directory: apps/web
+        run: npm run build
+
+  migrations:
+    name: Migrations apply cleanly
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: vantage
+          POSTGRES_USER: vantage_superuser
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vantage_superuser -d vantage"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/control-api/go.sum
+
+      # The same least-privilege roles the local stack uses. Applying
+      # migrations as a superuser in CI would hide a missing grant that then
+      # fails on a real deployment.
+      - name: Create runtime roles
+        env:
+          PGPASSWORD: ci_only_password
+        run: psql -h 127.0.0.1 -U vantage_superuser -d vantage -v ON_ERROR_STOP=1 -f infra/docker/postgres-init/00-roles.sql
+
+      - name: Apply migrations
+        working-directory: services/control-api
+        env:
+          VANTAGE_ENV: local
+          VANTAGE_EXECUTION_MODE: paper
+          VANTAGE_ENABLED_BROKERS: mock
+          VANTAGE_DATABASE_URL: postgres://vantage_app:vantage_app_dev_password@127.0.0.1:5432/vantage?sslmode=disable
+          VANTAGE_MIGRATION_DATABASE_URL: postgres://vantage_owner:vantage_owner_dev_password@127.0.0.1:5432/vantage?sslmode=disable
+          VANTAGE_DATA_ENCRYPTION_KEY_VERSION: '1'
+        # Keys are generated per run and never leave the runner. No key
+        # material is committed to this repository, not even a placeholder
+        # that could be copied into a real environment.
+        run: |
+          export VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          export VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          go run ./cmd/control-api migrate
+          go run ./cmd/control-api migrate-status
+
+      # Migrations must be idempotent: a second run is a no-op, not an error.
+      - name: Re-apply migrations (must be a no-op)
+        working-directory: services/control-api
+        env:
+          VANTAGE_ENV: local
+          VANTAGE_EXECUTION_MODE: paper
+          VANTAGE_ENABLED_BROKERS: mock
+          VANTAGE_DATABASE_URL: postgres://vantage_app:vantage_app_dev_password@127.0.0.1:5432/vantage?sslmode=disable
+          VANTAGE_MIGRATION_DATABASE_URL: postgres://vantage_owner:vantage_owner_dev_password@127.0.0.1:5432/vantage?sslmode=disable
+          VANTAGE_DATA_ENCRYPTION_KEY_VERSION: '1'
+        run: |
+          export VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          export VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          go run ./cmd/control-api migrate
+
+      # The database's own refusals are part of the security model, so CI
+      # checks that the constraints exist rather than trusting the migration
+      # files were applied in the order they appear.
+      - name: Assert the paper-only constraints exist
+        env:
+          PGPASSWORD: ci_only_password
+        run: |
+          set -e
+          for constraint in accounts_paper_only_ck broker_connections_mock_only_ck risk_limits_risk_ceiling_ck strategy_versions_paper_ceiling_ck; do
+            found=$(psql -h 127.0.0.1 -U vantage_superuser -d vantage -tAc \
+              "SELECT count(*) FROM pg_constraint WHERE conname = '$constraint'")
+            if [ "$found" != "1" ]; then
+              echo "FAIL: constraint $constraint is missing"
+              exit 1
+            fi
+            echo "OK: $constraint"
+          done
+
+  docker:
+    name: Images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Control plane image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/control-api
+          push: false
+          load: true
+          tags: vantage/control-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Research plane image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/quant
+          push: false
+          load: true
+          tags: vantage/quant:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Terminal image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: false
+          load: true
+          tags: vantage/web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # An image running as root defeats most of the container hardening in
+      # the compose file, so it is checked rather than assumed.
+      - name: Assert images do not run as root
+        run: |
+          set -e
+          for image in vantage/control-api:ci vantage/quant:ci vantage/web:ci; do
+            user=$(docker image inspect --format '{{.Config.User}}' "$image")
+            if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+              echo "FAIL: $image runs as ${user:-root}"
+              exit 1
+            fi
+            echo "OK: $image runs as $user"
+          done

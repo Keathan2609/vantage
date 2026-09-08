@@ -1,0 +1,36 @@
+# Accepted findings, each with the reason it is accepted and what would change
+# that. Nothing is listed here to make a report look clean; a finding that is
+# actually reachable gets fixed instead.
+#
+# Review this file whenever a base image or a dependency is bumped: an
+# acceptance that was sound at one version is not automatically sound at the
+# next.
+
+# --- pip's vendored libraries -------------------------------------------------
+#
+# Both of these are inside pip's own `_vendor` tree in the research image. They
+# are not application dependencies, are not importable by the application, and
+# are only reachable while pip itself is running — which the service never does
+# at runtime. They are present in the CURRENT pip (26.2.1), so there is no
+# newer pip that resolves them.
+#
+# What would change this: pip re-vendoring newer copies, at which point these
+# lines should be removed and the finding should simply disappear.
+#
+# msgpack 1.1.2 -> 1.2.1, in pip/_vendor
+GHSA-6v7p-g79w-8964
+# setuptools 70.3.0 -> 78.1.1, recorded in pip/_vendor/vendor.txt
+CVE-2025-47273
+
+# --- golang.org/x/crypto/openpgp ---------------------------------------------
+#
+# GO-2026-5932: the openpgp package in golang.org/x/crypto is unmaintained and
+# unsafe by design. There is no fixed version and there will not be one.
+#
+# The control plane requires golang.org/x/crypto for Argon2id password hashing
+# and imports nothing else from the module. govulncheck confirms the symbol is
+# unreachable: "Your code is affected by 0 vulnerabilities."
+#
+# What would change this: any code in this repository importing
+# golang.org/x/crypto/openpgp, which it must not.
+GO-2026-5932

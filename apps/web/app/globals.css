@@ -1,0 +1,925 @@
+/*
+ * Vantage design system.
+ *
+ * The reference point is professional trading software, not a web dashboard.
+ * That drives every decision below:
+ *
+ *   Density over whitespace. A trader reads many numbers at once. Rows are
+ *   26-28px, the base size is 13px, and padding is measured in single-digit
+ *   pixels. Generous whitespace would push the second half of a position book
+ *   below the fold.
+ *
+ *   Tabular numerals everywhere. Proportional digits make columns of prices
+ *   jitter as they update, which is genuinely harder to read. `tabular-nums`
+ *   is applied to every numeric cell, and prices use a monospace face so the
+ *   decimal points align down the column.
+ *
+ *   Colour carries meaning only. The palette is graphite with ONE accent
+ *   (muted gold, for the primary market). Green and red mean profit and loss
+ *   and nothing else — never "primary button". A gradient would be decoration
+ *   competing with data.
+ *
+ *   Hairline separators, not cards. Structure comes from 1px rules and
+ *   background steps, not from floating panels with shadows. Corner radius is
+ *   2-3px: enough to look finished, not enough to waste a row.
+ */
+
+:root {
+  /* Surfaces, darkest to lightest. */
+  --bg-base: #0c0e10;
+  --bg-panel: #131619;
+  --bg-panel-raised: #181c20;
+  --bg-row-hover: #1c2126;
+  --bg-input: #0f1214;
+
+  /* Hairlines. */
+  --border: #23282e;
+  --border-strong: #2f353c;
+  --border-focus: #4a5560;
+
+  /* Text. */
+  --text: #e4e8ec;
+  --text-secondary: #9aa4af;
+  --text-muted: #6b7681;
+  --text-inverse: #0c0e10;
+
+  /* The single accent: muted gold, for the primary market. */
+  --accent: #c8a44a;
+  --accent-dim: #8a7130;
+  --accent-wash: rgba(200, 164, 74, 0.09);
+
+  /* Semantic. Green and red mean money, never emphasis. */
+  --profit: #3d9970;
+  --profit-dim: #24603f;
+  --loss: #cf5044;
+  --loss-dim: #7d2f27;
+  --warn: #c9902f;
+  --info: #5a8ca8;
+
+  /* Simulated-mode marker. Deliberately unmistakable. */
+  --paper: #b5842a;
+  --paper-wash: rgba(181, 132, 42, 0.12);
+
+  --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo,
+    Consolas, monospace;
+
+  --row-height: 27px;
+  --header-height: 46px;
+  --sidebar-width: 186px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Every number is tabular. This is the single highest-impact typographic
+   decision in a financial interface. */
+table,
+.num,
+input[type="number"],
+input[type="text"] {
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: var(--header-height) 1fr;
+  grid-template-areas:
+    "brand topbar"
+    "nav main";
+  height: 100vh;
+  overflow: hidden;
+}
+
+.brand {
+  grid-area: brand;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 1px solid var(--accent-dim);
+  background: var(--accent-wash);
+  position: relative;
+}
+
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  background: var(--accent);
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.nav {
+  grid-area: nav;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  padding: 6px 0 20px;
+}
+
+.main {
+  grid-area: main;
+  overflow: auto;
+  padding: 14px 16px 40px;
+}
+
+/* --------------------------------------------------------------- navigation */
+
+.nav-section {
+  padding: 12px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 14px 5px 13px;
+  color: var(--text-secondary);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+
+.nav-link:hover {
+  background: var(--bg-row-hover);
+  color: var(--text);
+}
+
+.nav-link[data-active="true"] {
+  background: var(--bg-panel-raised);
+  border-left-color: var(--accent);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.nav-badge {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- top bar tiles */
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 13px;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  flex: none;
+}
+
+.tile-label {
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tile-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-value.small {
+  font-size: 11.5px;
+}
+
+/* The paper-mode banner. It is the first thing in the top bar and it never
+   collapses: a user must never wonder whether the numbers on screen are real. */
+.paper-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 13px;
+  border-right: 1px solid var(--border);
+  background: var(--paper-wash);
+  color: var(--paper);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  flex: none;
+}
+
+.paper-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+/* ------------------------------------------------------------------- panels */
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel-raised);
+}
+
+.panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.panel-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.panel-body {
+  padding: 11px;
+}
+
+.panel-body.flush {
+  padding: 0;
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+}
+
+.grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grid.cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.grid.sidebar-right {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+@media (max-width: 1180px) {
+  .grid.cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .grid.cols-3,
+  .grid.sidebar-right {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 820px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "brand"
+      "topbar"
+      "main";
+  }
+  .nav {
+    display: none;
+  }
+  .grid.cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ------------------------------------------------------------------- tables */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  padding: 5px 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-panel-raised);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: 0 9px;
+  height: var(--row-height);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+tbody tr:hover td {
+  background: var(--bg-row-hover);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+th.right,
+td.right {
+  text-align: right;
+}
+
+td.mono,
+th.mono,
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.right {
+  text-align: right;
+}
+
+.table-scroll {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.table-scroll.tall {
+  max-height: 640px;
+}
+
+/* -------------------------------------------------------------- value colour */
+
+.profit {
+  color: var(--profit);
+}
+
+.loss {
+  color: var(--loss);
+}
+
+/* A value that was reduced or is approaching a ceiling: notable, not wrong. */
+.warn-text {
+  color: var(--warn);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.secondary {
+  color: var(--text-secondary);
+}
+
+.accent {
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------------- status dots */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-muted);
+}
+
+.status[data-tone="ok"]::before {
+  background: var(--profit);
+}
+
+.status[data-tone="warn"]::before {
+  background: var(--warn);
+}
+
+.status[data-tone="bad"]::before {
+  background: var(--loss);
+}
+
+.status[data-tone="info"]::before {
+  background: var(--info);
+}
+
+/* ------------------------------------------------------------------- badges */
+
+.badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.badge[data-tone="ok"] {
+  border-color: var(--profit-dim);
+  color: var(--profit);
+}
+
+.badge[data-tone="bad"] {
+  border-color: var(--loss-dim);
+  color: var(--loss);
+}
+
+.badge[data-tone="warn"] {
+  border-color: var(--accent-dim);
+  color: var(--warn);
+}
+
+.badge[data-tone="accent"] {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+/* ------------------------------------------------------------------ controls */
+
+button,
+.button {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled),
+.button:hover {
+  background: var(--bg-row-hover);
+  border-color: var(--border-focus);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button[data-variant="buy"] {
+  border-color: var(--profit-dim);
+  color: var(--profit);
+}
+
+button[data-variant="buy"][data-selected="true"] {
+  background: var(--profit-dim);
+  color: var(--text);
+}
+
+button[data-variant="sell"] {
+  border-color: var(--loss-dim);
+  color: var(--loss);
+}
+
+button[data-variant="sell"][data-selected="true"] {
+  background: var(--loss-dim);
+  color: var(--text);
+}
+
+button[data-variant="danger"] {
+  border-color: var(--loss-dim);
+  color: var(--loss);
+}
+
+button[data-variant="primary"] {
+  border-color: var(--accent-dim);
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 5px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+input:disabled,
+select:disabled {
+  color: var(--text-muted);
+}
+
+.field {
+  margin-bottom: 9px;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.button-row {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 0;
+}
+
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.segmented button:first-child {
+  border-radius: 2px 0 0 2px;
+  margin-left: 0;
+}
+
+.segmented button:last-child {
+  border-radius: 0 2px 2px 0;
+}
+
+.segmented button[data-selected="true"] {
+  background: var(--bg-row-hover);
+  border-color: var(--border-focus);
+  color: var(--text);
+}
+
+/* A multi-select chip outside a segmented control: same "chosen" reading. */
+.button-row button[data-selected="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+/* --------------------------------------------------------- key/value blocks */
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 14px;
+  font-size: 12.5px;
+}
+
+.kv dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.kv dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat {
+  padding: 9px 11px;
+  border-right: 1px solid var(--border);
+}
+
+.stat:last-child {
+  border-right: none;
+}
+
+.stat-label {
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.stat-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 1180px) {
+  .stat-strip {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* ------------------------------------------------------------ risk meters */
+
+.meter {
+  height: 4px;
+  background: var(--bg-input);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--info);
+  transition: width 160ms linear;
+}
+
+.meter-fill[data-tone="warn"] {
+  background: var(--warn);
+}
+
+.meter-fill[data-tone="bad"] {
+  background: var(--loss);
+}
+
+/* --------------------------------------------------------------- messages */
+
+.notice {
+  padding: 8px 11px;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel-raised);
+  font-size: 12px;
+  margin-bottom: 11px;
+  color: var(--text-secondary);
+}
+
+.notice[data-tone="warn"] {
+  border-color: var(--accent-dim);
+  background: var(--accent-wash);
+  color: var(--warn);
+}
+
+.notice[data-tone="bad"] {
+  border-color: var(--loss-dim);
+  background: rgba(207, 80, 68, 0.08);
+  color: var(--loss);
+}
+
+.notice[data-tone="ok"] {
+  border-color: var(--profit-dim);
+  background: rgba(61, 153, 112, 0.07);
+  color: var(--profit);
+}
+
+.empty {
+  padding: 22px 11px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------- charts */
+
+.chart-host {
+  width: 100%;
+  height: 400px;
+}
+
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 34px;
+}
+
+/* --------------------------------------------------------------- utilities */
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 13px;
+}
+
+.page-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.page-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+  max-width: 78ch;
+}
+
+.row-gap {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42ch;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.wrap {
+  white-space: normal;
+}
+
+.small {
+  font-size: 11.5px;
+}
+
+.tiny {
+  font-size: 10.5px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ----------------------------------------------------------- login screen */
+
+.login-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 330px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 22px;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 4px;
+}
+
+/* Respect a user's reduced-motion preference: nothing here needs to move. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbars, styled to match rather than to stand out. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid var(--bg-base);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-focus);
+}

@@ -1,0 +1,310 @@
+// Package portfolio derives account state from the ledger and open positions.
+//
+// Nothing here stores a running balance. Equity, margin and exposure are
+// computed from immutable facts — the ledger's transactions and the position
+// book — every time they are asked for. That makes them reproducible and
+// auditable: a balance that disagrees with the ledger is a bug that shows up
+// immediately, not a slow drift nobody notices until a withdrawal.
+package portfolio
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
+
+	"github.com/vantage/control-api/internal/domain"
+	"github.com/vantage/control-api/internal/fx"
+	"github.com/vantage/control-api/internal/money"
+	"github.com/vantage/control-api/internal/store"
+)
+
+// Service computes portfolio state.
+type Service struct {
+	store     *store.Store
+	converter *fx.Converter
+	clock     domain.Clock
+}
+
+// New builds the portfolio service.
+func New(s *store.Store, converter *fx.Converter, clock domain.Clock) *Service {
+	return &Service{store: s, converter: converter, clock: clock}
+}
+
+// PositionView is an open position valued in the account's currency.
+type PositionView struct {
+	Position      domain.Position
+	Instrument    domain.Instrument
+	CurrentPrice  decimal.Decimal
+	QuoteAge      time.Duration
+	UnrealizedPnL money.Amount // account currency
+	NotionalValue money.Amount // account currency
+	MarginUsed    money.Amount // account currency
+	// Valued is false when no fresh price or FX rate was available. Such a
+	// position is shown to the user as unvalued rather than as zero, because
+	// zero would understate exposure at exactly the wrong moment.
+	Valued        bool
+	ValuationNote string
+}
+
+// Snapshot is an account's full financial state at an instant.
+type Snapshot struct {
+	Account   domain.Account
+	State     domain.AccountSnapshot
+	Positions []PositionView
+	// ExposureByInstrument and ExposureByCurrency support the concentration
+	// and correlated-exposure checks.
+	ExposureByInstrument map[string]money.Amount
+	ExposureByCurrency   map[money.Currency]money.Amount
+	// UnvaluedPositions counts positions that could not be priced. Any value
+	// above zero means the snapshot understates risk.
+	UnvaluedPositions int
+}
+
+// Compute builds a full snapshot for an account.
+func (s *Service) Compute(ctx context.Context, account domain.Account) (Snapshot, error) {
+	now := s.clock.Now()
+	ccy := account.Currency
+
+	balance, err := s.store.Accounts.Balance(ctx, account.ID, ccy)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("portfolio: balance: %w", err)
+	}
+	totals, err := s.store.Accounts.Totals(ctx, account.ID, ccy)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("portfolio: totals: %w", err)
+	}
+	positions, err := s.store.Trading.OpenPositions(ctx, account.ID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("portfolio: open positions: %w", err)
+	}
+	pendingOrders, err := s.store.Trading.CountOpenOrders(ctx, account.ID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("portfolio: open orders: %w", err)
+	}
+	equityState, err := s.store.Accounts.EquityState(ctx, account.ID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("portfolio: equity state: %w", err)
+	}
+
+	snap := Snapshot{
+		Account:              account,
+		ExposureByInstrument: map[string]money.Amount{},
+		ExposureByCurrency:   map[money.Currency]money.Amount{},
+	}
+
+	unrealized := money.Zero(ccy)
+	marginUsed := money.Zero(ccy)
+	gross := money.Zero(ccy)
+	net := money.Zero(ccy)
+
+	for _, p := range positions {
+		view, err := s.valuePosition(ctx, p, ccy, now)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		snap.Positions = append(snap.Positions, view)
+
+		if !view.Valued {
+			snap.UnvaluedPositions++
+			continue
+		}
+
+		unrealized = unrealized.MustAdd(view.UnrealizedPnL)
+		marginUsed = marginUsed.MustAdd(view.MarginUsed)
+		gross = gross.MustAdd(view.NotionalValue.Abs())
+
+		signed := view.NotionalValue.MulDecimal(p.Side.SignedMultiplier())
+		net = net.MustAdd(signed)
+
+		cur := snap.ExposureByInstrument[p.InstrumentID]
+		if cur.Currency() == "" {
+			cur = money.Zero(ccy)
+		}
+		snap.ExposureByInstrument[p.InstrumentID] = cur.MustAdd(view.NotionalValue.Abs())
+
+		// Currency exposure is attributed to the instrument's QUOTE currency:
+		// a long XAUUSD position is, among other things, a short USD position,
+		// and netting that against other USD exposure is the point.
+		qc := view.Instrument.QuoteCcy
+		curCcy := snap.ExposureByCurrency[qc]
+		if curCcy.Currency() == "" {
+			curCcy = money.Zero(ccy)
+		}
+		snap.ExposureByCurrency[qc] = curCcy.MustAdd(signed)
+	}
+
+	equity := balance.MustAdd(unrealized)
+	free, err := equity.Sub(marginUsed)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	snap.State = domain.AccountSnapshot{
+		AccountID:      account.ID,
+		Currency:       ccy,
+		Balance:        balance.RoundLedger(),
+		Equity:         equity.RoundLedger(),
+		MarginUsed:     marginUsed.RoundLedger(),
+		FreeMargin:     free.RoundLedger(),
+		RealizedPnL:    totals.RealizedPnL.RoundLedger(),
+		UnrealizedPnL:  unrealized.RoundLedger(),
+		Fees:           totals.Fees.RoundLedger(),
+		Commission:     totals.Commission.RoundLedger(),
+		Swap:           totals.Swap.RoundLedger(),
+		GrossExposure:  gross.RoundLedger(),
+		NetExposure:    net.RoundLedger(),
+		OpenPositions:  len(positions),
+		PendingOrders:  pendingOrders,
+		PeakEquity:     equityState.PeakEquity,
+		DayStartEquity: equityState.DayStartEquity,
+		AsOf:           now,
+		// Always true in this build. It travels with the snapshot so no
+		// serialiser can omit it and let paper numbers read as real ones.
+		Simulated: account.Mode != domain.ModeLive,
+	}
+	return snap, nil
+}
+
+// valuePosition marks one position to market in the account's currency.
+func (s *Service) valuePosition(ctx context.Context, p domain.Position, accountCcy money.Currency, now time.Time) (PositionView, error) {
+	view := PositionView{Position: p}
+
+	inst, err := s.store.Market.Instrument(ctx, p.InstrumentID)
+	if err != nil {
+		view.ValuationNote = "instrument specification unavailable"
+		return view, nil
+	}
+	view.Instrument = inst
+
+	quote, _, err := s.store.Market.LatestQuote(ctx, p.InstrumentID)
+	if err != nil {
+		view.ValuationNote = "no price available for this instrument"
+		return view, nil
+	}
+	view.CurrentPrice = quote.Mid()
+	view.QuoteAge = now.Sub(quote.IngestedAt)
+
+	// Value in the instrument's quote currency first, then convert once.
+	unrealQuote := p.UnrealizedPnLQuote(inst, quote)
+	notionalQuote := p.NotionalQuote(inst, quote)
+	marginQuote := inst.MarginRequired(p.Quantity, quote.Mid())
+
+	unreal, err := s.converter.Convert(ctx, unrealQuote, accountCcy)
+	if err != nil {
+		view.ValuationNote = "no " + string(inst.QuoteCcy) + "/" + string(accountCcy) + " rate available"
+		return view, nil
+	}
+	notional, err := s.converter.Convert(ctx, notionalQuote, accountCcy)
+	if err != nil {
+		view.ValuationNote = "no " + string(inst.QuoteCcy) + "/" + string(accountCcy) + " rate available"
+		return view, nil
+	}
+	margin, err := s.converter.Convert(ctx, marginQuote, accountCcy)
+	if err != nil {
+		view.ValuationNote = "no " + string(inst.QuoteCcy) + "/" + string(accountCcy) + " rate available"
+		return view, nil
+	}
+
+	view.UnrealizedPnL = unreal.To.RoundLedger()
+	view.NotionalValue = notional.To.RoundLedger()
+	view.MarginUsed = margin.To.RoundLedger()
+	view.Valued = true
+	return view, nil
+}
+
+// RecordEquityPoint persists a snapshot's equity and advances the peak.
+//
+// Called after every state change that can move equity. Peak equity only ever
+// rises, so the drawdown limit cannot be loosened by a losing streak.
+func (s *Service) RecordEquityPoint(ctx context.Context, snap Snapshot) error {
+	return s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		if err := s.store.Accounts.UpdatePeakEquityTx(ctx, tx, snap.Account.ID, snap.State.Equity); err != nil {
+			return err
+		}
+		return s.store.Accounts.RecordEquityPoint(ctx, tx, snap.Account.ID,
+			snap.State.Equity, snap.State.Balance, snap.State.UnrealizedPnL,
+			snap.State.MarginUsed, snap.State.AsOf)
+	})
+}
+
+// RollTradingDayIfNeeded resets the daily-loss reference point when the
+// account's trading day has turned over.
+//
+// The boundary is the venue's rollover, not local midnight: a "daily" loss
+// limit that resets at a different time from the venue's own day would let a
+// strategy take two days' worth of losses inside one trading session.
+func (s *Service) RollTradingDayIfNeeded(ctx context.Context, account domain.Account, dayBoundary time.Time) (bool, error) {
+	st, err := s.store.Accounts.EquityState(ctx, account.ID)
+	if err != nil {
+		return false, err
+	}
+	if !st.DayStartAt.Before(dayBoundary) {
+		return false, nil
+	}
+	snap, err := s.Compute(ctx, account)
+	if err != nil {
+		return false, err
+	}
+	err = s.store.Pool().InTx(ctx, func(tx pgx.Tx) error {
+		return s.store.Accounts.RollTradingDayTx(ctx, tx, account.ID, snap.State.Equity, dayBoundary)
+	})
+	return err == nil, err
+}
+
+// AttributionRow is P&L grouped by a dimension.
+type AttributionRow struct {
+	Key         string
+	Label       string
+	RealizedPnL money.Amount
+	Trades      int
+	WinRate     decimal.Decimal
+}
+
+// AttributionByInstrument groups realised P&L by instrument, so "where did the
+// money actually come from?" has an answer that does not require exporting
+// every fill into a spreadsheet.
+func (s *Service) AttributionByInstrument(ctx context.Context, accountID uuid.UUID, ccy money.Currency, limit int) ([]AttributionRow, error) {
+	closed, err := s.store.Trading.ClosedPositions(ctx, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	agg := map[string]*AttributionRow{}
+	wins := map[string]int{}
+	for _, p := range closed {
+		row, ok := agg[p.InstrumentID]
+		if !ok {
+			row = &AttributionRow{
+				Key:         p.InstrumentID,
+				Label:       p.Symbol,
+				RealizedPnL: money.Zero(ccy),
+			}
+			agg[p.InstrumentID] = row
+		}
+		// Position P&L is stored in the position's own currency; convert once
+		// per position rather than assuming it matches the account.
+		conv, err := s.converter.Convert(ctx, p.RealizedPnL, ccy)
+		if err != nil {
+			continue
+		}
+		row.RealizedPnL = row.RealizedPnL.MustAdd(conv.To)
+		row.Trades++
+		if conv.To.IsPositive() {
+			wins[p.InstrumentID]++
+		}
+	}
+	out := make([]AttributionRow, 0, len(agg))
+	for k, row := range agg {
+		if row.Trades > 0 {
+			row.WinRate = decimal.NewFromInt(int64(wins[k])).
+				Div(decimal.NewFromInt(int64(row.Trades))).
+				Round(4)
+		}
+		row.RealizedPnL = row.RealizedPnL.RoundLedger()
+		out = append(out, *row)
+	}
+	return out, nil
+}

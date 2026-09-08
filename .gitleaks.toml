@@ -1,0 +1,67 @@
+# Gitleaks configuration.
+#
+# Every allowlist entry below is a triaged finding with a stated reason. The
+# alternative — a blanket exclusion, or leaving fourteen unexplained hits in
+# every report — means the next person cannot tell a real leak from noise.
+#
+# Nothing here suppresses a rule for source code that could hold a real
+# credential. The application's own secrets come from the environment and have
+# no field in any committed file.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Triaged, with reasons"
+
+paths = [
+  # Build output and dependencies. Not tracked by git; a filesystem scan
+  # (`gitleaks dir`) reaches them, the CI scan of history does not. Next.js
+  # generates its own server-action encryption key into .next at build time.
+  '''(^|/)\.next/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)__pycache__/''',
+
+  # Local, git-ignored environment file. It holds this machine's development
+  # keys by design. If this ever appears in git history, that is a real
+  # incident and .gitignore did not do its job.
+  '''^\.env$''',
+
+  # Scan reports quote the values they found.
+  '''^reports/''',
+]
+
+regexes = [
+  # The documented development keys in .env.example, and the same values in
+  # the config test that asserts they are REFUSED outside development.
+  #
+  # They are base64 of readable placeholder text ("development-only-..."), and
+  # config.Load rejects any key whose plaintext starts with "development-only"
+  # when VANTAGE_ENV is staging or production. A known key is therefore fatal
+  # exactly where it matters, which is stronger than shipping no default and
+  # hoping nobody invents one.
+  '''ZGV2ZWxvcG1lbnQtb25seS[A-Za-z0-9+/=]*''',
+  '''development-only-[a-z0-9-]*''',
+]
+
+# The project's own rule, in addition to the defaults: a Postgres connection
+# string carrying a password must never be committed.
+#
+# Gitleaks uses Go's RE2, which has no negative lookahead, so the documented
+# development and CI passwords are excluded by a rule-level allowlist rather
+# than by the pattern itself.
+[[rules]]
+id = "vantage-postgres-url"
+description = "Postgres connection string with an embedded password"
+regex = '''postgres(?:ql)?://[a-zA-Z0-9_]+:[^@\s]{4,}@'''
+tags = ["database", "credential"]
+
+  [rules.allowlist]
+  description = "Documented development and CI passwords, and doc placeholders"
+  regexes = [
+    '''vantage_(app|owner|research|superuser)_dev_password''',
+    '''ci_only_password''',
+    # Placeholders in documentation and tests, e.g. postgres://u:p@localhost.
+    '''postgres(?:ql)?://u:p@''',
+  ]

@@ -1,0 +1,347 @@
+# Security pipeline.
+#
+# Scope: this repository and the images built from it. NOTHING here scans an
+# external system. Exness, MetaQuotes, Trading Economics and every third-party
+# provider are explicitly out of scope and must never be probed — see
+# docs/THREAT_MODEL.md.
+#
+# The ZAP baseline job runs only against a stack this workflow started itself,
+# on localhost, inside the runner.
+
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Weekly, so a newly published advisory in an unchanged dependency is still
+    # found. Most vulnerabilities arrive without a commit.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27.0'
+  NODE_VERSION: '22.21.0'
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  secrets:
+    name: Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a secret that was committed and then removed is
+          # still a leaked secret.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  static-analysis:
+    name: Static analysis (Semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Registry rulesets rather than hand-written rules: p/security-audit and
+      # the language packs cover injection, crypto misuse, path traversal and
+      # the usual authorisation mistakes far better than anything written here
+      # would.
+      - name: Scan
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/golang \
+            --config p/python \
+            --config p/typescript \
+            --config p/react \
+            --config p/dockerfile \
+            --config p/sql-injection \
+            --error \
+            --sarif --output semgrep.sarif \
+            --metrics off \
+            .
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+
+  go-vulnerabilities:
+    name: Go vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/control-api/go.sum
+
+      # govulncheck is call-graph aware: it reports vulnerabilities in code
+      # that is actually reachable, which keeps the signal usable.
+      - name: govulncheck
+        working-directory: services/control-api
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  python-vulnerabilities:
+    name: Python vulnerabilities (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: pip-audit
+        working-directory: services/quant
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install -e .
+          pip-audit --strict --progress-spinner off
+
+  node-vulnerabilities:
+    name: Node vulnerabilities (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      # High and above fails. Moderate advisories in a build-time dependency
+      # are reported but do not block, because a terminal that cannot be
+      # deployed is its own availability problem.
+      - name: npm audit
+        working-directory: apps/web
+        run: npm audit --audit-level=high
+
+  dependency-scan:
+    name: Dependency scan (OSV-Scanner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            --recursive
+            --skip-git
+            ./
+
+  filesystem-scan:
+    name: Filesystem scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          # Secrets and misconfiguration matter as much as vulnerable
+          # packages: a hardcoded credential and a root container are both
+          # findings.
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+  image-scan:
+    name: Image scan (Trivy)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: control-api
+            context: services/control-api
+            file: services/control-api/Dockerfile
+          - name: quant
+            context: services/quant
+            file: services/quant/Dockerfile
+          - name: web
+            context: .
+            file: apps/web/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          load: true
+          tags: vantage/${{ matrix.name }}:scan
+
+      - name: Trivy image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: vantage/${{ matrix.name }}:scan
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+  zap-baseline:
+    name: API baseline (OWASP ZAP, localhost only)
+    runs-on: ubuntu-latest
+    # Only on demand and on the weekly schedule: it starts a stack, and a
+    # dynamic scan on every pull request would be slow without finding much
+    # that the static jobs miss.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: vantage
+          POSTGRES_USER: vantage_superuser
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vantage_superuser -d vantage"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: services/control-api/go.sum
+
+      - name: Create runtime roles
+        env:
+          PGPASSWORD: ci_only_password
+        run: psql -h 127.0.0.1 -U vantage_superuser -d vantage -v ON_ERROR_STOP=1 -f infra/docker/postgres-init/00-roles.sql
+
+      - name: Start the control plane
+        working-directory: services/control-api
+        env:
+          VANTAGE_ENV: local
+          VANTAGE_EXECUTION_MODE: paper
+          VANTAGE_ENABLED_BROKERS: mock
+          VANTAGE_HTTP_ADDR: '127.0.0.1:8080'
+          VANTAGE_DATABASE_URL: postgres://vantage_app:vantage_app_dev_password@127.0.0.1:5432/vantage?sslmode=disable
+          VANTAGE_MIGRATION_DATABASE_URL: postgres://vantage_owner:vantage_owner_dev_password@127.0.0.1:5432/vantage?sslmode=disable
+          VANTAGE_DATA_ENCRYPTION_KEY_VERSION: '1'
+          VANTAGE_PUBLIC_WEB_ORIGIN: http://localhost:3000
+        run: |
+          export VANTAGE_DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          export VANTAGE_SESSION_SIGNING_KEY="$(openssl rand -base64 32)"
+          go run ./cmd/control-api migrate
+          go run ./cmd/control-api serve &
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8080/health/live > /dev/null; then
+              echo "control plane is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "control plane did not start"
+          exit 1
+
+      # The target is 127.0.0.1 inside this runner and nothing else. No
+      # external host is ever supplied here.
+      - name: ZAP baseline
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: 'http://127.0.0.1:8080'
+          # A baseline scan is passive: it crawls and inspects responses. It
+          # does not attack, which is the correct posture for a scan running
+          # unattended against a stack holding a database.
+          cmd_options: '-a -j -l WARN'
+          allow_issue_writing: false
+          fail_action: false
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-baseline-report
+          path: |
+            report_html.html
+            report_json.json
+            report_md.md
+
+  policy:
+    name: Repository policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # These are the project's own rules, checked mechanically because a rule
+      # nobody enforces is a preference.
+      - name: No committed environment files
+        run: |
+          if git ls-files | grep -E '^\.env$|^\.env\.(local|production)$' ; then
+            echo "FAIL: an environment file is committed"
+            exit 1
+          fi
+          echo "OK: no .env is tracked"
+
+      - name: No committed model artefacts or market datasets
+        run: |
+          if git ls-files | grep -E '\.(joblib|pkl|onnx|parquet|feather|h5|pt|pth)$' ; then
+            echo "FAIL: a model artefact or dataset is committed"
+            exit 1
+          fi
+          echo "OK: no artefacts or datasets are tracked"
+
+      - name: No private keys or certificates
+        run: |
+          if git ls-files | grep -E '\.(pem|key|p12|pfx|jks)$' ; then
+            echo "FAIL: key material is committed"
+            exit 1
+          fi
+          echo "OK: no key material is tracked"
+
+      - name: No attribution comments
+        run: |
+          if git grep -nEi 'claude (generated|wrote)|generated by (claude|an? ai)|as an ai (language )?model' -- . ; then
+            echo "FAIL: attribution or assistant-generated comments found"
+            exit 1
+          fi
+          echo "OK: no attribution comments"
+
+      - name: No TODO or FIXME in trading-critical code
+        run: |
+          paths="services/control-api/internal/oms services/control-api/internal/risk services/control-api/internal/broker services/control-api/internal/store"
+          if git grep -nE 'TODO|FIXME|XXX|HACK' -- $paths ; then
+            echo "FAIL: unresolved markers in trading-critical code"
+            exit 1
+          fi
+          echo "OK: no unresolved markers in the order path"

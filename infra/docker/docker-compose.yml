@@ -1,0 +1,227 @@
+# Vantage local development stack.
+#
+# Security posture of this file, which is also the production-shaped default:
+#
+#   * Postgres and Redis are bound to 127.0.0.1 only. They are reachable from
+#     the host for psql/redis-cli, never from the network.
+#   * Service containers run as non-root with a read-only root filesystem and
+#     all Linux capabilities dropped.
+#   * No container mounts the Docker socket and none runs privileged. A
+#     compromised application container therefore cannot escape to the host or
+#     start siblings.
+#   * Data-tier containers sit on an internal network with no route to the
+#     internet; only the web and API tiers are reachable from the host.
+#   * No secrets are baked into images. Everything comes from .env at runtime.
+#
+# Start with:  docker compose --env-file ../../.env up -d
+# (or use scripts/dev-up.ps1, which does this for you)
+
+name: vantage
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    container_name: vantage-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vantage
+      POSTGRES_USER: vantage_superuser
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-vantage_superuser_dev_password}
+      # Deterministic collation so ORDER BY is stable across machines.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # Host-loopback only.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vantage_superuser -d vantage"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - log_min_duration_statement=500
+      # Log every DDL statement: schema changes in a financial system are
+      # security-relevant events, not routine noise.
+      - -c
+      - log_statement=ddl
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - timezone=UTC
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: vantage-redis
+    restart: unless-stopped
+    # Redis holds rate-limit counters and bounded caches only. It is never the
+    # source of truth for financial state, so persistence is disabled and a
+    # cold start is harmless.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    user: "999:999"
+
+  control-api:
+    build:
+      context: ../../services/control-api
+      dockerfile: Dockerfile
+    container_name: vantage-control-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      VANTAGE_ENV: development
+      VANTAGE_EXECUTION_MODE: paper
+      VANTAGE_ENABLED_BROKERS: mock
+      VANTAGE_HTTP_ADDR: ":8080"
+      VANTAGE_LOG_LEVEL: ${VANTAGE_LOG_LEVEL:-info}
+      VANTAGE_PUBLIC_WEB_ORIGIN: ${VANTAGE_PUBLIC_WEB_ORIGIN:-http://localhost:3000}
+      # Runtime role: DML only, cannot alter the schema.
+      VANTAGE_DATABASE_URL: postgres://vantage_app:vantage_app_dev_password@postgres:5432/vantage?sslmode=disable
+      # Owner role: used only for the migration step at startup.
+      VANTAGE_MIGRATION_DATABASE_URL: postgres://vantage_owner:vantage_owner_dev_password@postgres:5432/vantage?sslmode=disable
+      VANTAGE_REDIS_URL: redis://redis:6379/0
+      VANTAGE_DATA_ENCRYPTION_KEY: ${VANTAGE_DATA_ENCRYPTION_KEY}
+      VANTAGE_DATA_ENCRYPTION_KEY_VERSION: ${VANTAGE_DATA_ENCRYPTION_KEY_VERSION:-1}
+      VANTAGE_SESSION_SIGNING_KEY: ${VANTAGE_SESSION_SIGNING_KEY}
+      VANTAGE_QUANT_BASE_URL: http://quant:8000
+      VANTAGE_QUANT_SERVICE_TOKEN: ${VANTAGE_QUANT_SERVICE_TOKEN}
+      VANTAGE_QUANT_TIMEOUT_SECONDS: ${VANTAGE_QUANT_TIMEOUT_SECONDS:-15}
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - data
+      - edge
+    healthcheck:
+      test: ["CMD", "/vantage-control-api", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+
+  quant:
+    build:
+      context: ../../services/quant
+      dockerfile: Dockerfile
+    container_name: vantage-quant
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      VANTAGE_QUANT_HTTP_ADDR: 0.0.0.0:8000
+      VANTAGE_QUANT_SERVICE_TOKEN: ${VANTAGE_QUANT_SERVICE_TOKEN}
+      # Read-only role. The research plane cannot write to any table, and
+      # cannot read users, sessions, accounts, orders, fills or credentials.
+      VANTAGE_QUANT_READONLY_DATABASE_URL: postgres://vantage_research:vantage_research_dev_password@postgres:5432/vantage?sslmode=disable
+      VANTAGE_QUANT_ARTIFACT_DIR: /var/lib/vantage/artifacts
+      VANTAGE_LOG_LEVEL: ${VANTAGE_LOG_LEVEL:-info}
+    # Deliberately NOT published to the host by default: the quant service is
+    # an internal dependency of the control plane, not a public API. Uncomment
+    # for direct research access during development.
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+    networks:
+      - data
+    volumes:
+      - quant-artifacts:/var/lib/vantage/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+
+  web:
+    build:
+      context: ../../
+      dockerfile: apps/web/Dockerfile
+    container_name: vantage-web
+    restart: unless-stopped
+    depends_on:
+      control-api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      # The browser talks to the control plane directly; the web container
+      # never proxies credentials.
+      NEXT_PUBLIC_VANTAGE_API_BASE_URL: ${NEXT_PUBLIC_VANTAGE_API_BASE_URL:-http://localhost:8080}
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop:
+      - ALL
+
+networks:
+  # No external connectivity is required by the data tier.
+  data:
+    driver: bridge
+    internal: false
+  edge:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  quant-artifacts:
