@@ -3,8 +3,15 @@
 Every claim below is either something that was executed and observed, or is
 labelled as not verified. Nothing is asserted from reading the code alone.
 
-Commit: `c9bca9e`. Appendix A is the summary; this body is the evidence
-behind it.
+Commits: the reconciliation milestone is `e0a7f3b`, `bf8e151` and the commit
+that carries this revision of the report. Appendix A is the summary; this body
+is the evidence behind it.
+
+This revision covers the reconciliation, recovery and operator-control
+milestone. The previous revision's largest recorded gap was that
+reconciliation could detect divergence but not repair it; that gap is closed,
+and section 19 states precisely what is repaired automatically and what is
+deliberately never repaired without a human.
 
 ---
 
@@ -197,13 +204,71 @@ two-second window after a reseed, before the ingestor's first tick — the
 platform was correct to refuse, and the **test** was fixed to wait for a
 tradable feed and to assert on it.
 
-## 19. Reconciliation
+## 19. Reconciliation, recovery and operator control
 
-The venue wins. Unresolved critical discrepancies halt automated trading and
-nothing else.
+Detection was already here. What this section now covers is **repair**, which
+is the part that decides whether the platform can be left running.
 
-**Verified:** a clean run comparing orders and positions completed during the
-smoke run.
+The governing rule: only divergence that is *provable* is repaired without a
+human. Four of thirteen issue types qualify, and each qualifies because the
+evidence identifies exactly one local order -- not because the answer is
+likely. Everything else halts the narrowest scope that contains it and waits.
+
+- **A pure classifier.** `reconcile.Classify(local, broker, tolerance)` is a
+  function of two snapshots with no store, adapter or clock. That is why the
+  taxonomy has 34 unit tests: every branch is reachable by constructing two
+  structs.
+- **Snapshot-first.** Both sides are captured before any repair, so a run
+  reasons about one consistent picture and re-runs against the same evidence
+  identically.
+- **One accounting path.** `internal/booking` is the only code that appends a
+  fill, moves a position or books fill P&L, and reconciliation uses it. A
+  recovered fill therefore passes the same nine validations, the same overfill
+  check and the same `(broker_name, broker_fill_id)` unique index as a live
+  one. Two architecture tests fail the build if a second writer appears or if
+  `booking` acquires a broker adapter.
+- **A separate repair state machine.** `ACCEPTED -> FILLED` is legal as a
+  repair and remains illegal in ordinary execution, where it would be an OMS
+  bug. Neither table permits leaving a terminal state. Every repair is stamped
+  `is_repair` and names the issue that justified it.
+- **Uncertainty stays uncertain.** An order whose outcome is unknown is
+  `FAILED` *and* `reconciliation_required`, so it is queryable, visible in the
+  operations view, counted in readiness and picked up by the next run.
+- **Seven named operator actions, ADMIN only**, each requiring an open issue, a
+  permitted action and a reason of at least ten characters. There is no
+  endpoint that sets an order's status, and `SET_ORDER_STATUS` is asserted
+  invalid by a test. `IMPORT_BROKER_FILL` accepts no quantity or price: it
+  reconstructs the execution from the evidence stored at detection time.
+- **Durable concurrency.** One run per account via a PostgreSQL session
+  advisory lock; a second caller is told it declined. The OMS re-reads the halt
+  state *inside* the order transaction after taking the same account row lock a
+  repair takes, so the ordering is Postgres's decision rather than a function
+  of timing.
+
+**Verified**, against a running stack and a real venue simulator:
+
+- The acceptance test passes: an order is submitted, the venue accepts and
+  fills it, the local transaction fails before persistence, the process
+  restarts, start-up reconciliation discovers the missing fill, imports it
+  **exactly once**, and the order, position and ledger converge with the
+  trading state returning to HEALTHY.
+- Five consecutive runs against the same divergence produce one repair and
+  four no-ops, with identical fill count, transaction count and balance
+  compared as exact numerics.
+- Eight concurrent runs produce one execution and seven 409s, with no 500 and
+  no double repair.
+- An ambiguous venue execution -- one attributable to zero or several local
+  orders -- stays OPERATOR_ACTION_REQUIRED and is never booked. This is the
+  separate acceptance criterion and it holds.
+- Reconciliation racing new order submission settles without an inconsistent
+  position.
+- After every scenario: the ledger is gapless, the stored balance equals the
+  ledger-derived balance, and positions equal their fills.
+
+**Not repaired automatically, permanently:** `POSITION_MISMATCH` and
+`BALANCE_MISMATCH`. A mismatch is a symptom; writing the quantity to match the
+venue destroys the evidence of the cause and de-links the position from the
+fills that built it.
 
 ## 20. Regulatory boundary
 
@@ -311,8 +376,14 @@ WITHOUT `--ignore-unfixed`:
 | web | 0 | |
 | research (quant) | **54** | All from `python:3.12.12-slim-trixie` (Debian 13.6): `perl-base` (3 CRITICAL), `util-linux` and its libraries, `ncurses`, `gzip`, `libacl1`, `libsqlite3-0`, `libsystemd0` |
 
-Every one of those 54 has an **empty fixed-version field** — Debian has not
-published a fix — and the Dockerfile already runs `apt-get upgrade -y`, so
+Re-scanned again on 2026-09-08 after this milestone, with no severity filter
+and no ignore file at all, the picture is unchanged: control-api 1 (the
+module-level openpgp advisory), web 0 at every severity, research 173 (3
+CRITICAL, 51 HIGH, 57 MEDIUM, 57 LOW, 5 UNKNOWN) plus the 3 accepted
+application-level findings in pip's vendored tree.
+
+Every one of those 54 HIGH/CRITICAL has an **empty fixed-version field** —
+Debian has not published a fix — and the Dockerfile already runs `apt-get upgrade -y`, so
 there is nothing to apply. None is added to `.trivyignore`, deliberately:
 suppressing those ids would also hide them once fixes land, which is precisely
 when they should reappear.
@@ -373,8 +444,24 @@ rather than left standing:
   describe
 - Go and Node version floors were understated in the docs and, worse, in the
   Dockerfile, where the pinned 1.23.5 could not build a module requiring 1.26
+- `ORDER_LIFECYCLE.md` claimed a flatten "carries `source = manual`" and used
+  that to explain why the event blackout does not block it. It carries
+  `source = risk_control`, and the blackout *did* block it -- defect 7. The
+  document was not merely stale: it described a safety property the code did
+  not have, which is the kind of documentation error that stops anyone looking
+  for the bug
+- `CommissionPerLot` was documented as being "in the account currency" while
+  both the venue and the booking path treat it as the quote currency. A reader
+  trusting the comment would double-convert
 
 Each document names what is missing, not only what exists.
+
+`RECONCILIATION.md` was rewritten for this milestone and is the longest of
+them: the governing rule, the run shape, the thirteen-type taxonomy with why
+each automatic repair is provable and each operator case is not, the
+identifier-ownership table across `VantageOrderID` / `ClientOrderID` /
+`BrokerOrderID` / `BrokerExecutionID`, the external-activity policy, halt
+scope, and the limits that remain.
 
 ## 30. Defects this audit found, and what it changed
 
@@ -504,6 +591,188 @@ the call and restored after.
 
 Both fixed, and verified by a full reset from an empty volume.
 
+---
+
+## 30a. Defects the reconciliation milestone found
+
+Building the repair path meant exercising divergence deliberately, and that
+surfaced nine more defects. Three of them were in code the previous audit had
+already passed as correct, and one of them -- defect 15 -- was in the repair
+subsystem itself, defeating its own acceptance criterion.
+
+### 7. Three risk checks refused to let an operator close a position
+
+A flatten was refused with `event_risk_blackout`. Then, once that was fixed,
+with `daily_loss_limit_reached`. The first was found by a Playwright fixture
+that could not clean up after itself; the second by the race suite failing in a
+way that looked like a concurrency bug.
+
+The cause in both cases: a check written to *limit* exposure or loss was
+applied to an order that *reduced* it. The event blackout's own comment claimed
+humans could always close a position -- and it was true for `SourceManual`, but
+a flatten carries `SourceRiskControl`, so the exemption never applied to the
+one order type it was written for. The daily-loss and drawdown ceilings had no
+exemption at all: once breached, the account was locked into the losing
+position that breached it, while it went on losing.
+
+This was the third instance of one mistake. The previous audit found the same
+inversion in the per-order notional cap: a position built by several
+individually permitted orders could not be closed by one order, because closing
+it exceeded the per-order limit.
+
+The fix is a rule rather than a third patch, written out in
+`internal/risk/engine.go`: **a check whose purpose is to limit exposure or loss
+must never refuse an order that strictly reduces exposure.** "Strictly
+reducing" is opposite side AND quantity no greater than the open position --
+both halves, because "opposite side" alone let an account long 0.08 lots sell
+5.00 and skip the exposure family entirely. Seven tests, and the rule is also
+recorded in `CLAUDE.md` and `docs/ORDER_LIFECYCLE.md` because the failure is
+invisible in normal operation: everything looks correct until the day someone
+needs out.
+
+### 8. The admin-only repair endpoints were unreachable by admins
+
+Every operator action returned "Account not found". `accountForRequest` resolves
+an account **through the authenticated user**, which is exactly right for a
+trading route and exactly wrong here: an admin owns no trading account, and
+repair is admin-only by design. So the only role permitted to use the endpoints
+was the only role that could not.
+
+It was found because seven Playwright security tests silently *skipped* rather
+than failed -- they could not construct the precondition. A skip that reads as
+"nothing to test here" is worse than a failure.
+
+Fixed with `accountForOperations`, which widens to any account for ADMIN only.
+The same defect was then found in two more handlers. It is now locked by
+`TestEveryReconciliationHandlerUsesTheOperationsScope`, because the failure
+mode is silent: the route answers, plausibly, with the wrong thing.
+
+### 9. A filled order was reported as missing from the venue
+
+`FetchOpenOrders` returns open orders. A filled order is not open, so every
+locally-filled order looked like it had vanished from the broker, and the
+proposed repair was to mark it rejected. Only the terminal-state guard in the
+repair transition table stopped it.
+
+Fixed by capturing the local snapshot **first** and resolving every order the
+open list does not cover individually by client id, plus an independent guard
+that refuses to call an order missing when the venue is simultaneously
+reporting an execution against it. Two tests.
+
+### 10. One problem produced two contradictory issues
+
+A single lost fill raised both `FILL_MISSING_LOCALLY` ("safe to import
+automatically") and `PARTIAL_FILL_MISMATCH` ("an operator must review this").
+Worse, the second survived the first's repair and kept the order flagged, so a
+successful automatic recovery still left the account halted.
+
+Fixed by threading an `explained` set from the execution pass into the order
+pass: an order whose discrepancy is already accounted for by an execution
+finding does not get a second, contradictory one.
+
+### 11. Transient divergence halted an account permanently
+
+Issues were opened and never closed unless an operator closed them. A
+divergence that resolved itself -- a fill arriving between two runs -- left an
+open issue and a halted account with nothing left to look at.
+
+Fixed by closing open issues whose fingerprint the current run did not
+re-detect and which predate that run.
+
+### 12. Ordinary replays were reported as duplicate executions
+
+The execution cursor deliberately overlaps by a minute, so every poll re-sees
+recent executions. Each re-sighting raised a `DUPLICATE_EXECUTION_REPORT` and
+counted as a repair, which made the repair count meaningless -- the exact
+notification storm the brief warns against.
+
+Redefined: a duplicate report is only a finding when the venue re-reports the
+same execution id with *different* quantity, price or side. That is a real
+contradiction, it is critical, and it requires an operator. An identical
+re-report is the steady state and is silent.
+
+### 13. Migration 0010 halted the account with evidence nobody could act on
+
+The migration imported the old `reconciliation_discrepancies` rows as OPEN
+issues. Fifty-four of the resulting sixty-three open issues were legacy rows
+carrying only `{"value": "..."}` as evidence and a `migrated:<id>` fingerprint,
+which no operator action and no RECHECK could resolve.
+
+Fixed by migration 0011, which closes them as RESOLVED with a written reason
+and clears the order flags they left behind. The lesson is narrow but real: a
+migration that creates *work items* has to consider whether the work is
+actionable.
+
+### 14. The mock venue's own balance was in the wrong currency
+
+The new balance check reported a `BALANCE_MISMATCH` that grew with every trade:
+ledger 486.12, venue 499.24, and the ratio of their movements was 18.25 -- the
+USD/ZAR rate.
+
+The venue was crediting realised P&L, denominated in the instrument's quote
+currency, straight into a rand-denominated balance, and it reported a
+commission on every fill that it never deducted. Both are the venue's own
+bookkeeping, not Vantage's, so no operator action could ever have repaired it.
+
+That made the check worse than useless: a permanent warning nobody can clear is
+how people learn to ignore warnings. Fixed with a `RateSource` seam on the mock
+venue that converts realised P&L, commission and swap into the account's
+currency, failing closed when no rate is available. After the fix, on a fresh
+seed and a full race suite, the venue reads 492.0302 and the ledger 492.0200 --
+a rounding difference, well inside tolerance.
+
+It is worth being clear about what this was: reconciliation found a real
+accounting bug in a component that had passed every previous test, because no
+previous test compared the two books at all.
+
+### 15. An unresolved ambiguous execution closed itself half an hour later
+
+The most serious defect of the milestone, because it defeated the milestone's
+own acceptance criterion by a side door.
+
+`closeVanishedIssues` closes an open issue the current run did not re-detect,
+reasoning that a run captures and classifies both views completely, so a
+fingerprint absent from the result no longer exists. For executions that
+reasoning holds only inside the stored cursor window. Once the cursor advanced
+past an unattributable execution, later runs stopped fetching it -- and "not
+re-detected" silently changed meaning from **fixed** to **no longer
+examined**.
+
+Observed on a live stack: three orphan venue executions, still present and
+still unbooked in `mock_venue_fills`, whose `EXTRA_BROKER_FILL` issues were
+resolved by a scheduled run about thirty minutes after detection with the
+reason "The divergence is gone". Readiness went back to HEALTHY and automation
+was permitted again. Nothing had been fixed and no operator had seen anything.
+
+This is precisely what the brief forbids: an ambiguous broker-side execution
+must remain unresolved and require operator review. It did, for half an hour,
+and then quietly did not.
+
+The fix **freezes the execution cursor** while any execution-derived issue is
+unresolved, so a run cannot stop looking at evidence nothing has resolved.
+Position and balance mismatches need no such treatment: they are computed from
+a full position snapshot on every run and are therefore always re-examined.
+
+The first attempt at the fix was to widen the window back to the issue's
+detection time instead, and it had the same hole in miniature: an execution
+detected later than the cursor overlap would fall outside the widened window
+too, and the issue would close itself again. A frozen cursor is still the
+window that saw the execution in the first place, so it cannot stop seeing
+it.
+
+Two things about how it was found are worth recording:
+
+- **The existing acceptance test could not catch it.** That test runs
+  reconciliation *once*. Only a second run, after the cursor has moved,
+  exposes the behaviour. `TestAnUnresolvedIssueSurvivesLaterRuns` now runs four
+  and asserts the issue is still open after each.
+- **It was found by looking at the operations page, not by a test.** The page
+  said HEALTHY with zero open issues on a database that demonstrably still
+  contained three unbooked venue executions. A test suite that had just
+  reported 14/14 green did not disagree with it.
+
+---
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This
@@ -517,16 +786,28 @@ been executed and moved into the tally — and what remains is what remains.
   machine. Both are configured in CI.
 - **No penetration test** against a deployed instance. The ZAP baseline is a
   passive scan of localhost, which is a much weaker claim.
-- **Five high-risk packages have no unit tests**: `oms`, `store`, `reconcile`,
-  `portfolio`, `orchestrator`. They are covered end-to-end, but
-  `handleBrokerError` has a six-branch decision table and three of those
-  branches are reached by no test at all. This is the largest piece of
-  remaining technical debt. See Appendix A.
-- **Reconciliation cannot repair.** It detects a fill divergence and halts
-  automation; it cannot ingest the missing fills, `ACCEPTED -> FILLED` is
-  forbidden by the state machine, and no endpoint resolves a discrepancy by
-  hand. Defect 1 above produced exactly this state, and clearing it required a
-  database reset — which is not an operational procedure.
+- **`go test -race` has never been run on this machine.** It requires cgo and
+  there is no C compiler installed (`gcc: command not found`), so the detector
+  cannot build. The concurrency evidence in this report is therefore
+  *behavioural* -- 14 integration tests driving genuine parallel HTTP requests
+  against a real database -- and not detector-verified. Those two things catch
+  different bugs and neither substitutes for the other. CI is configured to run
+  `-race`; CI has not run.
+- **`orchestrator`, `httpapi`, `fx`, `ratelimit`, `marketdata`, `quant` and
+  `scheduler` still have no unit tests.** `oms`, `store`, `reconcile` and
+  `portfolio` now do, and `handleBrokerError`'s six-branch table is fully
+  covered, so this list is shorter than it was -- but it is still the largest
+  piece of remaining technical debt. See Appendix A.
+- **Reconciliation cannot repair everything, by design.** Nine of thirteen
+  issue types require an operator, and two of those -- position and balance
+  mismatch -- can never be repaired automatically at all. That is the intended
+  behaviour, not a gap. The real remaining limits are narrower: a venue that
+  reports a plausible but false execution matching exactly one local order
+  would be repaired automatically, since no design can distinguish a correct
+  venue from a convincingly wrong one without a second source; and the
+  automatic repair set was chosen against MockBroker's semantics, so a real
+  provider with different identifier guarantees would need it re-derived
+  rather than inherited.
 - **No scheduled backups and no WAL archiving.** The restore drill passes but
   is run by hand, so the recovery point is the last manual dump and nothing
   would notice a backup that silently began producing an unusable file.
@@ -582,8 +863,10 @@ trust needs the difference.
 | 13 | Authorisation (RBAC) | COMPLETE | Viewer/trader/admin with separation of duties (an admin cannot trade). Asserted against the API directly, not only through the UI |
 | 14 | CSRF, CORS and headers | COMPLETE | Double-submit CSRF, strict origin allowlist, COEP/COOP/CORP. ZAP baseline 0 FAIL on both surfaces |
 | 15 | Content-Security-Policy | PARTIAL | Complete except `script-src 'unsafe-inline'`. A nonce policy was implemented and reverted: Next 16's Turbopack emits chunk tags without the nonce, so `strict-dynamic` blocked every script and the terminal rendered nothing. Documented with the exact change to make when that lands |
-| 16 | Reconciliation — detection | COMPLETE | Order and position comparison by broker id and client id, discrepancy severities, automation blocked on critical findings, alerting wired |
-| 17 | Reconciliation — repair | **PARTIAL** | It detects a fill divergence and halts automation but cannot ingest the missing fills, and `ACCEPTED -> FILLED` is forbidden by the state machine. There is also no endpoint to resolve a discrepancy by hand. This is the most important next milestone |
+| 16 | Reconciliation — detection | COMPLETE | 13-type taxonomy, snapshot-based, classified by a pure function with 34 unit tests. Fingerprint deduplication with a partial unique index; stale issues closed when they stop being detected |
+| 17 | Reconciliation — repair | COMPLETE | Four provable types repaired automatically through the same accounting path an ordinary fill uses; a separate repair state machine that cannot leave a terminal state; every repair stamped and attributed to its issue. Crash-recovery, idempotence, concurrent-run and ambiguity tests all pass |
+| 17a | Reconciliation — operator control | COMPLETE | Seven ADMIN-only actions with mandatory reasons, full issue history, failed attempts audited, no "set order status" endpoint. 21 Playwright tests including forged ids, cross-account ids, mass assignment and repeat resolution |
+| 17b | Trading verdict and halt scope | COMPLETE | HEALTHY / DEGRADED / TRADING_HALTED / RECONCILIATION_REQUIRED derived from real state and surfaced in readiness; halt scope per issue type with the narrowest blast radius that contains it; manual read-only use unaffected during an incident |
 | 18 | Unknown-outcome handling | COMPLETE | `ErrUnknownOutcome` is distinct from rejection; FAILED means "outcome unknown" and is never retried. Proven with a deterministic lost-response fault, including that the order stays FAILED |
 | 19 | Deterministic broker faults | COMPLETE | 12 modes with exact firing counts, never probabilistic. 9 unit tests; all 12 armed through the development endpoint in a Playwright test |
 | 20 | Mock venue | COMPLETE | Its own tables and transaction, spread, slippage, partial fills, order-book state |
@@ -592,7 +875,7 @@ trust needs the difference.
 | 23 | Market data quality gates | COMPLETE | Staleness, timestamp regression, duplicate detection, spread ceiling. Unit tested in `domain`; the refusals are asserted in smoke |
 | 24 | Economic calendar | COMPLETE | Provider interface, ingestion, and an event blackout that binds automated orders. Unit tested in `econdata` |
 | 25 | News feed | COMPLETE | Provider interface, ingestion, labelled as development fixtures in the API response |
-| 26 | Portfolio valuation | PARTIAL | Correct and exercised by every smoke run and by equity history, but the package has **no unit tests** — margin, exposure and unrealised P&L are verified only end-to-end |
+| 26 | Portfolio valuation | COMPLETE | Exercised by every smoke run and by equity history, and the exposure arithmetic is now extracted into a pure function with 7 unit tests covering an unpriceable position, a hedged book, cross-instrument currency netting and the empty-currency zero |
 | 27 | Equity history and attribution | COMPLETE | Recorded per snapshot, exposed and rendered |
 | 28 | Strategy library (12) | COMPLETE | Implemented in the research plane with tests; 5 promoted to paper by the seed |
 | 29 | Strategy orchestrator | PARTIAL | Evaluates and routes through the same OMS as a manual order (asserted structurally), and concurrent runs are covered by the race suite — but the package has **no unit tests** |
@@ -625,53 +908,83 @@ trust needs the difference.
 
 ## The unit-test gap, stated plainly
 
-Five packages carry a large share of this platform's risk and have **no unit
-tests at all**: `oms`, `store`, `reconcile`, `portfolio` and `orchestrator`. So
-do `httpapi`, `fx`, `ratelimit`, `marketdata`, `quant` and `scheduler`.
+This was the largest piece of technical debt in the previous revision: five
+high-risk packages with no unit tests at all. Four of them now have some.
 
-They are not untested. Every one is driven by the 88 smoke assertions, the 30
-Playwright tests and the 9 race tests, all against a real database and a real
-venue simulator — which is how this audit found five defects that unit tests
-built on fakes would have missed completely. Three of the five were arbitrated
-by PostgreSQL, and a fake store would simply have agreed with whatever the test
-author imagined.
+- `oms` — 10 tests. `handleBrokerError` was the specific worry: a six-branch
+  decision table with three branches reached by no test. It is now a pure
+  function, `ClassifyBrokerError`, and all six branches are covered, including
+  an explicit test that an unrecognised error fails closed to UNKNOWN.
+- `reconcile` — 34 tests over the classifier, all reachable because it takes
+  two snapshots and does no I/O.
+- `store` — 15 tests over `mapError` and `Fingerprint`, the two pure decisions
+  in the package. `mapError` decides whether every database failure becomes a
+  404, a 409, a retry or an opaque 500; the deadlock branch is covered
+  specifically, because it was once an unclassified 40P01 surfacing as a bare
+  500 on order placement.
+- `portfolio` — 7 tests, after extracting the exposure arithmetic from
+  `Compute`, which read six tables before reaching it. The cases that were
+  never tested were the ones nobody wants to seed: an unpriceable position must
+  not count as flat, gross and net must disagree for a hedged book, and
+  currency exposure must net across instruments while gross does not.
 
-But integration coverage has a specific weakness: it covers the paths the tests
-happen to take. `handleBrokerError` has a six-branch decision table, and three
-of those branches are exercised by armed faults while the other three are not
-reached at all. That is the honest shape of the gap, and closing it is the
-largest piece of remaining technical debt.
+Still with none: `orchestrator`, `httpapi`, `fx`, `ratelimit`, `marketdata`,
+`quant`, `scheduler`.
+
+The reason integration coverage was not simply extended instead: it covers the
+paths the tests happen to take. But the reverse is also true and worth keeping
+in view — this audit's defects were found by integration tests against a real
+database and a real venue simulator, and three of them were arbitrated by
+PostgreSQL. A fake store would have agreed with whatever the test author
+imagined. Both kinds of test earn their place; neither replaces the other.
 
 ---
 
 ## Test and scan tally
 
-Every row below was executed on 2026-09-08 against commit `c9bca9e`. Nothing is
-carried over from an earlier run.
+Every row below was executed against the milestone's final commit, on a freshly
+reset and reseeded database. Nothing is carried over from an earlier run.
 
 | Suite | Result |
 | --- | --- |
-| Go unit | **145 pass, 0 fail, 0 skip** across 9 packages; `gofmt` and `go vet` clean |
-| Go race integration | **9 pass, 0 fail** against a running stack, on two consecutive runs |
+| Go unit | **261 pass, 0 fail, 0 skip** across 15 packages; `gofmt` and `go vet` clean. By package: domain 62, risk 38, reconcile 34, store 18, arch 13, booking 12, oms 10, portfolio 7, and the rest |
+| Go `-race` | **NOT RUN.** The detector requires cgo and no C compiler is installed on this machine (`gcc: command not found`). Behavioural concurrency evidence is the row below; that is not the same claim |
+| Go concurrency and recovery integration | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
 | Python unit | **202 pass, 0 fail**; `ruff` clean; `mypy` clean on 7 source files |
-| Web static | `tsc --noEmit` clean; `eslint` clean; production build clean, 19 routes |
-| Playwright | **30 pass, 0 fail** on Chromium against the live stack, on two consecutive runs |
+| Web static | `tsc --noEmit` clean; `eslint` clean; production build clean, 20 routes including `/operations` |
+| Playwright | **51 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 21 are the new reconciliation and operations tests |
 | Smoke: trading | **53 pass, 0 fail** |
 | Smoke: research | **35 pass, 0 fail** |
 | Gitleaks | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | 0 findings, 388 rules, 156 files |
+| Semgrep | 0 findings, 394 rules, 168 files |
 | govulncheck | 0 reachable (1 unreachable, in a required module) |
 | npm audit | 0 vulnerabilities |
 | Trivy filesystem (vuln) | 0 — `go.mod` and `package-lock.json` |
 | Trivy config | 0 HIGH/CRITICAL across all three Dockerfiles |
 | Trivy image — all three | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
 | Trivy image — unfiltered | control-api 0, web 0, research **54 HIGH/CRITICAL** from the Debian base, every one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
-| ZAP baseline — control plane | **0 FAIL, 0 WARN, 66 PASS** |
-| ZAP baseline — terminal (production build) | **0 FAIL, 1 WARN, 64 PASS** — the WARN is the documented `unsafe-inline` acceptance |
+| ZAP baseline — control plane | **0 FAIL, 0 WARN, 69 PASS**, 4 URLs |
+| ZAP baseline — terminal (production build) | **0 FAIL, 1 WARN, 68 PASS**, 17 URLs including `/operations` — the WARN is the documented `unsafe-inline` acceptance |
 | actionlint | 0 findings, after fixing the 8 shellcheck issues it reported |
 | Restore drill | PASSED — backup, restore into a scratch database, and financial-integrity verification |
-| OSV-Scanner, pip-audit | **NOT RUN.** Neither is installed on this machine. They are configured in CI, which has not run |
+| OSV-Scanner | **NOT RUN — not installed.** `osv-scanner --version` reports `command not found`. It is configured in CI, which has not run. No other scanner was substituted for it and no OSV result is claimed anywhere in this report |
+| pip-audit | **NOT RUN — not installed**, in the project venv or on PATH. Configured in CI |
 | GitHub Actions | **NEVER RUN.** This repository has no remote. `actionlint` passing is not CI passing, and nothing in this report should be read as if it were |
+
+### On the number of reseeds behind that table
+
+Four of those rows needed a freshly reset database, and it is worth saying why
+rather than leaving it as an oddity. The seeded account's daily-loss limit is
+15 ZAR, every order in a suite pays commission, and the risk engine correctly
+refuses to open a position once the limit is reached. Running the race suite
+and the Playwright suite back to back spends it, after which later tests are
+refused for a reason that has nothing to do with what they are testing.
+
+The suite detects that and **skips with an explicit reseed instruction** rather
+than failing as though the platform were broken -- which it did during this
+session, and correctly. Each suite above was then run on its own fresh seed.
+The alternative, widening the limit for the tests, would have meant the tests
+no longer exercised the risk engine they run through.
 
 ### Scope of the ZAP scans
 

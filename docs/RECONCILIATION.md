@@ -458,6 +458,21 @@ authoritative for risk purposes without claiming Vantage placed the trade.
 - **Prove a negative across a partial snapshot.** Every venue fetch failure
   fails the whole run, precisely because a partial snapshot compared against a
   complete local view manufactures divergence.
+- **Close an issue it can no longer see.** A run closes an open issue it did
+  not re-detect, which is only sound while the run still examines the same
+  evidence. The execution cursor therefore **freezes** while any
+  execution-derived issue is unresolved. Without that, the cursor advanced
+  past an unattributable execution and the next run closed the issue as "the
+  divergence is gone" while the execution sat unbooked -- releasing the
+  account's halt on its own. `TestAnUnresolvedIssueSurvivesLaterRuns` pins it.
+
+  Freezing rather than widening the window back to the issue's detection time
+  is deliberate: the two look equivalent, but an execution detected later than
+  the cursor overlap would fall outside a widened window as well, and the
+  issue would close itself again. A frozen cursor is still the window that saw
+  the execution in the first place, so it cannot stop seeing it. The cost is a
+  fetch that grows until an operator resolves the issue, and re-seeing a
+  booked execution is already free.
 - **Run without a venue.** A venue that cannot be reached is not agreement:
   the run is recorded failed and the account reports
   `RECONCILIATION_REQUIRED`.

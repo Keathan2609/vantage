@@ -306,12 +306,46 @@ func (s *Service) runLocked(ctx context.Context, account domain.Account,
 	report.Status = status
 	report.FinishedAt = s.clock.Now()
 
+	// The execution cursor only advances when nothing execution-derived is
+	// left unresolved.
+	//
+	// # Why the cursor must freeze
+	//
+	// closeVanishedIssues closes an open issue this run did not re-detect, on
+	// the premise that a run examines both views completely. For executions
+	// that premise holds only inside the cursor window, and it failed in
+	// exactly the way that matters: the cursor moved past an unattributable
+	// venue execution, the next run stopped fetching it, did not re-detect it,
+	// and closed the issue with "the divergence is gone". The execution was
+	// still sitting unbooked at the venue, and the account released its own
+	// halt.
+	//
+	// Freezing rather than widening the window is deliberate. Widening back to
+	// the issue's detection time looks equivalent and is not: an execution
+	// detected later than the overlap would fall outside the widened window
+	// too, and the issue would close itself again. A frozen cursor is still
+	// the window that saw the execution in the first place, so it cannot
+	// stop seeing it.
+	//
+	// The cost is a fetch that grows while something is unresolved, which is
+	// bounded by an operator resolving it, and re-seeing a booked execution is
+	// already free.
 	cursor := remote.FetchedAt
+	blocking, err := s.store.Reconcile.OldestUnresolvedExecutionIssue(ctx, account.ID)
+	if err != nil {
+		return report, fmt.Errorf("reconcile: oldest unresolved execution issue: %w", err)
+	}
+	cursorUpdate := &cursor
+	if blocking != nil {
+		cursorUpdate = nil
+	}
+
 	if err := s.store.Research.FinishReconciliationRun(ctx, runID, status,
 		report.OrdersCompared, report.PositionsCompared, len(report.Issues), ""); err != nil {
 		return report, err
 	}
-	if err := s.store.Reconcile.RecordRunFinished(ctx, account.ID, status, true, &cursor); err != nil {
+	if err := s.store.Reconcile.RecordRunFinished(ctx, account.ID, status, true,
+		cursorUpdate); err != nil {
 		return report, err
 	}
 
@@ -654,12 +688,26 @@ func (s *Service) importFill(ctx context.Context, tx pgx.Tx, account domain.Acco
 
 // closeVanishedIssues resolves open issues that this run did not re-detect.
 //
-// # Why "did not re-detect" is the right test
+// # Why "did not re-detect" is the right test, and what it depends on
 //
 // A run captures both snapshots first and classifies them completely, so the
 // set of fingerprints it produced IS the set of divergences that exist. An
 // open issue whose fingerprint is absent from that set describes a problem
 // that is no longer there.
+//
+// That reasoning has a precondition, and it was once violated: the run must
+// actually have LOOKED at the evidence. The venue's execution list is bounded
+// by the stored cursor, so when the cursor advanced past an unattributable
+// execution, later runs stopped fetching it -- and "not re-detected" silently
+// changed meaning from "fixed" to "no longer examined". Three unbooked
+// executions were closed as resolved that way and the account released its own
+// halt.
+//
+// The cursor now freezes while any execution-derived issue is unresolved (see
+// runLocked), which restores the precondition. This function deliberately does
+// not try to compensate for a narrow window itself: a closing rule that
+// second-guesses its own inputs is harder to reason about than one whose
+// inputs are correct.
 //
 // # Why only issues detected before this run started
 //
@@ -691,7 +739,7 @@ func (s *Service) closeVanishedIssues(ctx context.Context, account domain.Accoun
 		}
 
 		reason := fmt.Sprintf(
-			"The divergence is gone: reconciliation run %s compared both views in full "+
+			"The divergence is gone: reconciliation run %s re-examined the same evidence "+
 				"and did not find it. Seen %d time(s) before it cleared.",
 			runID, issue.CheckCount)
 

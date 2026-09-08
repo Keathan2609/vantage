@@ -215,3 +215,72 @@ func TestAFingerprintWithNoPartsIsStillStable(t *testing.T) {
 		t.Fatal("a part-less fingerprint is not stable")
 	}
 }
+
+// The execution cursor freezes while any execution-derived issue is
+// unresolved, because a run only re-detects an execution while it is still
+// inside the fetch window. Getting the classification of a type wrong here
+// reintroduces a defect that closed three real unbooked executions as "the
+// divergence is gone" and released the account's halt.
+
+func TestEveryIssueTypeIsClassifiedAsExecutionOrSnapshotDerived(t *testing.T) {
+	execution := map[string]bool{}
+	for _, t := range executionDerivedIssueTypes {
+		execution[t] = true
+	}
+	snapshot := map[string]bool{}
+	for _, t := range snapshotDerivedIssueTypes {
+		snapshot[t] = true
+	}
+
+	for _, issueType := range domain.AllIssueTypes() {
+		name := string(issueType)
+		inExec, inSnap := execution[name], snapshot[name]
+		switch {
+		case inExec && inSnap:
+			t.Errorf("%s is listed as both execution- and snapshot-derived", name)
+		case !inExec && !inSnap:
+			t.Errorf("%s is in neither list. Decide which it is: if its evidence is a "+
+				"venue EXECUTION it must be execution-derived, or the cursor will "+
+				"advance past it, the next run will not re-detect it, and the issue "+
+				"will be closed as resolved while the divergence is still there", name)
+		}
+	}
+}
+
+func TestPositionAndBalanceNeedNoHeldWindow(t *testing.T) {
+	// They are recomputed from a full snapshot on every run, so holding the
+	// execution window open for them would widen every fetch for nothing.
+	for _, name := range []string{
+		string(domain.IssuePositionMismatch),
+		string(domain.IssueBalanceMismatch),
+	} {
+		for _, held := range executionDerivedIssueTypes {
+			if held == name {
+				t.Errorf("%s is treated as execution-derived; it is computed from a full "+
+					"snapshot and needs no hold", name)
+			}
+		}
+	}
+}
+
+func TestTheAmbiguousExecutionTypesAreHeldOpen(t *testing.T) {
+	// The types that carry an unattributable or contradictory execution are
+	// the whole reason the hold exists. If one of these is ever dropped from
+	// the list, the issue it raises can close itself.
+	held := map[string]bool{}
+	for _, t := range executionDerivedIssueTypes {
+		held[t] = true
+	}
+	for _, name := range []string{
+		string(domain.IssueExtraBrokerFill),
+		string(domain.IssueExternalBrokerActivity),
+		string(domain.IssueDuplicateExecutionReport),
+		string(domain.IssueUnknownExecutionState),
+	} {
+		if !held[name] {
+			t.Errorf("%s is not held open. An unresolved issue of this type would stop "+
+				"being re-detected once the cursor passed its execution, and would then "+
+				"be closed as though it had been fixed", name)
+		}
+	}
+}

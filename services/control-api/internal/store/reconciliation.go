@@ -328,6 +328,70 @@ func (s *ReconciliationStore) OpenIssuesTx(ctx context.Context, tx pgx.Tx, accou
 	return out, mapError(rows.Err())
 }
 
+// executionDerivedIssueTypes are the issue types whose evidence is a venue
+// EXECUTION, and which therefore only get re-detected while that execution is
+// still inside the run's fetch window.
+//
+// Position and balance mismatches are deliberately absent: they are computed
+// from a full snapshot of the position book on every run, so they are always
+// re-examined and need nothing held open.
+var executionDerivedIssueTypes = []string{
+	string(domain.IssueFillMissingLocally),
+	string(domain.IssueExtraBrokerFill),
+	string(domain.IssuePartialFillMismatch),
+	string(domain.IssueDuplicateExecutionReport),
+	string(domain.IssueOutOfOrderExecutionReport),
+	string(domain.IssueUnknownExecutionState),
+	string(domain.IssueExternalBrokerActivity),
+}
+
+// snapshotDerivedIssueTypes are the issue types computed from a snapshot that
+// every run captures in full -- the order book, the position book, the
+// balance. They are always re-examined, so nothing needs holding open for
+// them.
+//
+// This list exists only so that every issue type is accounted for by one of
+// the two, which a test asserts. A new type added to neither would default to
+// "no hold needed", and if its evidence were an execution that is exactly the
+// defect the hold exists to prevent.
+var snapshotDerivedIssueTypes = []string{
+	string(domain.IssueOrderMissingLocally),
+	string(domain.IssueOrderMissingAtBroker),
+	string(domain.IssueOrderStatusMismatch),
+	string(domain.IssuePositionMismatch),
+	string(domain.IssueBalanceMismatch),
+	string(domain.IssueVenueIDMismatch),
+}
+
+// OldestUnresolvedExecutionIssue returns the detection time of the oldest open
+// issue whose evidence is a venue execution, or nil when there is none.
+//
+// # Why this exists
+//
+// The caller uses it as a yes/no: while it returns anything, the execution
+// cursor must not advance. The cursor bounds which executions a run fetches,
+// so advancing it past an unattributable execution meant later runs stopped
+// seeing that execution, stopped re-detecting the issue, and closed the issue
+// as though it had been fixed -- releasing the account's halt while the
+// execution sat unbooked at the venue.
+//
+// The timestamp itself is returned rather than a bool because it is the useful
+// thing to log and to show an operator: "the window has been frozen since X"
+// explains a widening fetch that a bare flag would not.
+func (s *ReconciliationStore) OldestUnresolvedExecutionIssue(ctx context.Context,
+	accountID uuid.UUID) (*time.Time, error) {
+
+	var at *time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT MIN(detected_at) FROM reconciliation_issues
+		 WHERE account_id = $1 AND resolved_at IS NULL AND issue_type = ANY($2)`,
+		accountID, executionDerivedIssueTypes).Scan(&at)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return at, nil
+}
+
 // OpenIssuesForBroker returns unresolved issues across every account on one
 // broker connection, for the BROKER_CONNECTION halt scope.
 func (s *ReconciliationStore) OpenIssuesForBroker(ctx context.Context, brokerName string) ([]Issue, error) {

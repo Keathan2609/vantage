@@ -552,6 +552,84 @@ func TestAnAmbiguousVenueExecutionStaysUnresolved(t *testing.T) {
 	c.assertLedgerConsistent(accountID)
 }
 
+// TestAnUnresolvedIssueSurvivesLaterRuns is a regression test for a defect that
+// defeated the acceptance criterion above by a side door.
+//
+// # What happened
+//
+// closeVanishedIssues resolves an open issue the current run did not re-detect,
+// on the premise that a run examines both views completely. For executions that
+// premise held only inside the stored cursor window. Once the cursor advanced
+// past an unattributable execution, later runs stopped fetching it, did not
+// re-detect it, and closed the issue with "the divergence is gone" -- while the
+// execution sat unbooked at the venue and the account released its own halt.
+//
+// Three real orphan executions were closed that way, roughly half an hour after
+// detection, and the trading state went back to HEALTHY.
+//
+// The scenario above cannot catch this: it runs reconciliation once. Only a
+// SECOND run, after the cursor has moved, exposes it.
+func TestAnUnresolvedIssueSurvivesLaterRuns(t *testing.T) {
+	c, accountID := setup(t)
+
+	ref := psql(t, "SELECT COALESCE(broker_account_ref, id::text) FROM accounts WHERE id = "+
+		quoteSQL(accountID))
+	if ref == "" {
+		t.Skip("the account has no broker reference, so a venue-side row cannot be created")
+	}
+
+	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
+	orphanExecID := "EXEC-SURVIVE-" + stamp
+	if !c.insertVenueOrphanExecution(ref, "MOCK-SURVIVE-"+stamp, orphanExecID) {
+		t.Skip("the mock venue schema does not allow inserting a standalone execution")
+	}
+
+	if _, status := c.runReconciliation(accountID); status != http.StatusOK {
+		t.Fatalf("the first reconciliation run failed")
+	}
+	if !c.hasOpenIssueForExecution(accountID, orphanExecID) {
+		t.Skipf("the venue snapshot did not include the standalone execution %s, so this "+
+			"scenario could not be exercised end to end", orphanExecID)
+	}
+
+	// Three more runs, each of which advances the execution cursor to its own
+	// fetch time. Before the fix the issue disappeared here.
+	for i := 2; i <= 4; i++ {
+		if _, status := c.runReconciliation(accountID); status != http.StatusOK {
+			t.Fatalf("reconciliation run %d failed", i)
+		}
+		if !c.hasOpenIssueForExecution(accountID, orphanExecID) {
+			t.Fatalf("run %d closed the issue for execution %s, but the execution is still "+
+				"unbooked at the venue. \"Not re-detected\" must mean \"fixed\", never "+
+				"\"no longer examined\": this releases the account's halt while the "+
+				"divergence is still there", i, orphanExecID)
+		}
+	}
+
+	// Still unbooked, and automation still refused.
+	booked := psqlInt(t, "SELECT count(*) FROM fills WHERE broker_fill_id = "+
+		quoteSQL(orphanExecID))
+	if booked != 0 {
+		t.Errorf("the ambiguous execution was booked after %d runs", 4)
+	}
+	if state, allowed := c.tradingState(accountID); allowed {
+		t.Errorf("automation is permitted (%s) with the ambiguous execution still open", state)
+	}
+	c.assertLedgerConsistent(accountID)
+}
+
+// hasOpenIssueForExecution reports whether an unresolved issue still names this
+// venue execution.
+func (c *client) hasOpenIssueForExecution(accountID, execID string) bool {
+	c.t.Helper()
+	for _, issue := range c.openIssues(accountID) {
+		if fmt.Sprint(issue["broker_execution_id"]) == execID {
+			return true
+		}
+	}
+	return false
+}
+
 // insertVenueOrphanExecution creates an execution in the mock venue's tables
 // with no corresponding Vantage order.
 //

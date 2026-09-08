@@ -40,7 +40,11 @@ GO-2026-5932
 # Scanned WITHOUT --ignore-unfixed on 2026-09-08, the research image reports 54
 # HIGH/CRITICAL findings from its base (python:3.12.12-slim-trixie, Debian
 # 13.6): perl-base (3 CRITICAL), util-linux and its libraries, ncurses, gzip,
-# libacl1, libsqlite3-0, libsystemd0.
+# libacl1, libsqlite3-0, libsystemd0. Re-scanned the same day after the
+# reconciliation work: 173 findings at every severity (3 CRITICAL, 51 HIGH, 57
+# MEDIUM, 57 LOW, 5 UNKNOWN) from the base, unchanged. The control-api image
+# reports 1 (the openpgp module note below) and the web image reports none at
+# any severity.
 #
 # Every one has an empty fixed-version field: Debian has not published a fix.
 # The Dockerfile already runs `apt-get upgrade -y`, so there is nothing to

@@ -40,6 +40,13 @@ research plane, Next.js terminal, PostgreSQL, Redis for rate limits only.
    position quantities are never written to match the venue. Do not add a
    generic "set order status" endpoint; the answer is a named action in
    `reconcile.Resolve`.
+   Corollary, learned the hard way: **"not re-detected" must mean "fixed",
+   never "no longer examined".** `closeVanishedIssues` may only close an issue
+   whose evidence the run actually re-read, which is why the execution cursor
+   freezes while any execution-derived issue is unresolved. Without that, an
+   unbooked venue execution closed itself half an hour later and the account
+   released its own halt. Widening the window instead of freezing it does not
+   work -- see the comment in `reconcile.runLocked`.
 8. **A check that limits exposure or loss must never refuse a reducing
    order.** Three separate checks were found blocking a flatten and trapping
    the operator in the position. The rule is written out in
