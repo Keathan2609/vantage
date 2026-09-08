@@ -34,3 +34,28 @@ CVE-2025-47273
 # What would change this: any code in this repository importing
 # golang.org/x/crypto/openpgp, which it must not.
 GO-2026-5932
+
+# --- The research image's Debian base, and why nothing is listed for it ------
+#
+# Scanned WITHOUT --ignore-unfixed on 2026-09-08, the research image reports 54
+# HIGH/CRITICAL findings from its base (python:3.12.12-slim-trixie, Debian
+# 13.6): perl-base (3 CRITICAL), util-linux and its libraries, ncurses, gzip,
+# libacl1, libsqlite3-0, libsystemd0.
+#
+# Every one has an empty fixed-version field: Debian has not published a fix.
+# The Dockerfile already runs `apt-get upgrade -y`, so there is nothing to
+# apply, and CI passes only because it uses --ignore-unfixed. They are NOT
+# listed in this file, because listing them would suppress the same CVE ids
+# once fixes DO land -- which is exactly when they should reappear.
+#
+# What bounds the exposure: the research service holds no broker client and no
+# credentials pointing back at the control plane, its database role is
+# read-only, it runs non-root on a read-only root filesystem, and none of the
+# affected packages (perl, mount helpers, ncurses) are executed by uvicorn or
+# the numeric stack.
+#
+# What would actually resolve it: a minimal base. Roughly 750 MB of that 813 MB
+# image is not needed at runtime. Moving the final stage to distroless is the
+# real fix and is recorded as remaining work rather than attempted at the end
+# of an audit, because numpy, pandas and scikit-learn need libstdc++ and
+# libgomp and getting that wrong ships a container that does not start.
