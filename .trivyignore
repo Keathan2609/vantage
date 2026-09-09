@@ -58,8 +58,38 @@ GO-2026-5932
 # affected packages (perl, mount helpers, ncurses) are executed by uvicorn or
 # the numeric stack.
 #
-# What would actually resolve it: a minimal base. Roughly 750 MB of that 813 MB
-# image is not needed at runtime. Moving the final stage to distroless is the
-# real fix and is recorded as remaining work rather than attempted at the end
-# of an audit, because numpy, pandas and scikit-learn need libstdc++ and
-# libgomp and getting that wrong ships a container that does not start.
+# What would actually resolve it: a minimal base. The image is 813 MB with 87
+# Debian packages, of which the service executes a handful.
+#
+# Distroless was ATTEMPTED in the intelligence milestone and deliberately not
+# adopted. The measurement, so the next attempt starts from it rather than
+# repeating the work:
+#
+#   * scipy and scikit-learn bundle their own libgomp and OpenBLAS inside their
+#     wheels (scipy.libs/, scikit_learn.libs/), so no system libgomp is needed
+#     -- which was the assumption that made this look hard.
+#   * What IS needed is 29 system libraries, discovered by running ldd over
+#     every extension module and over lib-dynload: libc, libm, libstdc++,
+#     libgcc_s, libz, liblzma, libffi, libuuid, libcrypt, libcrypto, libssl,
+#     libsqlite3, libncursesw, libtinfo, libpanelw, libreadline, libgdbm,
+#     libdb-5.3, libnsl, libtirpc, libresolv, libgssapi_krb5, libkrb5,
+#     libk5crypto, libkrb5support, libcom_err, libkeyutils, libdl, libpthread.
+#
+# The reason it was not adopted is the important part. Perl, apt, dpkg, gzip,
+# util-linux and coreutils would genuinely be REMOVED. But sqlite3, ncurses,
+# krb5 and openssl would be COPIED IN AS BARE FILES, with no package database
+# behind them -- so Trivy would stop reporting their CVEs while the vulnerable
+# code was still in the image. The scan would go from 173 findings to nearly
+# zero, and almost none of that improvement would be real.
+#
+# Reporting that as a security win would be exactly the kind of number-chasing
+# this file exists to prevent. The honest options, in order of preference:
+#
+#   1. Trim what Python's stdlib links against, by not shipping the lib-dynload
+#      modules the service never imports (readline, sqlite3, dbm, nis, curses).
+#      That removes the libraries rather than hiding them.
+#   2. A distroless variant that ships a package inventory a scanner can read.
+#   3. Wait for Debian to publish fixes, which is what --ignore-unfixed is
+#      already doing.
+#
+# Option 1 is the recommended next step and is recorded as remaining work.

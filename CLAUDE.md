@@ -53,9 +53,21 @@ research plane, Next.js terminal, PostgreSQL, Redis for rate limits only.
    `internal/risk/engine.go`. "Reducing" means opposite side **and** quantity
    no greater than the open position — both halves, or a side flip skips the
    exposure checks.
-9. **No secrets in the repository**, in a log, in an API response, in a
+9. **Bars must keep advancing.** `UpsertBars` once had a single caller --
+   the seeder -- so the bar series froze at seed time, every strategy
+   re-evaluated one bar forever, the per-bar guard jammed shut, and the live
+   quote drifted 79 dollars away from the newest bar. Nothing reported
+   unhealthy. `internal/marketdata.Aggregator` folds live quotes into 15m, 1h
+   and 4h bars; if you change the timeframes a strategy version declares,
+   change the aggregator's set too, or that strategy starves silently.
+10. **Autopilot is not a kill switch.** A kill switch halts every order
+   including an operator's; Autopilot OFF halts only the autonomous pipeline
+   and leaves manual trading, cancel, flatten and all reads working. Keep them
+   separate: an operator taking over by hand must not have to disable a
+   protection. Both are enforced inside the order transaction, not before it.
+11. **No secrets in the repository**, in a log, in an API response, in a
    decision snapshot, or in audit metadata.
-10. **Do not commit** market datasets, trained model binaries, or `.env`.
+12. **Do not commit** market datasets, trained model binaries, or `.env`.
 
 ## Claims and language
 
@@ -102,6 +114,7 @@ what the line does.
 
 ```bash
 cd services/control-api && gofmt -l . && go vet ./... && go test ./...
+cd services/control-api && CGO_ENABLED=1 go test -race ./internal/...   # needs gcc on PATH
 cd services/quant && python -m ruff check . && python -m mypy vantage_quant && python -m pytest
 cd apps/web && npm run typecheck && npm run lint && npm run build
 python tests/smoke/smoke.py && python tests/smoke/smoke_research.py   # needs a running stack
@@ -126,6 +139,13 @@ reports every failure rather than stopping at the first.
 The Python tools live in `services/quant/.venv`; on Windows invoke them as
 `./.venv/Scripts/python.exe -m ruff` etc., because the system Python does not
 have them.
+
+**The race detector needs a C compiler.** cgo does not accept MSVC, so Visual
+Studio does not help. MinGW-w64 is installed at user scope with
+`winget install --id BrechtSanders.WinLibs.POSIX.UCRT --scope user`; put
+`%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_*\mingw64\bin`
+on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
+`-race requires cgo`, which reads like a Go problem and is not.
 
 ## Things that will waste your time
 
@@ -207,6 +227,13 @@ have them.
   placed in that window is correctly refused for a stale feed. Wait for feed
   health rather than "fixing" the refusal.
 
+- **Time-dependent tests must not wait on the real market.** Use
+  `marketdata.ReplayProvider` and the series generators
+  (`TrendingSeries`, `RangingSeries`, `VolatilityShockSeries`,
+  `DrawdownSeries`, `FlatSeries`), which drive time from the data rather than
+  from the clock. The provider never returns a bar the cursor has not reached,
+  so a scenario cannot accidentally become a look-ahead test.
+
 - **The venue closes for an hour every weekday at 17:00 New York.**
   `fx_metals_24x5` models a daily maintenance break (17:00-18:00 NY, Mon-Thu),
   during which ingestion correctly stores nothing and every instrument reports
@@ -231,6 +258,10 @@ services/control-api
                         Shared by execution and reconciliation on purpose.
   internal/reconcile    Snapshot both sides, classify with a pure function,
                         repair only what is provable, halt the rest.
+  internal/orchestrator consensus.go is the multi-strategy aggregation policy:
+                        a PURE function, versioned, vetoes before votes, and
+                        never a majority vote. scenario_test.go is the ten
+                        deterministic market scenarios.
   internal/broker       Adapter interface; broker/mock is the paper venue,
                         with deterministic fault-injection modes.
   internal/econdata     Calendar and news providers.
@@ -240,7 +271,7 @@ services/control-api
 services/quant          Research. No broker client exists here.
 tests/smoke             End-to-end assertions against a running stack.
 scripts                 Dev up/down, test-all, backup/restore drill.
-docs                    Twenty documents. Read the relevant one first.
+docs                    Twenty-one documents. Read the relevant one first.
 ```
 
 ## Adding things
