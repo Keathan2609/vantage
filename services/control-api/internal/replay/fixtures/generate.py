@@ -54,6 +54,9 @@ SPREAD = Decimal("0.00012")
 # The venue's daily maintenance break is 17:00-18:00 New York. On 2027-03-02
 # New York is UTC-5 (DST begins 2027-03-14), so the break is 22:00-23:00 UTC.
 BREAK_START_UTC_HOUR = 22
+# The weekly window, in the same UTC terms.
+WEEK_OPEN_UTC_HOUR = 22    # Sunday 17:00 New York
+WEEK_CLOSE_UTC_HOUR = 22   # Friday 17:00 New York
 
 
 def session_for(ts):
@@ -71,10 +74,27 @@ def session_for(ts):
 
 
 def tradable(ts):
-    """Skip weekend and the daily break, matching fx_metals_24x5."""
-    if ts.weekday() >= 5:  # Saturday, Sunday
+    """Match fx_metals_24x5 exactly: weekly window plus the daily break.
+
+    Getting this wrong is not cosmetic. A bar at a time the venue is shut is a
+    bar that could not have happened, and a strategy acting on it would be
+    trading the maintenance window. An earlier version of this function only
+    excluded Saturday, Sunday and the break hour, which left bars on Friday
+    evening -- after the 17:00 New York weekly close -- that the market clock
+    reports as closed_weekend. Nine fixtures carried them until a test
+    checking every bar against the real clock found it.
+
+    The venue's week runs Sunday 17:00 New York to Friday 17:00 New York, which
+    in EST is 22:00 UTC to 22:00 UTC.
+    """
+    wd = ts.weekday()          # Monday = 0
+    if wd == 5:                # Saturday: shut all day
         return False
-    if ts.hour == BREAK_START_UTC_HOUR:
+    if wd == 6:                # Sunday: shut until the weekly open
+        return ts.hour >= WEEK_OPEN_UTC_HOUR
+    if wd == 4 and ts.hour >= WEEK_CLOSE_UTC_HOUR:   # Friday, after the close
+        return False
+    if ts.hour == BREAK_START_UTC_HOUR:              # the daily break, Mon-Thu
         return False
     return True
 

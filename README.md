@@ -20,6 +20,7 @@ independent places in code and again in the database — see
 | Trading | A single order pipeline: 19 ordered gates, idempotent submission, an explicit order state machine, and a paper venue that models spread, slippage, latency, partial fills and margin refusal |
 | Risk | 18 deterministic checks evaluated as a pure function; every check runs, all failures are reported, and risk may only reduce a requested size |
 | Control | Trading authority (a scoped technical mandate), kill switches, account trading flags, and a four-state trading verdict derived from real state rather than from process health |
+| Replay | A deterministic market replay that drives the **real** pipeline — ingestion, bars, strategies, orchestration, risk, Autopilot, OMS, the mock venue, the ledger and the audit chain — from a committed dataset, on an injected clock, with byte-identical financial output across runs. Development only, and refused elsewhere |
 | Intelligence | A versioned multi-strategy consensus policy that puts vetoes before votes and never resolves a disagreement by majority; seven explicit market regimes with UNKNOWN as a real answer; and a deterministic market replay provider so autonomous behaviour is tested against a known market rather than by waiting for one |
 | Recovery | Snapshot-based reconciliation with a 13-type divergence taxonomy: provable divergence is repaired automatically through the same accounting path an ordinary fill uses, ambiguous divergence halts the narrowest scope that contains it and waits for a named operator action |
 | Research | 12 registered strategies, an honest backtester, chronological-split machine learning with baseline comparison, and an opportunity scanner |
@@ -81,6 +82,7 @@ services/control-api      Go control plane — the only path to a broker
   internal/risk           The risk engine (a pure function) and position sizing
   internal/booking        The single accounting path: fill -> position, ledger, balance
   internal/reconcile      Snapshots, a pure classifier, and bounded repair
+  internal/replay         Deterministic market replay (development only)
   internal/orchestrator   Signals to intents, and the consensus policy
   internal/broker         BrokerAdapter interface; broker/mock is the paper venue
   internal/store          SQL, one file per bounded context
@@ -137,6 +139,7 @@ start-up.
 | [MACHINE_LEARNING](docs/MACHINE_LEARNING.md) | Features, splits, leakage tests, baselines, drift, fail-closed inference |
 | [NEWS_AND_CALENDAR](docs/NEWS_AND_CALENDAR.md) | Event data, blackout windows, and provider terms |
 | [AUTOPILOT](docs/AUTOPILOT.md) | The autonomous pipeline, its gates, the global on/off switch, and what is deliberately not enabled |
+| [MARKET_REPLAY](docs/MARKET_REPLAY.md) | Driving the real pipeline from a dataset: the clock substitution, dataset format, controls, determinism, and the assumptions a replay makes |
 | [GOLD_RESEARCH_PROFILE](docs/GOLD_RESEARCH_PROFILE.md) | What is specific about XAUUSD, and why none of it belongs in generic infrastructure |
 | [OBSERVABILITY](docs/OBSERVABILITY.md) | Logs, metrics, audit, and what to alert on |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Environments, workflows, testing, migrations, conventions |
