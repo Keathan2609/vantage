@@ -141,10 +141,15 @@ have them.
   build replaces `.next` underneath the running process, which then serves a
   half-swapped app. Restart it afterwards.
 
-- **`output: "standalone"` means `npm start` (`next start`) is unsupported.**
-  Next prints a warning and serves anyway, which is worse than failing. Use
-  `npm run dev` locally; the container runs
-  `node .next/standalone/server.js`.
+- **`npm start` runs the standalone server, not `next start`.**
+  `output: "standalone"` makes `next start` unsupported -- Next prints a
+  warning and serves anyway, which is worse than failing -- so `start` is
+  `node .next/standalone/server.js` and a `postbuild` step
+  (`scripts/assemble-standalone.mjs`) copies `.next/static` and `public` into
+  the standalone tree. Nothing needs copying by hand any more. If you ever run
+  the standalone server WITHOUT that step, every chunk 404s as `text/plain`,
+  the app never hydrates, and around twenty Playwright tests fail on missing
+  selectors while looking exactly like a broken API.
 
 - **The daily-loss budget is a finite fixture resource.** The seeded account's
   limit is 15 ZAR and every order in a suite pays commission, so running the
@@ -210,14 +215,6 @@ have them.
   no_data)" -- which reads like broken market data and is the platform being
   right. Check the New York clock before debugging it. The Go and smoke suites
   are unaffected only because they do not wait on the feed the same way.
-
-- **`node .next/standalone/server.js` needs `.next/static` copied in.**
-  Next's standalone output omits the static assets, so the server answers 200
-  for the HTML and 404s every chunk, serving them as `text/plain`. The page
-  then renders "Connecting to the control plane..." forever and around 20
-  Playwright tests fail on missing selectors, looking exactly like a broken
-  API. The Dockerfile copies `.next/static` into the standalone tree; do the
-  same when running it by hand, or use `npm run dev`.
 
 ## Repository map
 
