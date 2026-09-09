@@ -543,7 +543,21 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 				"account_id", account.ID.String(), "instruments", wanted)
 		}
 	} else {
-		validUntil := now.Add(90 * 24 * time.Hour)
+		// Three years, not ninety days.
+		//
+		// A trading authority is a real control and this does not weaken it:
+		// the window is still enforced on every order. Ninety days was chosen
+		// when nothing ran unattended, and it makes the DEVELOPMENT fixture
+		// unusable for the thing this repository now needs it for -- a market
+		// replay is dated ahead of the seed on purpose (see the fixture
+		// generator), so a ninety-day authority expires before the dataset
+		// starts and every strategy run is skipped with "Trading authority
+		// has expired". That refusal is correct and the reason for it is
+		// invisible.
+		//
+		// A real deployment sets its own window through the API; this is the
+		// seed's default only.
+		validUntil := now.Add(3 * 365 * 24 * time.Hour)
 		if _, err := d.Store.Control.CreateAuthority(ctx, domain.TradingAuthority{
 			UserID: traderID, AccountID: account.ID, Mode: domain.ModePaper,
 			Active: true, AutomationEnabled: true,

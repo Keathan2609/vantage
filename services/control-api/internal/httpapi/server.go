@@ -15,8 +15,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -40,6 +44,7 @@ import (
 	"github.com/vantage/control-api/internal/quant"
 	"github.com/vantage/control-api/internal/ratelimit"
 	"github.com/vantage/control-api/internal/reconcile"
+	"github.com/vantage/control-api/internal/replay"
 	"github.com/vantage/control-api/internal/store"
 )
 
@@ -63,8 +68,12 @@ type Deps struct {
 	Orchestrator *orchestrator.Service
 	Clock        domain.Clock
 	MarketClock  *domain.MarketClock
-	Version      string
-	Commit       string
+	// Replay is nil unless this process was configured for market replay. A
+	// nil engine is how the handlers know the routes should not exist, rather
+	// than by re-reading configuration.
+	Replay  *replay.Engine
+	Version string
+	Commit  string
 }
 
 // Server serves the control-plane API.
@@ -89,8 +98,28 @@ type Server struct {
 	marketClock  *domain.MarketClock
 	version      string
 	commit       string
-	router       chi.Router
-	startedAt    time.Time
+	replay       *replay.Engine
+	// wallClock is real time, always, regardless of any market replay.
+	//
+	// # Why authentication does not use s.clock
+	//
+	// A market replay puts the trading clock on dataset time. Session
+	// lifetime, MFA windows and TOTP validation are SECURITY controls
+	// measured in real elapsed time, and a simulated clock must never be able
+	// to extend or expire one.
+	//
+	// This was found the hard way: engaging a replay dated in 2027 instantly
+	// expired the operator's own session, so the authenticated API could not
+	// be used to drive the replay it had just started. The symptom was a 401
+	// out of nowhere; the cause was a security lifetime denominated in
+	// simulated time. The reverse is the dangerous direction -- a replay dated
+	// in the past would have kept an expired session alive.
+	wallClock domain.Clock
+	// configHash identifies the configuration a replay ran under, so a result
+	// can be tied to the thresholds that produced it.
+	configHash string
+	router     chi.Router
+	startedAt  time.Time
 }
 
 // NewServer wires the router.
@@ -107,6 +136,13 @@ func NewServer(d Deps) (*Server, error) {
 		orchestrator: d.Orchestrator,
 		clock:        d.Clock, marketClock: d.MarketClock,
 		version: d.Version, commit: d.Commit, startedAt: time.Now(),
+		replay:    d.Replay,
+		wallClock: domain.SystemClock{},
+		// A digest of the knobs that change trading behaviour. Not the whole
+		// configuration: secrets and connection strings must never reach a
+		// stored run record, and neither does anything that cannot alter a
+		// decision.
+		configHash: configDigest(d.Config),
 	}
 	s.router = s.routes()
 	return s, nil
@@ -324,6 +360,17 @@ func (s *Server) routes() chi.Router {
 			// all, so the role that starts the machine is not the role that
 			// trades.
 			admin.Post("/autopilot", s.handleSetAutopilot)
+
+			// Market replay. Registered unconditionally so the route
+			// answers with a clear 404 explaining why it is unavailable,
+			// rather than an unexplained one from the router -- but every
+			// handler refuses when the engine is nil, and the engine exists
+			// only when configuration asked for replay in a development
+			// environment.
+			admin.Get("/replay/datasets", s.handleReplayDatasets)
+			admin.Get("/replay", s.handleReplayStatus)
+			admin.Post("/replay/control", s.handleReplayControl)
+			admin.Post("/replay/inject", s.handleReplayInject)
 		})
 	})
 
@@ -499,4 +546,22 @@ func boolGauge(v bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// configDigest is a stable digest of the configuration that can change a
+// trading decision.
+//
+// Deliberately narrow. A replay run record has to be able to say "the same
+// configuration", and hashing the whole Config would make that claim fail on
+// an irrelevant difference -- a log level, a port -- while also risking a
+// connection string reaching a stored record. So it covers exactly the fields
+// that alter behaviour.
+func configDigest(cfg config.Config) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "env=%s\n", cfg.Env)
+	fmt.Fprintf(h, "execution_mode=%s\n", cfg.ExecutionMode)
+	fmt.Fprintf(h, "brokers=%s\n", strings.Join(cfg.EnabledBrokers, ","))
+	fmt.Fprintf(h, "market_data_provider=%s\n", cfg.MarketDataProvider)
+	fmt.Fprintf(h, "quant_timeout=%s\n", cfg.QuantTimeout)
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }

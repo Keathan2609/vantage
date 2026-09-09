@@ -67,6 +67,13 @@ const (
 	// Autopilot is its own pair of actions rather than a generic admin
 	// action, because "when was autonomous trading on?" has to be answerable
 	// from the audit log by filtering, not by reading every admin event.
+	// AuditReplayControl records starting or stopping a market replay.
+	//
+	// Its own action because a replay puts the whole process on dataset time,
+	// which is the sort of thing an investigation into an odd timestamp needs
+	// to be able to find by filtering rather than by reading everything.
+	AuditReplayControl AuditAction = "replay.control"
+
 	AuditAutopilotEnabled  AuditAction = "autopilot.enabled"
 	AuditAutopilotDisabled AuditAction = "autopilot.disabled"
 

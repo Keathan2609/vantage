@@ -580,3 +580,83 @@ func TestMoneyHasNoFloatConstructor(t *testing.T) {
 			"before it arrives. Parse from a string instead.")
 	}
 }
+
+// TestAuthenticationUsesRealTimeNotTheTradingClock guards a defect that
+// disabled the API the moment a market replay engaged.
+//
+// # What happened
+//
+// The trading clock is switchable so a replay can put the pipeline on dataset
+// time. Session lifetime, MFA and TOTP validation read the same clock, so
+// starting a replay dated in 2027 instantly expired the operator's own
+// session: the authenticated API could not be used to drive the replay it had
+// just started. The symptom was a 401 out of nowhere.
+//
+// The reverse is the dangerous direction and the reason this is an
+// architecture test rather than a bug fix. A replay dated in the PAST would
+// have kept an already-expired session alive, and a simulated clock must never
+// be able to extend a security lifetime.
+func TestAuthenticationUsesRealTimeNotTheTradingClock(t *testing.T) {
+	for _, file := range []string{
+		"internal/httpapi/middleware.go",
+		"internal/httpapi/handlers_auth.go",
+	} {
+		source := readFile(t, file)
+		if strings.Contains(source, "s.clock.Now()") {
+			t.Errorf("%s reads s.clock.Now().\n"+
+				"That is the TRADING clock, which a market replay moves to dataset time. "+
+				"Session lifetime, MFA windows and TOTP validation are security controls "+
+				"measured in real elapsed time: use s.wallClock.Now() so a simulated "+
+				"clock cannot extend or expire one.", file)
+		}
+		if !strings.Contains(source, "s.wallClock.Now()") {
+			t.Errorf("%s reads neither clock; this test can no longer tell whether the "+
+				"guarantee still holds", file)
+		}
+	}
+}
+
+// TestTheReplayEngineHoldsNoBrokerAdapter keeps the replay driver on the
+// application's own path.
+//
+// The acceptance requirement for market replay is that it drives the SAME
+// pipeline autonomous trading uses. An engine that could reach a broker
+// directly would be able to place an order without passing the OMS, which is
+// exactly the "second test trading engine" this design exists to avoid.
+func TestTheReplayEngineHoldsNoBrokerAdapter(t *testing.T) {
+	graph := packageImports(t)
+	imports := graph[modulePath+"/internal/replay"]
+	if imports == nil {
+		t.Fatal("internal/replay was not found in the import graph")
+	}
+	forbidden := []string{
+		modulePath + "/internal/broker",
+		modulePath + "/internal/oms",
+		modulePath + "/internal/orchestrator",
+	}
+	for _, imp := range imports {
+		for _, bad := range forbidden {
+			if imp == bad {
+				t.Errorf("internal/replay imports %s.\n"+
+					"The replay engine must drive the pipeline through the scheduler's own "+
+					"jobs, not reach into execution itself. A replay that could place an "+
+					"order directly would prove the replay works, not the platform.", imp)
+			}
+		}
+	}
+}
+
+// readFile reads one source file relative to the module root.
+//
+// Distinct from readSource, which concatenates a whole package: the
+// authentication guarantee is a property of specific files, and other files in
+// internal/httpapi read the trading clock legitimately.
+func readFile(t *testing.T, rel string) string {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), filepath.FromSlash(rel))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	return string(raw)
+}

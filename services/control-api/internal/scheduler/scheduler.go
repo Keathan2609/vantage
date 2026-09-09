@@ -43,7 +43,13 @@ const (
 	outboxInterval        = 3 * time.Second
 	cleanupInterval       = 1 * time.Hour
 	econDataInterval      = 15 * time.Minute
-	leaseTTL              = 2 * time.Minute
+	// replayBackfillLookback is how much provider history each replay step
+	// offers the store. Wide enough to cover a strategy's warm-up (the
+	// longest declared required_bars at the longest timeframe) with room to
+	// spare, because a short lookback starves a strategy in a way that looks
+	// like the strategy declining to trade.
+	replayBackfillLookback = 60 * 24 * time.Hour
+	leaseTTL               = 2 * time.Minute
 )
 
 // Deps are the scheduler's collaborators.
@@ -65,7 +71,24 @@ type Deps struct {
 type Scheduler struct {
 	deps     Deps
 	holderID string
+	// externallyDriven suppresses the market-data and strategy loops.
+	//
+	// Set when a market replay owns the pipeline. Without it BOTH the
+	// two-second ingestion loop and the replay's own step ingest, which was a
+	// real defect: each replay instant produced two identical quotes, the
+	// data-quality policy correctly reported `duplicate_tick`, and 75 of 685
+	// strategy runs were skipped for degraded data that the harness itself had
+	// manufactured.
+	//
+	// The other loops -- reconciliation, outbox, cleanup -- keep running,
+	// because a replay is meant to exercise the real system's background
+	// behaviour, not replace it.
+	externallyDriven bool
 }
+
+// SetExternallyDriven stops the scheduler driving market data and strategies
+// itself, leaving that to a market replay.
+func (s *Scheduler) SetExternallyDriven(driven bool) { s.externallyDriven = driven }
 
 // New builds a scheduler.
 func New(deps Deps) *Scheduler {
@@ -80,13 +103,21 @@ func (s *Scheduler) Run(ctx context.Context) {
 	log := s.deps.Log
 	log.Info("scheduler starting", "holder", s.holderID)
 
-	// Market data drives the resting-order engine: a limit or stop can only
-	// trigger on a price that actually occurred.
-	go s.deps.Ingestor.Run(ctx, marketDataInterval, func(tickCtx context.Context) {
-		s.processRestingOrders(tickCtx)
-	})
+	if s.externallyDriven {
+		// A market replay owns market data and strategy evaluation. Running
+		// the interval loops as well would double-ingest every quote and
+		// evaluate strategies at wall-clock intervals against dataset time.
+		log.Warn("scheduler: market data and strategy loops are suppressed; " +
+			"a market replay is driving the pipeline")
+	} else {
+		// Market data drives the resting-order engine: a limit or stop can
+		// only trigger on a price that actually occurred.
+		go s.deps.Ingestor.Run(ctx, marketDataInterval, func(tickCtx context.Context) {
+			s.processRestingOrders(tickCtx)
+		})
 
-	go s.loop(ctx, "strategies", strategyInterval, s.runStrategies)
+		go s.loop(ctx, "strategies", strategyInterval, s.runStrategies)
+	}
 	go s.loop(ctx, "reconciliation", reconciliationInterval, s.runReconciliation)
 	go s.loop(ctx, "outbox", outboxInterval, s.dispatchOutbox)
 	go s.loop(ctx, "cleanup", cleanupInterval, s.cleanup)
@@ -195,7 +226,16 @@ func (s *Scheduler) processRestingOrders(ctx context.Context) {
 // runStrategies evaluates every enabled PAPER strategy for every account whose
 // authority permits it.
 func (s *Scheduler) runStrategies(ctx context.Context) error {
-	return s.withLease(ctx, "strategy_runner", func(ctx context.Context) error {
+	return s.withLease(ctx, "strategy_runner", s.runStrategiesUnleased)
+}
+
+// runStrategiesUnleased is the body of the strategy job.
+//
+// Split out so a market replay can call the same code without the lease, which
+// is measured against wall time and therefore meaningless when the clock is
+// driven by a dataset. See ReplayStep.
+func (s *Scheduler) runStrategiesUnleased(ctx context.Context) error {
+	return func(ctx context.Context) error {
 		log := s.deps.Log
 		now := s.deps.Clock.Now()
 
@@ -283,7 +323,7 @@ func (s *Scheduler) runStrategies(ctx context.Context) error {
 			}
 		}
 		return nil
-	})
+	}(ctx)
 }
 
 // runReconciliation compares every account against its venue.
@@ -419,4 +459,95 @@ func tradingDayBoundary(now time.Time) time.Time {
 		boundary = boundary.Add(-24 * time.Hour)
 	}
 	return boundary
+}
+
+// ReplayStep performs one deterministic tick of the pipeline.
+//
+// # Why this is a method on the real scheduler
+//
+// The acceptance requirement for market replay is that it drives the SAME
+// pipeline autonomous trading uses. That rules out a harness that calls
+// ingestion and the orchestrator itself: such a harness proves the harness
+// works, and every difference between it and the scheduler is a difference
+// nobody notices until it matters.
+//
+// So this calls exactly the job functions the interval loops call, in the
+// order the running system does. What replay changes is what MOVES the clock:
+// a ticker in ordinary operation, the dataset here. Nothing else differs.
+//
+// # Why the lease is bypassed
+//
+// runStrategies takes the `strategy_runner` lease so two instances cannot
+// double-run. During a replay there is one process by construction, and the
+// lease's two-minute TTL is measured against wall time while the replay clock
+// may cover days in seconds -- so a lease taken at replay-hour one would still
+// be held at replay-hour ninety, and every later step would silently decline.
+// The lease is the wrong mechanism for a run whose clock is not wall time.
+//
+// It is bypassed by calling the job body rather than by weakening withLease,
+// so ordinary operation is untouched.
+func (s *Scheduler) ReplayStep(ctx context.Context, onPhase func(phase string)) error {
+	phase := func(name string) {
+		if onPhase != nil {
+			onPhase(name)
+		}
+	}
+
+	// 1. Ingestion, data quality and bar aggregation -- the real IngestOnce.
+	phase("ingest")
+	if err := s.deps.Ingestor.IngestOnce(ctx); err != nil {
+		return fmt.Errorf("scheduler: replay ingest: %w", err)
+	}
+
+	// 1b. Bars from the provider's own history.
+	//
+	// A replay dataset IS the bar series, so bars arrive this way rather than
+	// being aggregated back out of one quote per bar -- which would write a
+	// degenerate candle over a real one. The lookback is generous because a
+	// strategy needs a warm-up: the store upserts, so re-offering a bar the
+	// database already holds costs a write and changes nothing.
+	phase("backfill")
+	if err := s.deps.Ingestor.BackfillBars(ctx, replayBackfillLookback); err != nil {
+		return fmt.Errorf("scheduler: replay backfill: %w", err)
+	}
+
+	// 2. Resting limit and stop orders, which can only trigger on a price that
+	//    actually occurred. Driven by market data in ordinary operation too.
+	phase("resting_orders")
+	s.processRestingOrders(ctx)
+
+	// 3. Strategy evaluation, orchestration, risk, authority, OMS, venue.
+	phase("strategies")
+	if err := s.runStrategiesUnleased(ctx); err != nil {
+		return fmt.Errorf("scheduler: replay strategies: %w", err)
+	}
+
+	// 4. The outbox, so notifications and projections produced by this step
+	//    are dispatched before the next one -- matching the ordinary system,
+	//    where the outbox runs an order of magnitude more often than
+	//    strategies.
+	phase("outbox")
+	if err := s.dispatchOutbox(ctx); err != nil {
+		// Logged rather than fatal, exactly as the interval loop does: a
+		// failed dispatch must not stop trading.
+		s.deps.Log.Warn("replay outbox dispatch failed", "error", err.Error())
+	}
+	return nil
+}
+
+// ReplayReconcile runs reconciliation once, without its lease.
+//
+// Separate from ReplayStep because reconciliation runs on a five-minute
+// interval in ordinary operation, not on every tick, and a replay that
+// reconciled after every bar would not resemble the running system. A
+// failure-injection scenario calls this at the point it wants to prove
+// recovery.
+func (s *Scheduler) ReplayReconcile(ctx context.Context) error {
+	if s.deps.Reconciler == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, reconciliationTimeout)
+	defer cancel()
+	_, err := s.deps.Reconciler.RunAll(ctx, reconcile.TriggerScheduled)
+	return err
 }

@@ -309,7 +309,7 @@ func (s *Server) authenticate(r *http.Request) (Principal, error) {
 	if err != nil {
 		return Principal{}, errors.New("session not found")
 	}
-	now := s.clock.Now()
+	now := s.wallClock.Now()
 	if !session.Active(now) {
 		return Principal{}, errors.New("session expired or revoked")
 	}

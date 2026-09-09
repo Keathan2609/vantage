@@ -62,6 +62,21 @@ type Config struct {
 	ExecutionMode  string
 	EnabledBrokers []string
 
+	// MarketDataProvider selects the quote source: "mock" or "replay".
+	//
+	// Replay must be asked for explicitly and is refused outside development
+	// and test. It is not a data-source preference: engaging a replay puts the
+	// WHOLE PROCESS on dataset time, so session state, quote ages, event
+	// windows and daily P&L boundaries all move to wherever the dataset sits.
+	// Defaulting to it, or letting it be selected in staging, would mean a
+	// process that looks normal and is judging live prices against a date in
+	// a fixture.
+	MarketDataProvider string
+	// ReplayAutoStart names a dataset to engage at boot, for a scripted run.
+	// Empty is the normal case: a replay is started through the admin API so
+	// there is a request, an actor and an audit entry behind it.
+	ReplayAutoStart string
+
 	DataEncryptionKey        []byte
 	DataEncryptionKeyVersion int
 	SessionSigningKey        []byte
@@ -82,6 +97,12 @@ type Config struct {
 var ErrLiveExecutionRefused = errors.New(
 	"this build supports paper execution only: live and demo execution are not compiled in")
 
+// ErrReplayRefused is returned when replay is requested outside development.
+var ErrReplayRefused = errors.New("market replay is not available in this environment")
+
+// ReplayEnabled reports whether this process may engage a market replay.
+func (c Config) ReplayEnabled() bool { return c.MarketDataProvider == "replay" }
+
 // Load reads configuration from the environment and validates it.
 func Load() (Config, error) {
 	c := Config{
@@ -93,6 +114,8 @@ func Load() (Config, error) {
 		MigrationDatabaseURL: env("VANTAGE_MIGRATION_DATABASE_URL", ""),
 		RedisURL:             env("VANTAGE_REDIS_URL", ""),
 		ExecutionMode:        strings.ToLower(env("VANTAGE_EXECUTION_MODE", "paper")),
+		MarketDataProvider:   strings.ToLower(env("VANTAGE_MARKET_DATA_PROVIDER", "mock")),
+		ReplayAutoStart:      env("VANTAGE_REPLAY_DATASET", ""),
 		QuantBaseURL:         env("VANTAGE_QUANT_BASE_URL", "http://localhost:8000"),
 		QuantServiceToken:    env("VANTAGE_QUANT_SERVICE_TOKEN", ""),
 		SessionTTL:           12 * time.Hour,
@@ -103,6 +126,30 @@ func Load() (Config, error) {
 	case EnvDevelopment, EnvTest, EnvStaging, EnvProduction:
 	default:
 		return Config{}, fmt.Errorf("VANTAGE_ENV %q is not a recognised environment", c.Env)
+	}
+
+	// --- Market-data provider gate -------------------------------------------
+	switch c.MarketDataProvider {
+	case "mock", "replay":
+	default:
+		return Config{}, fmt.Errorf(
+			"VANTAGE_MARKET_DATA_PROVIDER %q is not recognised (mock or replay)",
+			c.MarketDataProvider)
+	}
+	if c.MarketDataProvider == "replay" && c.Env != EnvDevelopment && c.Env != EnvTest {
+		// Refused rather than downgraded. A deployment that asked for replay
+		// and silently got live data would be worse than one that failed to
+		// start: the operator would believe they were watching a replay.
+		return Config{}, fmt.Errorf(
+			"%w: market replay puts the whole process on dataset time and is "+
+				"available in development and test only (VANTAGE_ENV=%q)",
+			ErrReplayRefused, c.Env)
+	}
+	if c.ReplayAutoStart != "" && c.MarketDataProvider != "replay" {
+		return Config{}, fmt.Errorf(
+			"VANTAGE_REPLAY_DATASET is set but VANTAGE_MARKET_DATA_PROVIDER is %q; "+
+				"a dataset cannot be replayed by the mock provider",
+			c.MarketDataProvider)
 	}
 
 	// --- Execution-mode gate -------------------------------------------------

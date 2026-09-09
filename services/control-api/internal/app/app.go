@@ -37,6 +37,7 @@ import (
 	"github.com/vantage/control-api/internal/quant"
 	"github.com/vantage/control-api/internal/ratelimit"
 	"github.com/vantage/control-api/internal/reconcile"
+	"github.com/vantage/control-api/internal/replay"
 	"github.com/vantage/control-api/internal/scheduler"
 	"github.com/vantage/control-api/internal/store"
 )
@@ -59,16 +60,36 @@ type App struct {
 	Quant        *quant.Client
 	Orchestrator *orchestrator.Service
 	Ingestor     *marketdata.Ingestor
-	Provider     *marketdata.MockProvider
-	EconData     *econdata.Ingestor
-	Alerter      *notify.Alerter
-	Scheduler    *scheduler.Scheduler
-	MarketClock  *domain.MarketClock
-	Clock        domain.Clock
-	Server       *httpapi.Server
+	// Provider is the quote source in force. Typed as the interface rather
+	// than as the mock, because it is now one of two implementations chosen by
+	// configuration.
+	Provider marketdata.Provider
+	// Replay is non-nil only when VANTAGE_MARKET_DATA_PROVIDER=replay. A nil
+	// engine is how every other code path knows replay is not available,
+	// rather than by re-reading configuration.
+	Replay      *replay.Engine
+	EconData    *econdata.Ingestor
+	Alerter     *notify.Alerter
+	Scheduler   *scheduler.Scheduler
+	MarketClock *domain.MarketClock
+	Clock       domain.Clock
+	Server      *httpapi.Server
+
+	// replayClock is the same object as Clock, kept typed so the engine can
+	// engage and disengage it.
+	replayClock *replay.SwitchableClock
 
 	closers []func()
 }
+
+// replayVenueSeed fixes the mock venue's randomness during a replay.
+//
+// A constant rather than the run's seed: the run seed is recorded on the run
+// so a reader can tie a result to it, but the VENUE's behaviour has to be the
+// same across every run of a dataset for two runs to be comparable at all.
+// Varying it would reintroduce exactly the non-determinism this exists to
+// remove.
+const replayVenueSeed int64 = 20270302
 
 // Version metadata, overridden at build time with -ldflags.
 var (
@@ -85,7 +106,12 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		return nil, errors.New("app: this build supports paper execution only")
 	}
 
-	a := &App{Config: cfg, Log: log, Clock: domain.SystemClock{}}
+	// The clock is switchable so a market replay can put this process on
+	// dataset time without a second deployment. It behaves exactly as
+	// SystemClock until a replay engages, which requires explicit
+	// configuration and, outside an auto-start, an authenticated request.
+	clock := replay.NewSwitchableClock(domain.SystemClock{})
+	a := &App{Config: cfg, Log: log, Clock: clock, replayClock: clock}
 
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -146,7 +172,20 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	a.Converter = fx.NewConverter(fx.StoreRateSource{Market: a.Store.Market}, 24*time.Hour,
 		func() time.Time { return a.Clock.Now() })
 	a.Portfolio = portfolio.New(a.Store, a.Converter, a.Clock)
-	a.Provider = marketdata.NewMockProvider(20250101, a.MarketClock)
+	// The quote source.
+	//
+	// Replay is refused outside development and test by config.Load, so
+	// reaching this branch at all means an operator asked for it in an
+	// environment where it is allowed.
+	var replayProvider *marketdata.ReplayProvider
+	if cfg.ReplayEnabled() {
+		replayProvider = marketdata.NewReplayProvider()
+		a.Provider = replayProvider
+		log.Warn("market data provider is REPLAY: this process will serve dataset " +
+			"prices and, once a run is engaged, dataset time")
+	} else {
+		a.Provider = marketdata.NewMockProvider(20250101, a.MarketClock)
+	}
 	a.Ingestor = marketdata.NewIngestor(a.Store, a.Provider, a.Clock, a.MarketClock)
 
 	// The calendar and news feeds sit behind their own provider interfaces, so
@@ -162,13 +201,38 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	// The timeframes are the ones strategy versions actually declare. Building
 	// one nobody reads costs a write every two seconds; not building one a
 	// strategy declares starves that strategy permanently.
-	a.Ingestor.SetAggregator(marketdata.NewAggregator(a.Provider.Name(),
-		domain.Timeframe("15m"), domain.Timeframe("1h"), domain.Timeframe("4h")))
+	aggregator := marketdata.NewAggregator(a.Provider.Name(),
+		domain.Timeframe("15m"), domain.Timeframe("1h"), domain.Timeframe("4h"))
+	a.Ingestor.SetAggregator(aggregator)
 
 	// The mock venue keeps its own books, which is what makes reconciliation a
 	// real comparison rather than a self-check.
+	// The venue's own randomness -- slippage jitter and latency -- is SEEDED in
+	// replay mode.
+	//
+	// Found by the determinism proof. Two replays of one dataset from a
+	// byte-identical database produced identical decisions (665 signals, 250
+	// orders, 189 fills, 2.51 lots) and DIFFERENT closing balances: 574.81 and
+	// 575.38. The decisions were deterministic; the fill prices were not,
+	// because DefaultConfig seeds the venue from time.Now().UnixNano().
+	//
+	// A replay whose P&L moves between runs cannot be used to compare a
+	// strategy against itself, which is the entire point of one. So the venue
+	// is given a fixed seed here. It is still adversarial -- slippage,
+	// latency, partial fills and margin refusals all still happen -- just
+	// reproducibly.
+	venueConfig := brokermock.DefaultConfig()
+	if cfg.ReplayEnabled() {
+		// Seeded, NOT Deterministic. Deterministic would switch jitter and
+		// random rejection off entirely, which removes the venue's whole
+		// reason for existing: a mock that fills every order at the displayed
+		// price produces strategies that only work against that mock. A fixed
+		// seed keeps the venue awkward and makes it awkward the same way
+		// twice.
+		venueConfig.Seed = replayVenueSeed
+	}
 	a.MockBroker = brokermock.New(pool, quoteSource{store: a.Store}, venueRates{store: a.Store},
-		a.MarketClock, a.Clock, brokermock.DefaultConfig())
+		a.MarketClock, a.Clock, venueConfig)
 
 	a.Brokers = broker.NewRegistry()
 	if err := a.Brokers.Register(a.MockBroker); err != nil {
@@ -242,6 +306,102 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		Log:          log,
 	})
 
+	// The replay engine, after the scheduler because it drives it.
+	//
+	// Constructed only in replay mode. Everything downstream tests for a nil
+	// engine, so "replay is unavailable" is a property of the object graph
+	// rather than a configuration lookup repeated in five places.
+	if replayProvider != nil {
+		// The replay drives market data and strategy evaluation, so the
+		// scheduler must not also do it on wall-clock intervals.
+		a.Scheduler.SetExternallyDriven(true)
+
+		registry, rerr := replay.LoadFixtures()
+		if rerr != nil {
+			return nil, fmt.Errorf("app: load replay fixtures: %w", rerr)
+		}
+		a.Replay = replay.NewEngine(registry, replayProvider, a.replayClock, a.Scheduler, log)
+		// Bar aggregation is detached for the duration of a run: the dataset
+		// already supplies complete bars, and folding one quote per bar into a
+		// bar as well would write a degenerate candle over the real one.
+		a.Replay.SetAggregatorControl(func() func() {
+			a.Ingestor.SetAggregator(nil)
+			return func() { a.Ingestor.SetAggregator(aggregator) }
+		})
+		// A run that cannot possibly trade should say so before it starts.
+		// The most common cause by far is a trading authority whose window
+		// does not cover the dataset's dates.
+		a.Replay.SetPreflight(func(from, to time.Time) []string {
+			var warnings []string
+			accounts, aerr := a.Store.Accounts.ListAllAccounts(ctx)
+			if aerr != nil {
+				return []string{"could not check trading authority: " + aerr.Error()}
+			}
+			covered := false
+			for _, account := range accounts {
+				authority, autherr := a.Store.Control.ActiveAuthorityForAccount(ctx, account.ID)
+				if autherr != nil {
+					continue
+				}
+				if ok, _ := authority.Effective(from); !ok {
+					continue
+				}
+				if ok, _ := authority.Effective(to); !ok {
+					continue
+				}
+				if authority.AutomationEnabled {
+					covered = true
+				}
+			}
+			if !covered {
+				warnings = append(warnings, fmt.Sprintf(
+					"no account has an automation-enabled trading authority covering "+
+						"%s to %s, so every strategy run in this replay will be skipped. "+
+						"Grant an authority spanning the dataset, or reseed.",
+					from.Format(time.RFC3339), to.Format(time.RFC3339)))
+			}
+			if state, serr := a.Store.Autopilot.Autopilot(ctx); serr == nil && !state.Enabled {
+				warnings = append(warnings,
+					"the global Autopilot switch is off, so this replay will evaluate "+
+						"nothing. Enable it with POST /api/v1/autopilot.")
+			}
+			return warnings
+		})
+
+		// FX rates are re-stamped at each replay instant, holding their
+		// seeded values.
+		//
+		// The account is ZAR and gold is quoted in USD, so sizing needs a
+		// USD/ZAR rate. Seeded rates are dated at seed time, which a dataset
+		// deliberately ahead of the seed makes months stale -- and the
+		// converter refuses a stale rate, correctly. Holding the rate
+		// constant is an explicit assumption: a replay's P&L contains no
+		// currency movement.
+		replayRates := [][2]money.Currency{
+			{money.USD, money.ZAR}, {money.EUR, money.ZAR},
+			{money.EUR, money.USD}, {money.GBP, money.USD},
+		}
+		a.Replay.SetBeforeStep(func(stepCtx context.Context, now time.Time) error {
+			for _, pair := range replayRates {
+				existing, rerr := a.Store.Market.LatestFXRate(stepCtx, pair[0], pair[1])
+				if rerr != nil {
+					continue // no seeded rate for this pair; nothing to hold
+				}
+				if !existing.SourceTime.Before(now) {
+					continue // already current at or after this instant
+				}
+				if uerr := a.Store.Market.UpsertFXRate(stepCtx, pair[0], pair[1],
+					existing.Rate, now, "replay"); uerr != nil {
+					return uerr
+				}
+			}
+			return nil
+		})
+
+		log.Info("market replay is available",
+			"datasets", len(registry.IDs()))
+	}
+
 	a.Server, err = httpapi.NewServer(httpapi.Deps{
 		Config: cfg, Logger: log, Pool: pool, Store: a.Store, Keyring: a.Keyring,
 		Limiter: a.Limiter, Brokers: a.Brokers, OMS: a.OMS, Portfolio: a.Portfolio,
@@ -249,6 +409,7 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		MockBroker: a.MockBroker,
 		Reconciler: a.Reconciler, Quant: a.Quant,
 		Orchestrator: a.Orchestrator, Clock: a.Clock, MarketClock: a.MarketClock,
+		Replay:  a.Replay,
 		Version: Version, Commit: Commit,
 	})
 	if err != nil {

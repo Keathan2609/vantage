@@ -70,7 +70,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	log := logging.FromContext(r.Context())
 	ip := clientIP(r)
-	now := s.clock.Now()
+	now := s.wallClock.Now()
 
 	const genericFailure = "Those credentials are not valid."
 
@@ -188,7 +188,7 @@ func (s *Server) issueSession(r *http.Request, user domain.User, mfaSatisfied bo
 	if !mfaSatisfied {
 		ttl = 10 * time.Minute
 	}
-	expires = s.clock.Now().Add(ttl)
+	expires = s.wallClock.Now().Add(ttl)
 
 	ip := clientIP(r)
 	ua := r.UserAgent()
@@ -216,7 +216,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log := logging.FromContext(r.Context())
-	now := s.clock.Now()
+	now := s.wallClock.Now()
 
 	if !p.User.MFAEnabled || len(p.User.MFASecretCipher) == 0 {
 		writeError(w, r, http.StatusBadRequest, "mfa_not_enabled",
@@ -503,7 +503,7 @@ func (s *Server) handleMFAActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer zero(secret)
 
-	if !auth.VerifyTOTP(string(secret), strings.TrimSpace(req.Code), s.clock.Now()) {
+	if !auth.VerifyTOTP(string(secret), strings.TrimSpace(req.Code), s.wallClock.Now()) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_code", "That code is not valid.")
 		return
 	}
@@ -513,7 +513,7 @@ func (s *Server) handleMFAActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.Users.MarkSessionMFASatisfied(r.Context(), p.Session.ID,
-		s.clock.Now().Add(s.cfg.SessionTTL)); err != nil {
+		s.wallClock.Now().Add(s.cfg.SessionTTL)); err != nil {
 		logging.FromContext(r.Context()).Warn("could not mark session MFA-satisfied", "error", err.Error())
 	}
 	s.auditAuth(r, &p.User.ID, domain.AuditMFAEnrolled, domain.AuditSuccess, nil)
@@ -552,7 +552,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer zero(secret)
-	if !auth.VerifyTOTP(string(secret), strings.TrimSpace(req.Code), s.clock.Now()) {
+	if !auth.VerifyTOTP(string(secret), strings.TrimSpace(req.Code), s.wallClock.Now()) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_code", "That code is not valid.")
 		return
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/vantage/control-api/internal/app"
 	"github.com/vantage/control-api/internal/domain"
+	"github.com/vantage/control-api/internal/marketdata"
 	"github.com/vantage/control-api/internal/seed"
 )
 
@@ -68,11 +69,21 @@ func runSeed(ctx context.Context) error {
 	}
 	defer application.Close()
 
+	// The seeder generates a price history, which needs the mock provider
+	// specifically. Seeding a database configured for replay is a
+	// contradiction: the dataset supplies the history.
+	mockProvider, ok := application.Provider.(*marketdata.MockProvider)
+	if !ok {
+		return fmt.Errorf(
+			"seed: this process is configured for market replay, which supplies its " +
+				"own history. Seed with VANTAGE_MARKET_DATA_PROVIDER=mock")
+	}
+
 	result, err := seed.Run(ctx, seed.Deps{
 		Store:       application.Store,
 		Pool:        application.Pool,
 		MockBroker:  application.MockBroker,
-		Provider:    application.Provider,
+		Provider:    mockProvider,
 		EconData:    application.EconData,
 		MarketClock: application.MarketClock,
 		Clock:       application.Clock,

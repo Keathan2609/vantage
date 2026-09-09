@@ -547,3 +547,76 @@ func (m *MockProvider) SetPrice(instrumentID string, price float64, now time.Tim
 }
 
 var _ Provider = (*MockProvider)(nil)
+
+// BackfillBars pulls completed bars from the provider into the store.
+//
+// # Why ingestion needs this
+//
+// Bars reach the database two ways: aggregated from the live quote stream, and
+// fetched as history from a provider that has some. Only the first existed as
+// a running path -- the second was called by the seeder alone -- so a provider
+// that supplies real bars had no way to deliver them.
+//
+// A market replay is exactly such a provider: its dataset IS the bar series,
+// and aggregating it back out of one quote per bar would produce a degenerate
+// candle. So the replay step calls this instead, and a future licensed
+// provider with a history endpoint will use the same path rather than needing
+// a new one.
+//
+// # Why the window is bounded by the clock
+//
+// `to` is the current instant, so a provider that holds future data cannot
+// deliver it. The replay provider enforces that itself -- it never returns a
+// bar its cursor has not reached -- but relying on one guarantee in one
+// implementation is how look-ahead gets in. Two independent bounds.
+func (i *Ingestor) BackfillBars(ctx context.Context, lookback time.Duration,
+	timeframes ...domain.Timeframe) error {
+
+	instruments, err := i.store.Market.ListInstruments(ctx, true)
+	if err != nil {
+		return fmt.Errorf("marketdata: list instruments: %w", err)
+	}
+	if len(timeframes) == 0 {
+		timeframes = []domain.Timeframe{
+			domain.Timeframe("15m"), domain.Timeframe("1h"), domain.Timeframe("4h"),
+		}
+	}
+
+	log := logging.FromContext(ctx)
+	now := i.clock.Now()
+	from := now.Add(-lookback)
+
+	for _, inst := range instruments {
+		for _, tf := range timeframes {
+			bars, berr := i.provider.HistoricalBars(ctx, inst, tf, from, now)
+			if berr != nil {
+				// Per-instrument, per-timeframe: a provider with no series for
+				// one instrument must not stop the others. Logged at debug
+				// because a replay dataset covering one instrument will report
+				// this for every other enabled one, every step.
+				log.Debug("no history for instrument",
+					"symbol", inst.Symbol, "timeframe", string(tf), "error", berr.Error())
+				continue
+			}
+			if len(bars) == 0 {
+				continue
+			}
+			// Only completed bars. A forming bar written as history would be
+			// read by a strategy as fact and then change underneath it.
+			complete := make([]domain.Bar, 0, len(bars))
+			for _, b := range bars {
+				if b.Complete && !b.OpenTime.After(now) {
+					complete = append(complete, b)
+				}
+			}
+			if len(complete) == 0 {
+				continue
+			}
+			if uerr := i.store.Market.UpsertBars(ctx, complete); uerr != nil {
+				log.Error("could not persist backfilled bars",
+					"symbol", inst.Symbol, "timeframe", string(tf), "error", uerr.Error())
+			}
+		}
+	}
+	return nil
+}
