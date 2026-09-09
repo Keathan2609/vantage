@@ -412,3 +412,42 @@ func (s *MarketStore) LatestFXRate(ctx context.Context, base, quote money.Curren
 	r.Quote = money.Currency(q)
 	return r, nil
 }
+
+// PurgeReplayMarketData removes market data produced by a previous replay.
+//
+// # Why a replay must start from a clean market-data state
+//
+// This closes a defect that made a second replay run wrong in a way that
+// looked like a broken clock.
+//
+// Quotes are upserted unconditionally, and the upsert moves the outgoing quote
+// into `prev`. So starting a dataset dated 2 March while the database still
+// held a quote from a previous run at 10 March produced two effects at once:
+// the new quote read as `timestamp_regressed` against the old one, and for the
+// rest of the run the orchestrator's own health check saw a stored quote eight
+// days in the FUTURE and refused with `future_timestamp`. In one measured pass
+// that was 415 of 1082 strategy runs skipped -- correct refusals, for a
+// condition the harness had created.
+//
+// Bars matter for the same reason and worse: they are upserted by
+// (instrument, timeframe, open_time), so bars from a DIFFERENT dataset would
+// silently feed the indicators of this one.
+//
+// Only replay-provided rows are removed. Seeded and mock data are untouched,
+// because a replay is a development tool and destroying the surrounding
+// fixture would be a surprise.
+func (s *MarketStore) PurgeReplayMarketData(ctx context.Context) error {
+	return s.pool.InTx(ctx, func(tx pgx.Tx) error {
+		for _, stmt := range []string{
+			`DELETE FROM market_quotes_latest WHERE provider = 'replay'`,
+			`DELETE FROM market_quotes WHERE provider = 'replay'`,
+			`DELETE FROM market_bars WHERE provider = 'replay'`,
+			`DELETE FROM market_data_health WHERE provider = 'replay'`,
+		} {
+			if _, err := tx.Exec(ctx, stmt); err != nil {
+				return mapError(err)
+			}
+		}
+		return nil
+	})
+}

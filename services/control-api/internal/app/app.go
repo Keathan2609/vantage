@@ -368,6 +368,11 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 			return warnings
 		})
 
+		// Each run begins from a clean market-data state.
+		a.Replay.SetOnStart(func(startCtx context.Context) error {
+			return a.Store.Market.PurgeReplayMarketData(startCtx)
+		})
+
 		// FX rates are re-stamped at each replay instant, holding their
 		// seeded values.
 		//

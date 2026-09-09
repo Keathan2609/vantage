@@ -86,6 +86,10 @@ type Engine struct {
 	counters Counters
 
 	preflight Preflight
+	// onStart clears market data left by a previous run. See
+	// store.PurgeReplayMarketData for why a replay cannot begin on top of
+	// another one's quotes.
+	onStart func(ctx context.Context) error
 	// beforeStep is an app-supplied hook run at each replay instant, before
 	// the pipeline. It exists for market data the dataset does not carry --
 	// currently FX rates, which the sizing path needs and which would
@@ -192,6 +196,19 @@ func (e *Engine) Start(opts Options) (Run, error) {
 	speed, err := ParseSpeed(opts.Speed)
 	if err != nil {
 		return Run{}, err
+	}
+
+	// Clear market data from any previous run FIRST.
+	//
+	// A dataset starting earlier than the last run's final bar would otherwise
+	// see that bar as a quote from the future, and the data-quality policy
+	// would refuse most of the run -- correctly, for a condition the harness
+	// created. Measured before this existed: 415 of 1082 strategy runs
+	// skipped.
+	if e.onStart != nil {
+		if err := e.onStart(context.Background()); err != nil {
+			return Run{}, fmt.Errorf("replay: clearing previous market data: %w", err)
+		}
 	}
 
 	// The provider is loaded with the whole series per instrument. It refuses
@@ -640,6 +657,13 @@ func (e *Engine) Datasets() []Dataset { return e.registry.List() }
 // So the application supplies a check, and a run that cannot possibly trade
 // says so before it starts rather than after it has produced nothing.
 type Preflight func(from, to time.Time) []string
+
+// SetOnStart installs a hook run when a dataset is engaged.
+func (e *Engine) SetOnStart(fn func(ctx context.Context) error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onStart = fn
+}
 
 // SetBeforeStep installs a hook run at each replay instant.
 func (e *Engine) SetBeforeStep(fn func(ctx context.Context, now time.Time) error) {
