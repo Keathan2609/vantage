@@ -403,6 +403,32 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 			return nil
 		})
 
+		// Every run is recorded before it is announced, so a replay result can
+		// be tied to the dataset, code and configuration that produced it
+		// after the process that produced it is gone. The closure is where the
+		// engine's vocabulary meets the store's: the engine cannot import
+		// store, because store sits below it.
+		a.Replay.SetRecorder(func(rctx context.Context, run replay.Run, warnings []string) error {
+			return a.Store.Replay.RecordRun(rctx, store.ReplayRun{
+				ID:            run.ID,
+				DatasetID:     run.DatasetID,
+				DatasetHash:   run.DatasetHash,
+				CodeSHA:       run.CodeSHA,
+				ConfigHash:    run.ConfigHash,
+				Seed:          run.Seed,
+				FromTime:      run.FromTime,
+				ToTime:        run.ToTime,
+				StartedAt:     run.StartedAt,
+				FinishedAt:    run.FinishedAt,
+				State:         string(run.State),
+				Steps:         run.Counters.Steps,
+				BarsProcessed: run.Counters.BarsProcessed,
+				StepErrors:    run.Counters.Errors,
+				Failure:       run.Error,
+				Warnings:      warnings,
+			})
+		})
+
 		log.Info("market replay is available",
 			"datasets", len(registry.IDs()))
 	}

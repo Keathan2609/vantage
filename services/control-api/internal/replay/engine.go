@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +97,11 @@ type Engine struct {
 	// currently FX rates, which the sizing path needs and which would
 	// otherwise be six months stale at replay time.
 	beforeStep func(ctx context.Context, now time.Time) error
+	// record persists the run. See SetRecorder.
+	record Recorder
+	// lastPersist throttles the progress writes so a long run does not spend
+	// its time in the database. State CHANGES are never throttled.
+	lastPersist time.Time
 	// advancing guards the background Advance goroutine.
 	advancing bool
 	// warnings are conditions that will stop this run trading, reported at
@@ -131,6 +138,18 @@ type Run struct {
 	Error      string     `json:"error,omitempty"`
 }
 
+// Recorder persists a run record.
+//
+// A function rather than an interface implemented by the store, because the
+// import would point the wrong way: this package sits above marketdata, which
+// sits above store. The application supplies a closure that maps a Run onto
+// store.ReplayRun, which is the only place the two vocabularies meet.
+//
+// Nil is legitimate. An engine built in a test without a database still runs;
+// it simply leaves no record, and the tests that care assert on the recorder
+// they injected.
+type Recorder func(ctx context.Context, run Run, warnings []string) error
+
 // Options configure a run.
 type Options struct {
 	DatasetID  string
@@ -139,6 +158,15 @@ type Options struct {
 	CodeSHA    string
 	ConfigHash string
 }
+
+// How often a run's progress reaches the database, and how long that write
+// gets. Progress is written for durability, not for correctness, so it is
+// deliberately cheap: a replay that spent its time persisting counters would
+// be slower than the market it is replaying.
+const (
+	persistInterval = 2 * time.Second
+	persistTimeout  = 5 * time.Second
+)
 
 // Errors callers distinguish.
 var (
@@ -256,9 +284,45 @@ func (e *Engine) Start(opts Options) (Run, error) {
 	e.warnings = nil
 	if e.preflight != nil {
 		e.warnings = e.preflight(from, to)
-		for _, w := range e.warnings {
-			e.log.Warn("replay preflight", "run", e.run.ID.String(), "warning", w)
+	}
+	// An unstamped build cannot claim a code identity.
+	//
+	// This is the dangerous direction, not a cosmetic gap: two runs of a
+	// `go run` binary both record code_sha "unknown", which COMPARES EQUAL --
+	// so a comparison would assert that the same code produced both when
+	// nothing of the kind was established. The warning is durable and travels
+	// with the run record, so a determinism claim made from these two rows has
+	// to be made in spite of it rather than in ignorance of it.
+	if !plausibleCodeSHA(opts.CodeSHA) {
+		e.warnings = append(e.warnings,
+			"this build carries no commit identity ("+describeSHA(opts.CodeSHA)+"), so this "+
+				"run cannot be compared to another on code identity: build with the "+
+				"version ldflags to record one")
+	}
+	for _, w := range e.warnings {
+		e.log.Warn("replay preflight", "run", e.run.ID.String(), "warning", w)
+	}
+
+	// Written before the run is announced, and a failure aborts the start.
+	// The clock has to be released again by hand here: finishLocked would
+	// record a stopped run, which is exactly the write that just failed.
+	if e.record != nil {
+		run := *e.run
+		run.Counters = e.counters
+		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		rerr := e.record(ctx, run, append([]string(nil), e.warnings...))
+		cancel()
+		if rerr != nil {
+			e.switcher.Disengage()
+			if e.restoreAggregator != nil {
+				e.restoreAggregator()
+				e.restoreAggregator = nil
+			}
+			e.state = StateIdle
+			e.run = nil
+			return Run{}, fmt.Errorf("replay: recording the run: %w", rerr)
 		}
+		e.lastPersist = time.Now()
 	}
 
 	e.log.Warn("market replay engaged: this process is now on replay time",
@@ -298,10 +362,12 @@ func (e *Engine) Step(ctx context.Context, n int) (Run, error) {
 		}
 		if err := ctx.Err(); err != nil {
 			e.run.Counters = e.counters
+			e.persistLocked(true)
 			return *e.run, err
 		}
 	}
 	e.run.Counters = e.counters
+	e.persistLocked(false)
 	return *e.run, nil
 }
 
@@ -475,6 +541,7 @@ func (e *Engine) Pause() (Run, error) {
 	}
 	e.state = StatePaused
 	e.run.State = StatePaused
+	e.persistLocked(true)
 	return *e.run, nil
 }
 
@@ -493,6 +560,7 @@ func (e *Engine) Resume() (Run, error) {
 	}
 	e.state = StateRunning
 	e.run.State = StateRunning
+	e.persistLocked(true)
 	return *e.run, nil
 }
 
@@ -528,6 +596,7 @@ func (e *Engine) Reset() (Run, error) {
 	e.run.Counters = e.counters
 	e.run.Error = ""
 	e.run.FinishedAt = nil
+	e.persistLocked(true)
 	return *e.run, nil
 }
 
@@ -598,6 +667,9 @@ func (e *Engine) finishLocked(state State, cause error) {
 		e.restoreAggregator = nil
 	}
 	e.provider.SetOutage(false)
+	// Forced: the final state and counters are the record. Everything written
+	// before this was a progress update.
+	e.persistLocked(true)
 	if e.run != nil {
 		e.log.Warn("market replay disengaged: this process is back on real time",
 			"run", e.run.ID.String(), "state", string(state),
@@ -677,6 +749,72 @@ func (e *Engine) SetPreflight(p Preflight) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.preflight = p
+}
+
+// SetRecorder installs the function that persists a run record.
+//
+// Set before Start. A run whose opening record cannot be written is REFUSED
+// rather than run unrecorded: the value of a replay is that its result can be
+// tied to the dataset, code and configuration that produced it, and a result
+// nobody can tie to anything is not worth the minutes it costs to produce.
+func (e *Engine) SetRecorder(fn Recorder) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.record = fn
+}
+
+// persistLocked writes the current run record.
+//
+// Failures after the opening write are logged and counted, never fatal.
+// Discarding a finished run's real financial result because a bookkeeping
+// write failed would destroy the evidence to protect the filing system.
+func (e *Engine) persistLocked(force bool) {
+	if e.record == nil || e.run == nil {
+		return
+	}
+	if !force && time.Since(e.lastPersist) < persistInterval {
+		return
+	}
+	run := *e.run
+	run.Counters = e.counters
+	warnings := append([]string(nil), e.warnings...)
+	// Detached from any request context: the record of a run that has just
+	// ended must not depend on a client still being connected.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), persistTimeout)
+	defer cancel()
+	if err := e.record(ctx, run, warnings); err != nil {
+		e.log.Error("recording the replay run failed",
+			"run", run.ID.String(), "state", string(run.State), "error", err)
+		return
+	}
+	e.lastPersist = time.Now()
+}
+
+// plausibleCodeSHA reports whether a string could be a commit identity.
+//
+// Deliberately a shape check and not a lookup: the engine has no business
+// running git, and a build stamped with a SHA from a repository this process
+// cannot see is still a usable identity. Seven hex characters is the shortest
+// abbreviation git itself will hand out.
+func plausibleCodeSHA(sha string) bool {
+	if len(sha) < 7 {
+		return false
+	}
+	for _, c := range sha {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// describeSHA quotes what was recorded, so the warning says which of "empty"
+// and "unknown" it was rather than leaving the reader to guess.
+func describeSHA(sha string) string {
+	if strings.TrimSpace(sha) == "" {
+		return "no code SHA was supplied"
+	}
+	return "code SHA " + strconv.Quote(sha)
 }
 
 // Warnings returns the preflight findings for the current run.

@@ -1141,10 +1141,14 @@ been executed and moved into the tally — and what remains is what remains.
   rest, and nine datasets are committed, but scenarios D, F, G, I, J and the
   new N-S are still decision-layer tests only. Rewriting them onto the replay
   engine is the obvious next step and was not reached.
-- **`ReplayRun` is not persisted.** The record is defined, populated and
-  returned by the API, and it carries the dataset hash, code SHA, config hash
-  and seed -- but it lives in memory and is lost on restart. Comparing two runs
-  today means capturing the API response, not querying a table.
+- **A replay run's code identity is only as good as the build.** The record
+  is now persisted (`replay_runs`, migration 0013) and carries the dataset
+  hash, code SHA, config hash and seed. But a `go run` binary has no commit
+  identity, so `code_sha` reads `unknown` -- and two such runs COMPARE EQUAL on
+  it while establishing nothing. `Start` records a durable warning saying the
+  comparison cannot be made; a container build stamps a real SHA. This is
+  recorded rather than fixed because the honest answer for an uncommitted
+  working tree is that there is no identity to record.
 - **Speed is not proven not to affect results.** It is designed to change
   pacing only, and the pacing code touches no price, size or timestamp. The
   determinism proof ran at `max` both times rather than comparing `1x` against
@@ -1274,7 +1278,8 @@ trust needs the difference.
 | 29g | Market replay — determinism | COMPLETE | Two runs from a byte-identical database produce byte-identical financial output. Required seeding the mock venue, which was seeding slippage from the wall clock |
 | 29h | Market replay — datasets and controls | COMPLETE | Nine committed fixtures with parsed-row hashes, an allowlist registry (never a path), admin-only start/step/advance/pause/resume/reset/stop/speed/reconcile, reason required and audited for start and stop |
 | 29i | Market replay — scenario coverage | **PARTIAL** | One of twenty scenarios (A) is driven end to end. The rest remain decision-layer tests; the infrastructure to move them exists |
-| 29j | ReplayRun persistence | **MISSING** | The record is defined and returned but not stored, so runs cannot be compared from the database |
+| 29j | ReplayRun persistence | COMPLETE | `replay_runs` (0013). Written before the run is announced and updated as it plays, so an interrupted replay still leaves a trace; a run whose opening record cannot be written is refused, while a later recording failure never destroys a finished run. `simulated` cannot be false, and the app role cannot DELETE |
+| 29k | Replay run history API | COMPLETE | Admin-only `GET /replay/runs` and `/replay/runs/{id}`, answering in every process because a recorded run is evidence whether or not the engine is present |
 | 29e | Autopilot global switch | COMPLETE | Default OFF, ADMIN to change with a mandatory reason, any role to read, append-only history, enforced in the order transaction with its own rejection code, distinct from the kill switch |
 | 30 | Signal to order routing | COMPLETE | `TestEveryOrderPlacementGoesThroughTheSameOMSMethod` pins the two permitted call sites |
 | 31 | Backtesting engine | COMPLETE | Next-bar fills, stop assumed on an ambiguous bar, full costs, unaffordable trades counted rather than dropped. Rejects non-ascending bars |

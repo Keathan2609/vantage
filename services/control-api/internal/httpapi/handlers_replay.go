@@ -8,12 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/vantage/control-api/internal/domain"
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/replay"
+	"github.com/vantage/control-api/internal/store"
 )
 
 // Market replay controls.
@@ -34,6 +36,14 @@ import (
 // a good idea. Dataset IDs resolve through `replay.Registry`, an allowlist
 // fixed at build time from declarations in code. An unknown ID is a 404 and
 // never reaches a filesystem call.
+
+// replayLabel travels with every replay payload.
+//
+// A single constant because the whole purpose of the label is that it is
+// always present and always identical: a second copy would eventually differ
+// from this one, and the difference would be in the direction of sounding more
+// like a result.
+const replayLabel = "SIMULATED — REPLAY — PAPER. Not a claim about future performance."
 
 type replayRunView struct {
 	ID          string  `json:"id"`
@@ -78,7 +88,7 @@ func (s *Server) replayView(run replay.Run) replayRunView {
 		Errors: run.Counters.Errors,
 
 		Simulated: true,
-		Label:     "SIMULATED — REPLAY — PAPER. Not a claim about future performance.",
+		Label:     replayLabel,
 	}
 	if run.FinishedAt != nil {
 		f := run.FinishedAt.UTC().Format(time.RFC3339)
@@ -91,6 +101,105 @@ func (s *Server) replayView(run replay.Run) replayRunView {
 		}
 	}
 	return v
+}
+
+// replayRecordView is a run read back from the database.
+//
+// Separate from replayRunView because a stored run has no live progress: rows
+// played, the current replay instant and whether the clock is engaged are
+// properties of a run happening now. Serving them as zeroes on a historical
+// record would read as "this run played nothing".
+type replayRecordView struct {
+	ID          string  `json:"id"`
+	DatasetID   string  `json:"dataset_id"`
+	DatasetHash string  `json:"dataset_hash"`
+	CodeSHA     string  `json:"code_sha"`
+	ConfigHash  string  `json:"config_hash"`
+	Seed        int64   `json:"seed"`
+	State       string  `json:"state"`
+	FromTime    string  `json:"from_time"`
+	ToTime      string  `json:"to_time"`
+	StartedAt   string  `json:"started_at"`
+	FinishedAt  *string `json:"finished_at"`
+
+	Steps         int `json:"steps"`
+	BarsProcessed int `json:"bars_processed"`
+	Errors        int `json:"errors"`
+
+	Failure string `json:"failure,omitempty"`
+	// Warnings are the preflight findings recorded at Start. A run with no
+	// orders and a run that was never permitted to place one are
+	// indistinguishable without them.
+	Warnings []string `json:"warnings"`
+
+	Simulated bool   `json:"simulated"`
+	Label     string `json:"label"`
+}
+
+func replayRecord(run store.ReplayRun) replayRecordView {
+	v := replayRecordView{
+		ID: run.ID.String(), DatasetID: run.DatasetID, DatasetHash: run.DatasetHash,
+		CodeSHA: run.CodeSHA, ConfigHash: run.ConfigHash, Seed: run.Seed,
+		State:     run.State,
+		FromTime:  run.FromTime.UTC().Format(time.RFC3339),
+		ToTime:    run.ToTime.UTC().Format(time.RFC3339),
+		StartedAt: run.StartedAt.UTC().Format(time.RFC3339),
+
+		Steps: run.Steps, BarsProcessed: run.BarsProcessed, Errors: run.StepErrors,
+		Failure:  run.Failure,
+		Warnings: run.Warnings,
+
+		Simulated: true,
+		Label:     replayLabel,
+	}
+	if v.Warnings == nil {
+		v.Warnings = []string{}
+	}
+	if run.FinishedAt != nil {
+		f := run.FinishedAt.UTC().Format(time.RFC3339)
+		v.FinishedAt = &f
+	}
+	return v
+}
+
+// handleReplayRuns lists recorded runs, newest first.
+//
+// Deliberately NOT gated on a live engine. The control endpoints exist only
+// where a replay can be driven, but the record of what was replayed is
+// evidence, and evidence that disappears when the process is configured
+// differently is not much use. Reading it is an admin-only read of data that
+// carries "simulated" in every row.
+func (s *Server) handleReplayRuns(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	// An allowlist key or empty, passed as a parameter. An unknown dataset is
+	// an empty list, never a query built from the string.
+	dataset := strings.TrimSpace(r.URL.Query().Get("dataset"))
+	runs, err := s.store.Replay.Runs(r.Context(), dataset, limit)
+	if err != nil {
+		writeStoreError(w, r, err, "Replay runs not found.")
+		return
+	}
+	out := make([]replayRecordView, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, replayRecord(run))
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"runs": out, "simulated": true, "label": replayLabel,
+	})
+}
+
+// handleReplayRun reports one recorded run.
+func (s *Server) handleReplayRun(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, chi.URLParam(r, "runID"), "Run id")
+	if !ok {
+		return
+	}
+	run, err := s.store.Replay.Run(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, r, err, "No replay run with that id was recorded.")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"run": replayRecord(run)})
 }
 
 // handleReplayDatasets lists the allowlisted datasets.

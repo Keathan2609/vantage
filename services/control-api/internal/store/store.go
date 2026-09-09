@@ -37,6 +37,7 @@ type Store struct {
 	Research  *ResearchStore
 	Reconcile *ReconciliationStore
 	Autopilot *AutopilotStore
+	Replay    *ReplayStore
 }
 
 // New builds a Store over an open pool.
@@ -50,6 +51,7 @@ func New(pool *db.Pool) *Store {
 	s.Research = &ResearchStore{pool: pool}
 	s.Reconcile = &ReconciliationStore{pool: pool}
 	s.Autopilot = &AutopilotStore{pool: pool}
+	s.Replay = &ReplayStore{pool: pool}
 	return s
 }
 

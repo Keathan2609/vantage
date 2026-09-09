@@ -212,6 +212,44 @@ execution mode, brokers, provider, quant timeout. Not the whole configuration:
 a log level should not invalidate a comparison, and a connection string must
 never reach a stored record.
 
+### Where it is kept
+
+`replay_runs` (migration 0013). The row is written **before the run is
+announced** and updated as the run progresses, so an interrupted replay — a
+crash, a kill, a power cut — still leaves a trace. A run whose opening record
+cannot be written is **refused**: a result nobody can tie to a dataset, a code
+SHA and a configuration is not worth the minutes it costs to produce.
+
+The reverse trade-off applies once the run exists. A recording failure after
+the start is logged and counted, never fatal: throwing away real orders, fills
+and ledger entries because a bookkeeping write failed would destroy the
+evidence to protect the filing system.
+
+Read it at `GET /api/v1/replay/runs` (newest first, `?dataset=` and `?limit=`)
+and `GET /api/v1/replay/runs/{id}`. Both are admin-only, and unlike the control
+endpoints they answer in **every** process: a recorded run is evidence, and the
+engine being absent does not unmake it. Every payload carries `simulated: true`
+and the SIMULATED — REPLAY — PAPER label.
+
+`simulated` is a column with a `CHECK (simulated)` on it, so a replay row that
+claims to be live is not representable. The control plane may insert and update
+a run but **not delete one**; removing a run is the schema owner's deliberate
+act.
+
+### What a run cannot claim
+
+A build that carries no commit identity records `code_sha` as `unknown`, which
+is what `go run` produces. Two such runs **compare equal on code identity**
+while establishing nothing, which is the dangerous direction, so `Start`
+appends a durable warning to the run record saying the comparison cannot be
+made. The container build stamps a real SHA through ldflags; a development
+binary does not, and the record says so rather than implying otherwise.
+
+The `warnings` column also carries the preflight findings — an expired trading
+authority, autopilot off. A run with zero orders and a run that was never
+permitted to place one are indistinguishable afterwards without them, and that
+difference is the whole question a paper-forward run exists to answer.
+
 ## Determinism
 
 **Proven.** Two runs of one dataset from a byte-identical database
@@ -269,7 +307,5 @@ reason the mock venue exists. It stays awkward, and awkward the same way twice.
 - **Attribution is by instrument only.** Strategy, model, session, regime and
   event context are not attributed, so a replay cannot yet answer "which
   strategy made this".
-- **No `ReplayRun` persistence.** Runs live in memory and are lost on restart;
-  the record is defined and returned by the API but not stored.
 - **No paper-forward versus backtest comparison.** Both exist; nothing compares
   them.

@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -570,8 +571,14 @@ func TestPreflightWarningsAreReportedAtStart(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	warnings := e.Warnings()
-	if len(warnings) != 1 {
-		t.Fatalf("warnings = %v, want one", warnings)
+	found := false
+	for _, w := range warnings {
+		if strings.HasPrefix(w, "no authority covers") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v, want the preflight finding among them", warnings)
 	}
 	// A warning is not a refusal: the operator may want the run anyway.
 	if run, _ := e.Status(); run.State != StatePaused {

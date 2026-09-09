@@ -367,6 +367,11 @@ func (s *Server) routes() chi.Router {
 			// handler refuses when the engine is nil, and the engine exists
 			// only when configuration asked for replay in a development
 			// environment.
+			// The run history is registered here too, but unlike the
+			// controls it answers in every process: a recorded run is
+			// evidence, and the engine being absent does not unmake it.
+			admin.Get("/replay/runs", s.handleReplayRuns)
+			admin.Get("/replay/runs/{runID}", s.handleReplayRun)
 			admin.Get("/replay/datasets", s.handleReplayDatasets)
 			admin.Get("/replay", s.handleReplayStatus)
 			admin.Post("/replay/control", s.handleReplayControl)
