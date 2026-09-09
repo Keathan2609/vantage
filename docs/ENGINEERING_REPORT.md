@@ -1038,6 +1038,73 @@ build now always produces something runnable.
 
 ---
 
+## 30d. The attribution defect, and what attribution found
+
+### The defect
+
+`AttributionByInstrument` grouped CLOSED POSITIONS and converted each one's P&L
+into the account's currency, with `if err != nil { continue }` on the
+conversion. A missing or stale FX rate therefore removed that position's money
+from the report silently, and the total was quietly not the account's total.
+Nothing failed; the number was just wrong, in the direction of looking tidier.
+
+Attribution now folds the **ledger**. Every movement of money is exactly one
+transaction row, already denominated in the account's currency because booking
+converted it once, at the time, with the rate that actually applied. Each unit
+of money is therefore counted exactly once by construction: double counting
+would need a duplicate ledger row, which the sequence constraint forbids.
+
+Two reads, not one. The entries are folded into buckets; the account's own
+entry count and net movement come from a separate query; the report compares
+them and reports itself **unreconciled** when they disagree. A fold that
+reported its own sum as the account's total would be internally consistent and
+wrong, which is the worst kind of financial number.
+
+Every entry lands in exactly one bucket, including the ones that cannot be
+attributed. A deposit has no order and therefore no strategy, and dropping it
+would make the buckets sum to less than the account -- so it lands in a bucket
+that says why. Deposits are also held apart from performance entirely: `Other`
+never enters `Net`, because funding an account is not a profit.
+
+### What it found immediately
+
+On one replay of `trend-clean`, reconciled at 25 of 25 ledger entries in all
+seven dimensions:
+
+| Strategy | Net | Trades | Win rate |
+|---|---|---|---|
+| Donchian Channel Breakout v1 | -26.17 | 13 | 0.00 |
+| Bollinger Z-Score Reversion v1 | -0.11 | 3 | 0.33 |
+| RSI Mean Reversion v1 | +5.62 | 8 | 0.75 |
+
+A promoted strategy losing thirteen trades out of thirteen was invisible before
+this existed: the account's -20.66 was the only number available, and it looked
+like mild underperformance rather than one strategy losing money on every
+attempt while another paid some of it back. **This is one 140-bar simulated
+replay and is not a claim about any strategy's merit.**
+
+By session, the same run: tokyo -11.50 over 9 trades at an 11% win rate,
+new_york -4.80 over 4 at 0%, london -4.66 over 8 at 63%, and the London/New
+York overlap +0.30 over 3.
+
+### What the session dimension needed
+
+Nothing recorded the liquidity session a decision was taken in. The decision
+snapshot held `market_status` -- open or closed -- which is not a session.
+
+Sessions are now recorded on every decision, both as the full active set and as
+a single `session` label reduced from it, and attribution groups by the
+recorded label rather than recomputing a calendar over the order's timestamp.
+Recomputing would judge an old trade against a calendar that has since been
+amended, so a holiday correction would silently reattribute historical P&L.
+
+Costs deserve one caveat: the mock venue charges no commission on `XAUUSD.m` in
+this configuration, so all 48 fills in that run had zero commission and zero
+slippage and the cost column read 0.00. The routing of costs is proven by unit
+test rather than by that run.
+
+---
+
 ## 30c. Defects the replay milestone found
 
 Four of these were in code that three previous milestones had passed as
@@ -1164,10 +1231,13 @@ been executed and moved into the tally — and what remains is what remains.
   beat the baseline is flagged. F1, PR-AUC, a confusion matrix and an actual
   calibration curve are not, so "0.80" is documented as a score rather than
   demonstrated to be a probability.
-- **P&L attribution is still by instrument only.** Strategy, model, session,
-  regime and event context are not attributed, so neither a paper-forward run
-  nor a replay can answer "which strategy made this". This was named in the
-  previous revision and is not fixed.
+- **Regime, model and replay-run attribution are still missing.** P&L is now
+  attributed by instrument, strategy, strategy version, source, session, event
+  context and transaction type, folded from the ledger so the buckets reconcile
+  to the account exactly. But no decision records the market regime and no
+  order carries the replay run that produced it, so a replay's P&L cannot be
+  separated from a paper-forward session's in one database. Those two are the
+  remaining dimensions the brief asked for.
 - **No backtest versus paper-forward comparison.** Both engines exist and both
   produce metrics; nothing compares them, so the differences caused by the OMS,
   spread, slippage, latency, the scheduler and reconciliation are unmeasured.
@@ -1280,6 +1350,8 @@ trust needs the difference.
 | 29i | Market replay — scenario coverage | **PARTIAL** | One of twenty scenarios (A) is driven end to end. The rest remain decision-layer tests; the infrastructure to move them exists |
 | 29j | ReplayRun persistence | COMPLETE | `replay_runs` (0013). Written before the run is announced and updated as it plays, so an interrupted replay still leaves a trace; a run whose opening record cannot be written is refused, while a later recording failure never destroys a finished run. `simulated` cannot be false, and the app role cannot DELETE |
 | 29k | Replay run history API | COMPLETE | Admin-only `GET /replay/runs` and `/replay/runs/{id}`, answering in every process because a recorded run is evidence whether or not the engine is present |
+| 29l | P&L attribution across dimensions | COMPLETE for seven of nine | Instrument, strategy, strategy version, source, session, event context and transaction type. Folded from the ledger, so every entry is counted exactly once; the report compares itself against the account's own totals and reports itself unreconciled rather than presenting a truncated window as the account. Regime and replay run are NOT attributed |
+| 29m | Attribution reconciliation | COMPLETE | Measured on a replay: 25 of 25 ledger entries in every one of the seven dimensions, discrepancy 0.00, and 500.00 funding plus -20.66 trading equal to the ledger's 479.34 |
 | 29e | Autopilot global switch | COMPLETE | Default OFF, ADMIN to change with a mandatory reason, any role to read, append-only history, enforced in the order transaction with its own rejection code, distinct from the kill switch |
 | 30 | Signal to order routing | COMPLETE | `TestEveryOrderPlacementGoesThroughTheSameOMSMethod` pins the two permitted call sites |
 | 31 | Backtesting engine | COMPLETE | Next-bar fills, stop assumed on an ambiguous bar, full costs, unaffordable trades counted rather than dropped. Rejects non-ascending bars |

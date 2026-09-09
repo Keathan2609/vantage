@@ -92,6 +92,14 @@ type Engine struct {
 	// store.PurgeReplayMarketData for why a replay cannot begin on top of
 	// another one's quotes.
 	onStart func(ctx context.Context) error
+	// onFinish clears the market data the run wrote.
+	//
+	// Purging only at Start was not enough. A finished replay left its
+	// future-dated quotes in market_quotes_latest, so a process restarted on
+	// the mock provider saw every real quote as `timestamp_regressed` and the
+	// instrument stayed INVALID for good -- a broken feed whose cause was a
+	// replay that had ended cleanly hours earlier.
+	onFinish func(ctx context.Context) error
 	// beforeStep is an app-supplied hook run at each replay instant, before
 	// the pipeline. It exists for market data the dataset does not carry --
 	// currently FX rates, which the sizing path needs and which would
@@ -667,6 +675,21 @@ func (e *Engine) finishLocked(state State, cause error) {
 		e.restoreAggregator = nil
 	}
 	e.provider.SetOutage(false)
+
+	// Clear the market data this run wrote. Bounded and never fatal: a run
+	// that has already produced its result must not fail because the cleanup
+	// did, and the next Start purges again anyway.
+	if e.onFinish != nil {
+		ctx, cancel := context.WithTimeout(
+			context.WithoutCancel(context.Background()), persistTimeout)
+		if perr := e.onFinish(ctx); perr != nil {
+			e.log.Error("clearing the replay's market data failed: a later "+
+				"process on a real provider will see these quotes as arriving "+
+				"from the future", "error", perr)
+		}
+		cancel()
+	}
+
 	// Forced: the final state and counters are the record. Everything written
 	// before this was a progress update.
 	e.persistLocked(true)
@@ -735,6 +758,17 @@ func (e *Engine) SetOnStart(fn func(ctx context.Context) error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.onStart = fn
+}
+
+// SetOnFinish installs the hook that clears a finished run's market data.
+//
+// Symmetrical with SetOnStart deliberately: a run that tidies up after itself
+// cannot poison the next process, and a run that tidies up only BEFORE itself
+// leaves its last quote lying in the live feed's table.
+func (e *Engine) SetOnFinish(fn func(ctx context.Context) error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onFinish = fn
 }
 
 // SetBeforeStep installs a hook run at each replay instant.

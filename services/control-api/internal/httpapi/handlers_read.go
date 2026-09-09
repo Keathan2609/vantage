@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -289,34 +290,83 @@ func (s *Server) handleTransactions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAttribution returns realised P&L grouped by instrument.
+type attributionBucketView struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Gross, Costs and Net stay apart. A strategy that is profitable before
+	// costs and loses after them is the most useful thing this report can
+	// find, and a single "pnl" field hides it.
+	Gross string `json:"gross_pnl"`
+	Costs string `json:"costs"`
+	Net   string `json:"net_pnl"`
+	// Other is deposits, withdrawals and adjustments: money that moved and is
+	// not a trading result.
+	Other   string `json:"other"`
+	Trades  int    `json:"trades"`
+	Wins    int    `json:"wins"`
+	WinRate string `json:"win_rate"`
+	Entries int    `json:"entries"`
+}
+
+func attributionBucket(b domain.AttributionBucket) attributionBucketView {
+	return attributionBucketView{
+		Key: b.Key, Label: b.Label,
+		Gross: b.Gross.StringFixed(), Costs: b.Costs.StringFixed(),
+		Net: b.Net.StringFixed(), Other: b.Other.StringFixed(),
+		Trades: b.Trades, Wins: b.Wins,
+		WinRate: b.WinRate.StringFixed(4), Entries: b.Entries,
+	}
+}
+
+// handleAttribution returns realised P&L grouped by a recorded dimension.
+//
+// `?by=` selects the dimension and fails closed on an unknown one: falling back
+// to instrument would answer a question the caller did not ask, and the caller
+// would believe the answer.
 func (s *Server) handleAttribution(w http.ResponseWriter, r *http.Request) {
 	account, ok := s.accountForRequest(w, r, "accountID")
 	if !ok {
 		return
 	}
-	rows, err := s.portfolio.AttributionByInstrument(r.Context(), account.ID, account.Currency, 500)
+	by := r.URL.Query().Get("by")
+	if strings.TrimSpace(by) == "" {
+		by = string(domain.AttributeByInstrument)
+	}
+	dimension, derr := domain.ParseAttributionDimension(by)
+	if derr != nil {
+		names := make([]string, 0, len(domain.AttributionDimensions()))
+		for _, d := range domain.AttributionDimensions() {
+			names = append(names, string(d))
+		}
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request",
+			"by must be one of "+strings.Join(names, ", ")+".")
+		return
+	}
+
+	report, err := s.portfolio.Attribution(r.Context(), account.ID, account.Currency, dimension, 0)
 	if err != nil {
 		writeStoreError(w, r, err, "Account not found.")
 		return
 	}
-	type row struct {
-		Key         string `json:"key"`
-		Label       string `json:"label"`
-		RealizedPnL string `json:"realized_pnl"`
-		Trades      int    `json:"trades"`
-		WinRate     string `json:"win_rate"`
-	}
-	out := make([]row, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, row{
-			Key: r.Key, Label: r.Label, RealizedPnL: r.RealizedPnL.StringFixed(),
-			Trades: r.Trades, WinRate: r.WinRate.StringFixed(4),
-		})
+
+	out := make([]attributionBucketView, 0, len(report.Buckets))
+	for _, b := range report.Buckets {
+		out = append(out, attributionBucket(b))
 	}
 	writeJSON(w, r, http.StatusOK, map[string]any{
-		"attribution": out, "currency": string(account.Currency),
-		"simulated": s.cfg.SimulatedFunds(),
+		"dimension":   string(report.Dimension),
+		"dimensions":  domain.AttributionDimensions(),
+		"attribution": out,
+		"total":       attributionBucket(report.Total),
+		// Whether the buckets account for every entry the account has. False
+		// means these totals describe a window and not the account, and saying
+		// so is the whole reason the field exists.
+		"reconciled":     report.Reconciled,
+		"ledger_entries": report.LedgerEntries,
+		"ledger_net":     report.LedgerNet.StringFixed(),
+		"discrepancy":    report.Discrepancy.StringFixed(),
+		"currency":       string(account.Currency),
+		"simulated":      s.cfg.SimulatedFunds(),
 	})
 }
 

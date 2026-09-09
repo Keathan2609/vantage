@@ -524,6 +524,11 @@ type gatheredContext struct {
 	eventName  string
 	eventAt    time.Time
 	blackout   bool
+	// sessions are the liquidity sessions live at decision time. Recorded
+	// because P&L attributed to a session has to use the session that was
+	// live THEN: recomputing it later from the order's timestamp would judge
+	// an old trade against a calendar that has since been amended.
+	sessions []domain.SessionName
 }
 
 // gather runs steps 6 to 10 and assembles the risk engine's input.
@@ -645,6 +650,7 @@ func (s *Service) gather(ctx context.Context, account domain.Account, req PlaceO
 
 	// ---- Step 9: market session ------------------------------------------
 	g.market = s.marketClock.Status(now)
+	g.sessions = s.marketClock.ActiveSessions(now)
 
 	// Remaining inputs for the risk engine.
 	limits, err := s.store.Control.RiskLimitsForAccount(ctx, account.ID)
@@ -1322,10 +1328,16 @@ func (s *Service) buildDecisionSnapshot(req PlaceOrderRequest, account domain.Ac
 		PortfolioContext: marshal(portfolioState),
 		RiskState:        marshal(riskState),
 		AuthorityState:   marshal(authorityState),
+		// The market's state at decision time, which is where market_status
+		// already lived. `session` is the single label attribution groups by
+		// and `sessions` is the full set it was reduced from, so the
+		// collapsing is visible rather than assumed.
 		MarketDataHealth: marshal(map[string]any{
 			"state": g.health.State, "issues": g.health.Issues,
 			"quote_age_ms":  g.health.QuoteAge.Milliseconds(),
 			"market_status": g.market,
+			"session":       domain.PrimarySession(g.sessions),
+			"sessions":      g.sessions,
 		}),
 		SignalAction:  signalActionFor(req.Side),
 		Confidence:    confidence,

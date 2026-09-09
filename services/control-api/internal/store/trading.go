@@ -773,6 +773,103 @@ func (s *TradingStore) ClosedPositions(ctx context.Context, accountID uuid.UUID,
 }
 
 // ---------------------------------------------------------------------------
+// Attribution
+// ---------------------------------------------------------------------------
+
+// maxAttributionEntries bounds one attribution read.
+//
+// A truncated read does not silently produce a wrong total: the report compares
+// what it folded against LedgerTotals and reports itself unreconciled. The
+// bound exists so a long-lived account cannot make one request load its entire
+// history into memory.
+const maxAttributionEntries = 5000
+
+// LedgerEntriesForAttribution returns ledger rows with whatever order,
+// strategy and decision context can be joined to them.
+//
+// # Why every join is LEFT
+//
+// A deposit has no order. An order placed by hand has no strategy. An order
+// from before decision snapshots existed has no session. An INNER join would
+// drop each of those rows, and a dropped row is money that vanishes from the
+// report -- which is exactly the defect this replaces. Missing context arrives
+// as an empty string and the fold puts it in a named bucket.
+//
+// The session and blackout flag come from the DECISION the order carried, not
+// from recomputing a calendar over the order's timestamp. Recomputing would
+// judge last month's trade against this month's calendar, and a session
+// changed by a holiday amendment would silently reattribute historical P&L.
+func (s *TradingStore) LedgerEntriesForAttribution(ctx context.Context,
+	accountID uuid.UUID, limit int) ([]domain.LedgerEntry, error) {
+
+	if limit <= 0 || limit > maxAttributionEntries {
+		limit = maxAttributionEntries
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.sequence, t.type, t.amount, t.currency,
+		       COALESCE(o.instrument_id, ''), COALESCE(i.symbol, ''),
+		       COALESCE(o.source, ''),
+		       COALESCE(o.strategy_id::text, ''), COALESCE(st.name, ''),
+		       COALESCE(o.strategy_version, 0),
+		       COALESCE(d.market_data_health->>'session', ''),
+		       (d.event_context->>'blackout')::boolean
+		FROM transactions t
+		LEFT JOIN orders o             ON o.id = t.order_id
+		LEFT JOIN instruments i        ON i.id = o.instrument_id
+		LEFT JOIN strategies st        ON st.id = o.strategy_id
+		LEFT JOIN decision_snapshots d ON d.id = o.decision_id
+		WHERE t.account_id = $1
+		ORDER BY t.sequence
+		LIMIT $2`, accountID, limit)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+
+	out := []domain.LedgerEntry{}
+	for rows.Next() {
+		var (
+			e        domain.LedgerEntry
+			amount   decimal.Decimal
+			ccy      string
+			blackout *bool
+		)
+		if serr := rows.Scan(&e.Sequence, &e.Type, &amount, &ccy,
+			&e.InstrumentID, &e.Symbol, &e.Source,
+			&e.StrategyID, &e.StrategyName, &e.StrategyVersion,
+			&e.Session, &blackout); serr != nil {
+			return nil, mapError(serr)
+		}
+		e.Amount = money.New(amount, money.Currency(ccy))
+		e.Blackout = blackout
+		out = append(out, e)
+	}
+	return out, mapError(rows.Err())
+}
+
+// LedgerTotals returns the account's entry count and net movement across its
+// WHOLE ledger.
+//
+// Deliberately a separate query rather than a sum of what was read. The point
+// is to have a figure the fold did not produce: if the two disagree, the report
+// says so instead of presenting a window as the account's position.
+func (s *TradingStore) LedgerTotals(ctx context.Context, accountID uuid.UUID,
+	ccy money.Currency) (int, money.Amount, error) {
+
+	var (
+		count int
+		net   decimal.Decimal
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(sum(amount), 0)
+		FROM transactions WHERE account_id = $1`, accountID).Scan(&count, &net)
+	if err != nil {
+		return 0, money.Zero(ccy), mapError(err)
+	}
+	return count, money.New(net, ccy), nil
+}
+
+// ---------------------------------------------------------------------------
 // Outbox
 // ---------------------------------------------------------------------------
 

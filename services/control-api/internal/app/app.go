@@ -185,6 +185,27 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 			"prices and, once a run is engaged, dataset time")
 	} else {
 		a.Provider = marketdata.NewMockProvider(20250101, a.MarketClock)
+
+		// Not a replay process: clear anything a replay left behind.
+		//
+		// The engine purges at the start and end of every run, but a process
+		// KILLED mid-run finishes neither. The leftover is a quote dated in
+		// the dataset's future, and the symptom is brutal to diagnose: the
+		// mock provider's next real quote reads as `timestamp_regressed`, the
+		// instrument reports INVALID, every strategy refuses, and nothing
+		// points at a replay. Measured: two E2E tests failing with "market
+		// data never became tradable" after a replay had ended cleanly.
+		//
+		// Scoped to provider = 'replay', so it can never touch data a real
+		// provider supplied.
+		if n, perr := a.Store.Market.PurgeReplayMarketData(ctx); perr != nil {
+			log.Warn("could not clear market data left by a previous replay",
+				"error", perr)
+		} else if n > 0 {
+			log.Warn("cleared market data left behind by a replay: this process "+
+				"is on a real provider and those quotes would have read as "+
+				"arriving from the future", "rows", n)
+		}
 	}
 	a.Ingestor = marketdata.NewIngestor(a.Store, a.Provider, a.Clock, a.MarketClock)
 
@@ -370,7 +391,8 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 
 		// Each run begins from a clean market-data state.
 		a.Replay.SetOnStart(func(startCtx context.Context) error {
-			return a.Store.Market.PurgeReplayMarketData(startCtx)
+			_, perr := a.Store.Market.PurgeReplayMarketData(startCtx)
+			return perr
 		})
 
 		// FX rates are re-stamped at each replay instant, holding their
@@ -401,6 +423,13 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 				}
 			}
 			return nil
+		})
+
+		// And again when it ends, so a finished run does not leave a
+		// future-dated quote in the live feed's table for the next process.
+		a.Replay.SetOnFinish(func(rctx context.Context) error {
+			_, perr := a.Store.Market.PurgeReplayMarketData(rctx)
+			return perr
 		})
 
 		// Every run is recorded before it is announced, so a replay result can

@@ -436,18 +436,36 @@ func (s *MarketStore) LatestFXRate(ctx context.Context, base, quote money.Curren
 // Only replay-provided rows are removed. Seeded and mock data are untouched,
 // because a replay is a development tool and destroying the surrounding
 // fixture would be a surprise.
-func (s *MarketStore) PurgeReplayMarketData(ctx context.Context) error {
-	return s.pool.InTx(ctx, func(tx pgx.Tx) error {
+//
+// Called at the start AND the end of every run, and at boot by a process that
+// is NOT in replay mode. Purging only at the start was not enough: a finished
+// run left its last quote in market_quotes_latest, so the next process on the
+// mock provider saw every real quote as `timestamp_regressed` and the
+// instrument stayed INVALID indefinitely. The cause was a replay that had
+// ended cleanly hours before, which is not where anybody looks.
+func (s *MarketStore) PurgeReplayMarketData(ctx context.Context) (int64, error) {
+	// The count is returned so a caller clearing leftovers at boot can say
+	// whether there were any. A line that appears on every start regardless
+	// tells nobody anything.
+	var removed int64
+	err := s.pool.InTx(ctx, func(tx pgx.Tx) error {
+		removed = 0
 		for _, stmt := range []string{
 			`DELETE FROM market_quotes_latest WHERE provider = 'replay'`,
 			`DELETE FROM market_quotes WHERE provider = 'replay'`,
 			`DELETE FROM market_bars WHERE provider = 'replay'`,
 			`DELETE FROM market_data_health WHERE provider = 'replay'`,
 		} {
-			if _, err := tx.Exec(ctx, stmt); err != nil {
+			tag, err := tx.Exec(ctx, stmt)
+			if err != nil {
 				return mapError(err)
 			}
+			removed += tag.RowsAffected()
 		}
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
 }

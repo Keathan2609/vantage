@@ -1,7 +1,7 @@
 "use client";
 
 import { Empty, Panel, Sparkline, Stat, StatStrip } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, type AttributionDimension } from "@/lib/api";
 import {
   dateTime,
   decimal,
@@ -13,6 +13,20 @@ import {
   tone,
 } from "@/lib/format";
 import { useAsync, useVantage } from "@/lib/store";
+import { useState } from "react";
+
+// The dimensions the platform actually records, with the question each answers.
+// Labelled rather than humanised from the key: "event_context" is not a
+// question anybody asks.
+const DIMENSIONS: Array<{ key: AttributionDimension; label: string }> = [
+  { key: "instrument", label: "Instrument" },
+  { key: "strategy", label: "Strategy" },
+  { key: "strategy_version", label: "Strategy version" },
+  { key: "source", label: "Source" },
+  { key: "session", label: "Session" },
+  { key: "event_context", label: "Event context" },
+  { key: "type", label: "Cost breakdown" },
+];
 
 export default function PortfolioPage() {
   const { account, portfolio } = useVantage();
@@ -26,9 +40,10 @@ export default function PortfolioPage() {
     () => (accountId ? api.transactions(accountId, 120) : Promise.resolve(null)),
     [accountId],
   );
+  const [dimension, setDimension] = useState<AttributionDimension>("instrument");
   const attribution = useAsync(
-    () => (accountId ? api.attribution(accountId) : Promise.resolve(null)),
-    [accountId],
+    () => (accountId ? api.attribution(accountId, dimension) : Promise.resolve(null)),
+    [accountId, dimension],
   );
 
   const currency = portfolio?.currency ?? account?.currency ?? "ZAR";
@@ -139,37 +154,98 @@ export default function PortfolioPage() {
       </div>
 
       <Panel
-        title={"P&L attribution by instrument"}
-        note="where the money actually came from"
+        title={"P&L attribution"}
+        note="folded from the ledger, so every entry is counted exactly once"
         flush
       >
+        <div className="segmented" style={{ margin: "10px 12px" }}>
+          {DIMENSIONS.map((d) => (
+            <button
+              key={d.key}
+              type="button"
+              data-selected={d.key === dimension}
+              onClick={() => setDimension(d.key)}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
         {attribution.loading ? (
           <Empty>Loading…</Empty>
         ) : (attribution.data?.attribution ?? []).length === 0 ? (
-          <Empty>No closed positions yet, so there is nothing to attribute.</Empty>
+          <Empty>Nothing has moved through the ledger yet, so there is nothing to attribute.</Empty>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Instrument</th>
-                <th className="right">Realised P&amp;L</th>
-                <th className="right">Trades</th>
-                <th className="right">Win rate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(attribution.data?.attribution ?? []).map((row) => (
-                <tr key={row.key}>
-                  <td>{row.label}</td>
-                  <td className={`mono right ${tone(row.realized_pnl)}`}>
-                    {signed(row.realized_pnl, currency)}
-                  </td>
-                  <td className="mono right">{row.trades}</td>
-                  <td className="mono right muted">{percent(row.win_rate)}</td>
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>{DIMENSIONS.find((d) => d.key === dimension)?.label}</th>
+                  <th className="right">Gross</th>
+                  <th className="right">Costs</th>
+                  <th className="right">Net</th>
+                  <th className="right">Trades</th>
+                  <th className="right">Win rate</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(attribution.data?.attribution ?? []).map((row) => (
+                  <tr key={row.key}>
+                    <td>{row.label}</td>
+                    <td className={`mono right ${tone(row.gross_pnl)}`}>
+                      {signed(row.gross_pnl, currency)}
+                    </td>
+                    <td className="mono right muted">{signed(row.costs, currency)}</td>
+                    <td className={`mono right ${tone(row.net_pnl)}`}>
+                      {signed(row.net_pnl, currency)}
+                    </td>
+                    <td className="mono right">{row.trades}</td>
+                    <td className="mono right muted">
+                      {row.trades > 0 ? percent(row.win_rate) : "—"}
+                    </td>
+                  </tr>
+                ))}
+                {attribution.data?.total ? (
+                  <tr style={{ fontWeight: 600 }}>
+                    <td>Total</td>
+                    <td className={`mono right ${tone(attribution.data.total.gross_pnl)}`}>
+                      {signed(attribution.data.total.gross_pnl, currency)}
+                    </td>
+                    <td className="mono right muted">
+                      {signed(attribution.data.total.costs, currency)}
+                    </td>
+                    <td className={`mono right ${tone(attribution.data.total.net_pnl)}`}>
+                      {signed(attribution.data.total.net_pnl, currency)}
+                    </td>
+                    <td className="mono right">{attribution.data.total.trades}</td>
+                    <td className="mono right muted">
+                      {attribution.data.total.trades > 0
+                        ? percent(attribution.data.total.win_rate)
+                        : "—"}
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+            <div className="panel-note">
+              {attribution.data?.reconciled ? (
+                <>
+                  Reconciled: these buckets account for all{" "}
+                  {attribution.data.ledger_entries} ledger entries, with no entry
+                  counted twice and none omitted.
+                </>
+              ) : (
+                <>
+                  <strong>Not reconciled.</strong> These buckets cover{" "}
+                  {attribution.data?.total.entries ?? 0} of{" "}
+                  {attribution.data?.ledger_entries ?? 0} ledger entries
+                  {attribution.data && attribution.data.discrepancy !== "0.00" ? (
+                    <> and differ from the ledger by {signed(attribution.data.discrepancy, currency)}</>
+                  ) : null}
+                  , so they describe a window rather than the account.
+                </>
+              )}
+            </div>
+          </>
         )}
       </Panel>
 

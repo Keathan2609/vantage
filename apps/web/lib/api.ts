@@ -740,6 +740,30 @@ export interface MfaEnrolment {
 
 /* ------------------------------------------------------------------- calls */
 
+export type AttributionDimension =
+  | "instrument"
+  | "strategy"
+  | "strategy_version"
+  | "source"
+  | "session"
+  | "event_context"
+  | "type";
+
+export interface AttributionBucket {
+  key: string;
+  label: string;
+  // Gross, costs and net are separate on purpose: a strategy profitable
+  // before costs and losing after them is the finding worth surfacing.
+  gross_pnl: string;
+  costs: string;
+  net_pnl: string;
+  other: string;
+  trades: number;
+  wins: number;
+  win_rate: string;
+  entries: number;
+}
+
 export const api = {
   // Auth
   version: () => request<VersionInfo>("/version"),
@@ -784,17 +808,21 @@ export const api = {
     request<{ transactions: Transaction[] }>(
       `/api/v1/accounts/${accountId}/transactions?limit=${limit}`,
     ),
-  attribution: (accountId: string) =>
+  attribution: (accountId: string, by: AttributionDimension = "instrument") =>
     request<{
-      attribution: Array<{
-        key: string;
-        label: string;
-        realized_pnl: string;
-        trades: number;
-        win_rate: string;
-      }>;
+      dimension: AttributionDimension;
+      dimensions: AttributionDimension[];
+      attribution: AttributionBucket[];
+      total: AttributionBucket;
+      // False when the buckets do not account for every ledger entry the
+      // account has, which means the figures describe a window rather than
+      // the account. Shown to the operator rather than hidden.
+      reconciled: boolean;
+      ledger_entries: number;
+      ledger_net: string;
+      discrepancy: string;
       currency: string;
-    }>(`/api/v1/accounts/${accountId}/attribution`),
+    }>(`/api/v1/accounts/${accountId}/attribution?by=${by}`),
 
   // Market data
   instruments: (enabledOnly = false) =>

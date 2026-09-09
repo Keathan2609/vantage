@@ -304,8 +304,11 @@ reason the mock venue exists. It stays awkward, and awkward the same way twice.
   (`internal/orchestrator/scenario_test.go`) but are not yet driven end to end
   through the application. The infrastructure to do so now exists; the
   scenarios have not been rewritten onto it.
-- **Attribution is by instrument only.** Strategy, model, session, regime and
-  event context are not attributed, so a replay cannot yet answer "which
-  strategy made this".
+- **Regime, model and replay run are still not attributed.** P&L is now
+  attributed by instrument, strategy, strategy version, source, session, event
+  context and transaction type — but no decision records the market regime or
+  the model that informed it, and no order carries the replay run that produced
+  it, so a replay's P&L cannot yet be separated from a paper-forward session's
+  in the same database.
 - **No paper-forward versus backtest comparison.** Both exist; nothing compares
   them.

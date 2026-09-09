@@ -227,56 +227,26 @@ func (s *Service) RollTradingDayIfNeeded(ctx context.Context, account domain.Acc
 	return err == nil, err
 }
 
-// AttributionRow is P&L grouped by a dimension.
-type AttributionRow struct {
-	Key         string
-	Label       string
-	RealizedPnL money.Amount
-	Trades      int
-	WinRate     decimal.Decimal
-}
+// Attribution groups realised P&L by any recorded dimension, from the ledger.
+//
+// Two reads, deliberately. The entries are folded into buckets; the account's
+// own entry count and net movement come from a SEPARATE query, and the report
+// compares them. A report that folded a truncated set and reported the fold's
+// own sum as the account's total would be internally consistent and wrong,
+// which is the worst kind of financial number.
+//
+// See domain.Attribute for why this folds the ledger rather than positions.
+func (s *Service) Attribution(ctx context.Context, accountID uuid.UUID,
+	ccy money.Currency, dimension domain.AttributionDimension,
+	limit int) (domain.AttributionReport, error) {
 
-// AttributionByInstrument groups realised P&L by instrument, so "where did the
-// money actually come from?" has an answer that does not require exporting
-// every fill into a spreadsheet.
-func (s *Service) AttributionByInstrument(ctx context.Context, accountID uuid.UUID, ccy money.Currency, limit int) ([]AttributionRow, error) {
-	closed, err := s.store.Trading.ClosedPositions(ctx, accountID, limit)
+	entries, err := s.store.Trading.LedgerEntriesForAttribution(ctx, accountID, limit)
 	if err != nil {
-		return nil, err
+		return domain.AttributionReport{}, err
 	}
-	agg := map[string]*AttributionRow{}
-	wins := map[string]int{}
-	for _, p := range closed {
-		row, ok := agg[p.InstrumentID]
-		if !ok {
-			row = &AttributionRow{
-				Key:         p.InstrumentID,
-				Label:       p.Symbol,
-				RealizedPnL: money.Zero(ccy),
-			}
-			agg[p.InstrumentID] = row
-		}
-		// Position P&L is stored in the position's own currency; convert once
-		// per position rather than assuming it matches the account.
-		conv, err := s.converter.Convert(ctx, p.RealizedPnL, ccy)
-		if err != nil {
-			continue
-		}
-		row.RealizedPnL = row.RealizedPnL.MustAdd(conv.To)
-		row.Trades++
-		if conv.To.IsPositive() {
-			wins[p.InstrumentID]++
-		}
+	count, net, err := s.store.Trading.LedgerTotals(ctx, accountID, ccy)
+	if err != nil {
+		return domain.AttributionReport{}, err
 	}
-	out := make([]AttributionRow, 0, len(agg))
-	for k, row := range agg {
-		if row.Trades > 0 {
-			row.WinRate = decimal.NewFromInt(int64(wins[k])).
-				Div(decimal.NewFromInt(int64(row.Trades))).
-				Round(4)
-		}
-		row.RealizedPnL = row.RealizedPnL.RoundLedger()
-		out = append(out, *row)
-	}
-	return out, nil
+	return domain.Attribute(dimension, ccy, entries, count, net), nil
 }

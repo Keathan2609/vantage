@@ -203,6 +203,30 @@ func weekMinutes(d time.Weekday, hour, minute int) int {
 	return int(d)*24*60 + hour*60 + minute
 }
 
+// PrimarySession reduces the live sessions to ONE label.
+//
+// Attribution needs a single key per decision, and a set does not group. The
+// order is deepest liquidity first, because that is the session whose
+// participants set the price a trade actually paid: the London/New York overlap
+// is the most specific answer available and wins whenever it is live.
+//
+// The full set is recorded alongside this on the decision snapshot, so
+// collapsing it here loses nothing -- the label is for grouping, the array is
+// the evidence.
+func PrimarySession(sessions []SessionName) SessionName {
+	priority := []SessionName{
+		SessionOverlap, SessionNewYork, SessionLondon, SessionTokyo, SessionSydney,
+	}
+	for _, want := range priority {
+		for _, have := range sessions {
+			if have == want {
+				return want
+			}
+		}
+	}
+	return SessionNoActive
+}
+
 // ActiveSessions returns the liquidity sessions live at instant t. Sessions are
 // evaluated in their own local timezones, so London and New York shift with
 // their respective DST rules independently.

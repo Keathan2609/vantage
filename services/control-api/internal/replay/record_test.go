@@ -361,3 +361,87 @@ func TestAnAbbreviatedSHAIsAccepted(t *testing.T) {
 			"would compare unequal to the same commit")
 	}
 }
+
+func TestAFinishedRunClearsTheMarketDataItWrote(t *testing.T) {
+	// The defect this prevents took a milestone to surface and was miserable
+	// to diagnose. Purging only at Start left a finished run's last quote --
+	// dated in the dataset's future -- sitting in market_quotes_latest. The
+	// next process on the mock provider then read every REAL quote as
+	// `timestamp_regressed`, reported the instrument INVALID, and refused
+	// every strategy, with nothing pointing at a replay that had ended cleanly
+	// hours before. It surfaced as two E2E tests failing with "market data
+	// never became tradable".
+	for _, tc := range []struct {
+		name string
+		end  func(e *Engine) error
+	}{
+		{"stopped", func(e *Engine) error { _, err := e.Stop(); return err }},
+		{"played to the end", func(e *Engine) error {
+			// One step past the dataset finishes the run.
+			for i := 0; i < 200; i++ {
+				r, err := e.Step(context.Background(), 20)
+				if err != nil {
+					return err
+				}
+				if r.State.Terminal() {
+					return nil
+				}
+			}
+			return errors.New("the run never finished")
+		}},
+		{"failed", func(e *Engine) error {
+			_, err := e.Step(context.Background(), 5)
+			if err == nil {
+				return errors.New("the pipeline was expected to fail")
+			}
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stepper := &recordingStepper{}
+			if tc.name == "failed" {
+				stepper.failAtStep = 2
+			}
+			e, _ := testEngine(t, stepper)
+
+			starts, finishes := 0, 0
+			e.SetOnStart(func(context.Context) error { starts++; return nil })
+			e.SetOnFinish(func(context.Context) error { finishes++; return nil })
+
+			if _, err := e.Start(Options{DatasetID: "day-boundary", Speed: "max"}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			if starts != 1 {
+				t.Errorf("onStart ran %d times, want 1", starts)
+			}
+			if finishes != 0 {
+				t.Errorf("onFinish ran before the run ended")
+			}
+			if err := tc.end(e); err != nil {
+				t.Fatalf("ending the run: %v", err)
+			}
+			if finishes != 1 {
+				t.Errorf("onFinish ran %d times, want 1", finishes)
+			}
+		})
+	}
+}
+
+func TestACleanupFailureDoesNotFailTheRun(t *testing.T) {
+	// The run's financial result is already produced. Refusing to end cleanly
+	// because the tidying failed would leave the process on replay time, which
+	// is far worse than a stale quote: every real quote would then be judged
+	// against a date in the dataset.
+	e, switcher := testEngine(t, &recordingStepper{})
+	e.SetOnFinish(func(context.Context) error { return errors.New("database went away") })
+
+	if _, err := e.Start(Options{DatasetID: "day-boundary", Speed: "max"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := e.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if switcher.Engaged() {
+		t.Fatal("a failed cleanup left the process on replay time")
+	}
+}
