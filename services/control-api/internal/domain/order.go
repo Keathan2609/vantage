@@ -414,6 +414,19 @@ const (
 	// not refused for this reason -- an operator can see the warning and
 	// decide, an algorithm cannot.
 	RejectReconciliationRequired RejectCode = "reconciliation_required"
+	// RejectAutopilotOff refuses an AUTOMATED order because the global
+	// Autopilot switch is off.
+	//
+	// Distinct from RejectReconciliationRequired on purpose. Both refuse an
+	// automated order, but for opposite reasons: reconciliation means the
+	// platform does not trust its own records, while this means an operator
+	// deliberately switched autonomous trading off. Reporting the wrong one
+	// would send someone hunting a divergence that does not exist.
+	//
+	// Also distinct from a kill switch, which refuses EVERY order including a
+	// manual one. Autopilot off leaves manual trading available, which is
+	// usually the point of switching it off.
+	RejectAutopilotOff RejectCode = "autopilot_off"
 )
 
 // Rejection is a structured refusal with an explanation safe to show a user.

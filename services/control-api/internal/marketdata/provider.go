@@ -57,6 +57,16 @@ type Ingestor struct {
 	// alerter is optional: the ingestor works without it, and a nil alerter
 	// keeps the tests free of a database.
 	alerter Alerter
+	// aggregator builds bars from the quote stream. Optional for the same
+	// reason, and wired unconditionally by internal/app.
+	aggregator *Aggregator
+}
+
+// SetAggregator attaches the bar aggregator.
+func (i *Ingestor) SetAggregator(a *Aggregator) {
+	i.mu.Lock()
+	i.aggregator = a
+	i.mu.Unlock()
 }
 
 // Alerter is the subset of internal/notify the ingestor needs. Declared here
@@ -154,6 +164,22 @@ func (i *Ingestor) IngestOnce(ctx context.Context) error {
 		if err := i.store.Market.RecordQuote(ctx, quote); err != nil {
 			log.Error("failed to record quote", "symbol", inst.Symbol, "error", err.Error())
 			continue
+		}
+
+		// Fold the quote into bars.
+		//
+		// Without this the bar series is frozen at whatever moment the
+		// database was seeded: strategies re-evaluate one final bar forever,
+		// the orchestrator's per-bar guard jams shut, and the live quote walks
+		// away from the bars until any stop derived from them is on the wrong
+		// side of the market. See internal/marketdata/aggregate.go.
+		//
+		// Only healthy quotes are aggregated. A stale or abnormal quote is
+		// still worth recording -- it is evidence about the feed -- but a bar
+		// is permanent in a way a quote is not, and a strategy will read it as
+		// fact.
+		if i.aggregator != nil && health.Healthy() {
+			i.aggregator.AggregateInto(ctx, i.store.Market, quote)
 		}
 
 		i.setHealth(health)

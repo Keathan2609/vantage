@@ -158,6 +158,11 @@ func (s *Server) routes() chi.Router {
 			auth.Get("/auth/session", s.handleSession)
 			auth.Get("/auth/sessions", s.handleListSessions)
 
+			// "Is the robot running?" is the first question anyone asks, and
+			// a viewer who cannot answer it cannot interpret anything else.
+			auth.Get("/autopilot", s.handleAutopilot)
+			auth.Get("/autopilot/history", s.handleAutopilotHistory)
+
 			auth.Get("/accounts", s.handleListAccounts)
 			auth.Get("/accounts/{accountID}", s.handleGetAccount)
 			auth.Get("/accounts/{accountID}/portfolio", s.handlePortfolio)
@@ -312,6 +317,13 @@ func (s *Server) routes() chi.Router {
 			// cannot be lost in a refactor of the handler body.
 			admin.Post("/reconciliation/{accountID}/issues/{issueID}/resolve",
 				s.handleResolveReconciliationIssue)
+
+			// Switching autopilot ON commits the platform to placing orders
+			// with no human in the loop, which is a larger decision than any
+			// single order a trader can make. ADMIN cannot place an order at
+			// all, so the role that starts the machine is not the role that
+			// trades.
+			admin.Post("/autopilot", s.handleSetAutopilot)
 		})
 	})
 

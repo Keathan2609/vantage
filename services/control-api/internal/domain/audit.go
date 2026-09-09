@@ -64,6 +64,12 @@ const (
 	AuditReconciliationResolve     AuditAction = "reconciliation.resolve"
 	AuditReconciliationDiscrepancy AuditAction = "reconciliation.discrepancy"
 
+	// Autopilot is its own pair of actions rather than a generic admin
+	// action, because "when was autonomous trading on?" has to be answerable
+	// from the audit log by filtering, not by reading every admin event.
+	AuditAutopilotEnabled  AuditAction = "autopilot.enabled"
+	AuditAutopilotDisabled AuditAction = "autopilot.disabled"
+
 	AuditAdminAction   AuditAction = "admin.action"
 	AuditSecurityEvent AuditAction = "security.event"
 )

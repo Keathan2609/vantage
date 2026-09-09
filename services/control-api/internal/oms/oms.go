@@ -109,6 +109,14 @@ func (s *Service) SetHaltGate(g HaltGate) { s.halt = g }
 // available for a retry after the halt clears.
 var errAutomationHalted = errors.New("oms: automated trading is halted for this account")
 
+// errAutopilotOff unwinds Phase B when the global Autopilot switch is off.
+//
+// Separate from errAutomationHalted so the refusal an operator sees names the
+// actual cause. "Reconciliation required" when the real reason is "you turned
+// autopilot off" would send someone looking for a divergence that does not
+// exist.
+var errAutopilotOff = errors.New("oms: the global Autopilot switch is off")
+
 // New builds the OMS.
 //
 // The execution mode is fixed at construction from validated configuration and
@@ -301,14 +309,40 @@ func (s *Service) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (Result
 		//
 		// Manual orders are deliberately NOT gated. An operator can see the
 		// warning and decide; an algorithm cannot.
-		if s.halt != nil && req.Source != domain.SourceManual && req.Source != domain.SourceRiskControl {
-			blocked, why, herr := s.halt.AutomationBlockedTx(ctx, tx, account.ID)
-			if herr != nil {
-				return herr
+		if req.Source != domain.SourceManual && req.Source != domain.SourceRiskControl {
+			// The global Autopilot switch, read in the same transaction and
+			// for the same reason.
+			//
+			// It is a SEPARATE control from the reconciliation halt and from
+			// the kill switch: the halt is per-account and automatic, the kill
+			// switch stops every order including an operator's, and this stops
+			// only the autonomous pipeline. An operator turning autopilot off
+			// to take over by hand must not have to disable a protection to do
+			// it.
+			//
+			// Checked here rather than only in the scheduler because the
+			// scheduler is not the only caller. A strategy evaluation
+			// triggered through the API would otherwise bypass the switch
+			// entirely, which is exactly the "bypass OMS" case this milestone
+			// forbids.
+			autopilot, aerr := s.store.Autopilot.AutopilotEnabledTx(ctx, tx)
+			if aerr != nil {
+				return aerr
 			}
-			if blocked {
-				haltReason = why
-				return errAutomationHalted
+			if !autopilot {
+				haltReason = "the global Autopilot switch is off"
+				return errAutopilotOff
+			}
+
+			if s.halt != nil {
+				blocked, why, herr := s.halt.AutomationBlockedTx(ctx, tx, account.ID)
+				if herr != nil {
+					return herr
+				}
+				if blocked {
+					haltReason = why
+					return errAutomationHalted
+				}
 			}
 		}
 
@@ -387,6 +421,18 @@ func (s *Service) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (Result
 				"quantity": order.Quantity.String(), "source": req.Source,
 			})
 	})
+	if errors.Is(err, errAutopilotOff) {
+		// Refused, not failed, and the idempotency key stays free: the same
+		// request is legitimate once autopilot is switched back on.
+		rej := domain.NewRejection(domain.RejectAutopilotOff,
+			"Autonomous trading is switched off. This order came from an automated "+
+				"source and was refused. Manual trading is unaffected.")
+		metrics.OrdersRejected.WithLabelValues(
+			req.InstrumentID, string(domain.RejectAutopilotOff), string(req.Source)).Inc()
+		logging.FromContext(ctx).Info("automated order refused: autopilot is off",
+			"account_id", account.ID.String(), "source", string(req.Source))
+		return Result{Rejection: &rej}, nil
+	}
 	if errors.Is(err, errAutomationHalted) {
 		// Refused, not failed. The order was never persisted and its
 		// idempotency key is still free, so the caller may retry once the

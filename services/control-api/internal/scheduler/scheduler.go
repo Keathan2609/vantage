@@ -199,6 +199,22 @@ func (s *Scheduler) runStrategies(ctx context.Context) error {
 		log := s.deps.Log
 		now := s.deps.Clock.Now()
 
+		// The global Autopilot switch, checked before anything else.
+		//
+		// The OMS enforces it too, in the order transaction, which is what
+		// actually makes it safe. This check exists so that switching
+		// autopilot off stops the WORK as well as the orders: without it the
+		// scheduler would keep evaluating strategies every thirty seconds,
+		// calling the research service, and recording refusals nobody asked
+		// for -- a quiet system that is still busy.
+		autopilot, err := s.deps.Store.Autopilot.Autopilot(ctx)
+		if err != nil {
+			return fmt.Errorf("scheduler: read autopilot state: %w", err)
+		}
+		if !autopilot.Enabled {
+			return nil
+		}
+
 		// Nothing to do while the market is closed, and evaluating anyway
 		// would fill the run log with skips.
 		if !s.deps.MarketClock.Status(now).Tradable() {

@@ -155,6 +155,16 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	a.EconData = econdata.NewIngestor(a.Store,
 		econdata.NewMockCalendar(nowFn), econdata.NewMockNews(nowFn))
 
+	// Bars are built from the live quote stream. Without this the series is
+	// frozen at seed time and every strategy re-evaluates one bar forever --
+	// see internal/marketdata/aggregate.go for what that broke.
+	//
+	// The timeframes are the ones strategy versions actually declare. Building
+	// one nobody reads costs a write every two seconds; not building one a
+	// strategy declares starves that strategy permanently.
+	a.Ingestor.SetAggregator(marketdata.NewAggregator(a.Provider.Name(),
+		domain.Timeframe("15m"), domain.Timeframe("1h"), domain.Timeframe("4h")))
+
 	// The mock venue keeps its own books, which is what makes reconciliation a
 	// real comparison rather than a self-check.
 	a.MockBroker = brokermock.New(pool, quoteSource{store: a.Store}, venueRates{store: a.Store},
