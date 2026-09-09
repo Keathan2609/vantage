@@ -142,3 +142,83 @@ func TestTimeframeDuration(t *testing.T) {
 		t.Error("unknown timeframes must error rather than default")
 	}
 }
+
+func TestEvaluateQuoteHealth_AReplayedOldPriceIsNotFresh(t *testing.T) {
+	// A real gap, found while building the replay provider.
+	//
+	// QuoteAge is measured from IngestedAt -- how long since THIS PROCESS
+	// received the quote. A provider that drops its connection and, on
+	// reconnect, replays a price from ten minutes ago stamps IngestedAt with
+	// now, so the quote passed every freshness check while describing a market
+	// that had moved on. That is the exact moment stale data is most dangerous.
+	//
+	// SourceAge closes it: the venue's own timestamp is checked too, and the
+	// worse of the two decides.
+	now := time.Date(2026, 3, 3, 12, 0, 0, 0, time.UTC)
+	q := Quote{
+		InstrumentID: "XAUUSD", Symbol: "XAUUSD",
+		Bid: dec("2649.50"), Ask: dec("2650.50"),
+		// The venue says this price was true ten minutes ago...
+		SourceTime: now.Add(-10 * time.Minute),
+		// ...and we received it just now, on reconnect.
+		IngestedAt: now,
+		Provider:   "test",
+	}
+
+	h := EvaluateQuoteHealth(q, nil, DefaultDataQualityPolicy(), now)
+	if h.Healthy() {
+		t.Fatalf("a ten-minute-old venue price read as healthy because it had just "+
+			"been received (state %s, issues %v)", h.State, h.Issues)
+	}
+	if !h.HasIssue(IssueStaleQuote) {
+		t.Errorf("issues = %v, want stale_quote", h.Issues)
+	}
+	if h.QuoteAge > time.Second {
+		t.Errorf("QuoteAge = %s; the received age really is near zero here, which is "+
+			"why it could not catch this on its own", h.QuoteAge)
+	}
+	if h.SourceAge < 9*time.Minute {
+		t.Errorf("SourceAge = %s, want about ten minutes", h.SourceAge)
+	}
+}
+
+func TestEvaluateQuoteHealth_OrdinaryProviderLatencyIsNotStale(t *testing.T) {
+	// The other direction: MaxSourceAge must not be so tight that normal
+	// latency, or a small clock difference between the venue and this host,
+	// makes every quote unusable. That would stop automation permanently for
+	// no reason, which is its own failure.
+	now := time.Date(2026, 3, 3, 12, 0, 0, 0, time.UTC)
+	q := Quote{
+		InstrumentID: "XAUUSD", Symbol: "XAUUSD",
+		Bid: dec("2649.50"), Ask: dec("2650.50"),
+		SourceTime: now.Add(-800 * time.Millisecond),
+		IngestedAt: now.Add(-500 * time.Millisecond),
+		Provider:   "test",
+	}
+
+	h := EvaluateQuoteHealth(q, nil, DefaultDataQualityPolicy(), now)
+	if !h.Healthy() {
+		t.Errorf("a quote with sub-second latency was refused: state %s, issues %v",
+			h.State, h.Issues)
+	}
+}
+
+func TestEvaluateQuoteHealth_SourceAgeCheckCanBeDisabled(t *testing.T) {
+	// Zero disables it, for a provider whose timestamps cannot be trusted at
+	// all. Turning the check off is then an explicit configuration choice
+	// rather than an accident of a missing field.
+	now := time.Date(2026, 3, 3, 12, 0, 0, 0, time.UTC)
+	policy := DefaultDataQualityPolicy()
+	policy.MaxSourceAge = 0
+
+	q := Quote{
+		InstrumentID: "XAUUSD", Symbol: "XAUUSD",
+		Bid: dec("2649.50"), Ask: dec("2650.50"),
+		SourceTime: now.Add(-time.Hour),
+		IngestedAt: now,
+		Provider:   "test",
+	}
+	if h := EvaluateQuoteHealth(q, nil, policy, now); !h.Healthy() {
+		t.Errorf("the source-age check still fired when disabled: %v", h.Issues)
+	}
+}

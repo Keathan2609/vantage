@@ -154,11 +154,21 @@ type MarketDataHealth struct {
 	State        DataQualityState
 	Issues       []DataQualityIssue
 	LastQuoteAt  time.Time
-	QuoteAge     time.Duration
-	Spread       decimal.Decimal
-	SpreadPct    decimal.Decimal
-	Provider     string
-	EvaluatedAt  time.Time
+	// QuoteAge is how long since this process RECEIVED the quote. It catches a
+	// stalled ingestion loop.
+	QuoteAge time.Duration
+	// SourceAge is how long since the VENUE says the price was true. It
+	// catches the case QuoteAge cannot see: a provider that reconnects and
+	// replays an old price stamps IngestedAt with now, so the quote reads
+	// fresh while describing a market that has moved on.
+	//
+	// Both are kept because they fail differently, and the worse of the two
+	// decides the verdict.
+	SourceAge   time.Duration
+	Spread      decimal.Decimal
+	SpreadPct   decimal.Decimal
+	Provider    string
+	EvaluatedAt time.Time
 }
 
 // Healthy reports whether automation may use this feed.
@@ -180,6 +190,13 @@ type DataQualityPolicy struct {
 	MaxQuoteAge time.Duration
 	// DegradedQuoteAge beyond which a quote is suspect but not yet stale.
 	DegradedQuoteAge time.Duration
+	// MaxSourceAge bounds how old the VENUE's own timestamp may be.
+	//
+	// Deliberately more generous than MaxQuoteAge: it absorbs ordinary
+	// provider and network latency, and a modest clock difference between the
+	// venue and this host. It exists to catch a price that is old by minutes,
+	// not to second-guess a well-behaved feed. Zero disables the check.
+	MaxSourceAge time.Duration
 	// MaxSpreadFraction beyond which the book is considered abnormal.
 	MaxSpreadFraction decimal.Decimal
 	// MaxClockSkewAhead tolerated when a provider timestamps into the future.
@@ -192,6 +209,7 @@ func DefaultDataQualityPolicy() DataQualityPolicy {
 	return DataQualityPolicy{
 		MaxQuoteAge:       10 * time.Second,
 		DegradedQuoteAge:  3 * time.Second,
+		MaxSourceAge:      60 * time.Second,
 		MaxSpreadFraction: decimal.NewFromFloat(0.005), // 0.5% of mid
 		MaxClockSkewAhead: 2 * time.Second,
 	}
@@ -209,6 +227,7 @@ func EvaluateQuoteHealth(q Quote, prev *Quote, policy DataQualityPolicy, now tim
 		Symbol:       q.Symbol,
 		LastQuoteAt:  q.IngestedAt,
 		QuoteAge:     now.Sub(q.IngestedAt),
+		SourceAge:    now.Sub(q.SourceTime),
 		Spread:       q.Spread(),
 		SpreadPct:    q.SpreadFraction(),
 		Provider:     q.Provider,
@@ -246,6 +265,14 @@ func EvaluateQuoteHealth(q Quote, prev *Quote, policy DataQualityPolicy, now tim
 	}
 
 	if h.QuoteAge > policy.MaxQuoteAge {
+		h.Issues = append(h.Issues, IssueStaleQuote)
+		h.State = DataQualityStale
+		return h
+	}
+	// The venue's own timestamp, checked separately. A provider that reconnects
+	// and replays an old price arrives with a fresh IngestedAt and would
+	// otherwise pass the check above.
+	if policy.MaxSourceAge > 0 && h.SourceAge > policy.MaxSourceAge {
 		h.Issues = append(h.Issues, IssueStaleQuote)
 		h.State = DataQualityStale
 		return h
