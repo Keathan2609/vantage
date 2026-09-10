@@ -380,6 +380,17 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 			domain.TIFGoodTilCancelled),
 		RequestID:     req.RequestID,
 		CorrelationID: runID.String(),
+
+		// The research plane classified the market's shape from these very
+		// bars. Passing it on is what lets the decision record the regime it
+		// was taken in; without it the OMS can only infer RISK_OFF and
+		// EVENT_RISK from its own evidence and every ordinary decision is
+		// UNKNOWN.
+		ReportedRegime: signal.MarketRegime(),
+		// How much history that classification rested on. The OMS refuses to
+		// characterise a market below domain.MinBarsForRegime and cannot count
+		// bars itself without a query per decision.
+		BarsAvailable: len(bars),
 	})
 	if err != nil {
 		// An identical bar already produced this order: the idempotency key

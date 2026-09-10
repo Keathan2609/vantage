@@ -76,6 +76,13 @@ const (
 	// same dataset can be compared from the ledger rather than by capturing an
 	// API response.
 	AttributeByReplayRun AttributionDimension = "replay_run"
+	// AttributeByRegime answers "which market conditions lost money".
+	//
+	// Read from the regime RECORDED on the decision, never recomputed. A
+	// classifier whose thresholds have since moved would reattribute
+	// historical P&L to regimes the platform never acted in, which looks like
+	// evidence and is not.
+	AttributeByRegime AttributionDimension = "regime"
 )
 
 // Run kinds. Named to match the vocabulary the milestone briefs use.
@@ -116,6 +123,8 @@ func ParseAttributionDimension(s string) (AttributionDimension, error) {
 		return AttributeByRunKind, nil
 	case AttributeByReplayRun:
 		return AttributeByReplayRun, nil
+	case AttributeByRegime:
+		return AttributeByRegime, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownDimension, s)
 	}
@@ -127,6 +136,7 @@ func AttributionDimensions() []AttributionDimension {
 		AttributeByInstrument, AttributeByStrategy, AttributeByStrategyVersion,
 		AttributeBySource, AttributeBySession, AttributeByEventContext,
 		AttributeByType, AttributeByRunKind, AttributeByReplayRun,
+		AttributeByRegime,
 	}
 }
 
@@ -160,6 +170,11 @@ type LedgerEntry struct {
 	// Session and Blackout come from the decision snapshot the order carried.
 	Session  string
 	Blackout *bool
+
+	// Regime is the market's shape as recorded on the decision this entry's
+	// order came from. Empty when there was no decision -- a deposit, or an
+	// order predating the column.
+	Regime Regime
 
 	// ReplayRunID is the market replay that owned the clock when the order was
 	// created, and empty for an order decided on a live feed.
@@ -403,6 +418,12 @@ func bucketFor(dimension AttributionDimension, e LedgerEntry) (key, label string
 
 	case AttributeByType:
 		return string(e.Type), string(e.Type)
+
+	case AttributeByRegime:
+		if e.Regime == "" {
+			return UnattributedKey, "no recorded regime: no decision snapshot"
+		}
+		return string(e.Regime), string(e.Regime) + " — " + e.Regime.Describe()
 
 	case AttributeByRunKind:
 		// An entry with no order at all -- a deposit -- is neither kind. It is

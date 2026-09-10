@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -295,7 +296,10 @@ func TestSessionAttributionUsesTheRecordedSession(t *testing.T) {
 func TestAnUnknownDimensionIsRefused(t *testing.T) {
 	// Fails closed. Falling back to instrument would answer a question nobody
 	// asked, and the caller would believe the answer.
-	for _, bad := range []string{"", "profit", "strategy_name", "../etc/passwd", "REGIME"} {
+	// "REGIME" is deliberately absent: it became a real dimension, and the
+	// parser is case-insensitive, so keeping it here would assert the opposite
+	// of the intended behaviour.
+	for _, bad := range []string{"", "profit", "strategy_name", "../etc/passwd", "volatility"} {
 		if _, err := ParseAttributionDimension(bad); !errors.Is(err, ErrUnknownDimension) {
 			t.Errorf("ParseAttributionDimension(%q) = %v, want ErrUnknownDimension", bad, err)
 		}
@@ -484,5 +488,52 @@ func TestTheNewDimensionsStillCountEveryEntryOnce(t *testing.T) {
 		if !report.Reconciled {
 			t.Errorf("%s: not reconciled, discrepancy %s", dim, report.Discrepancy)
 		}
+	}
+}
+
+func TestRegimeAttributionUsesTheRecordedRegime(t *testing.T) {
+	// The point of storing the regime rather than recomputing it. If this read
+	// a live classifier instead, moved thresholds would reattribute
+	// historical P&L to conditions the platform never acted in -- and the
+	// report would look like evidence while being a re-interpretation.
+	entries := []LedgerEntry{
+		{Sequence: 1, Type: TxDeposit, Amount: zar("500.00")},
+		{Sequence: 2, Type: TxRealizedPnL, Amount: zar("12.00"),
+			Source: "autopilot", Regime: RegimeTrending},
+		{Sequence: 3, Type: TxRealizedPnL, Amount: zar("-30.00"),
+			Source: "autopilot", Regime: RegimeHighVolatility},
+		{Sequence: 4, Type: TxRealizedPnL, Amount: zar("-1.00"),
+			Source: "manual"}, // no decision, so no regime
+	}
+	report := Attribute(AttributeByRegime, money.ZAR, entries, 4, zar("481.00"))
+
+	byKey := map[string]AttributionBucket{}
+	for _, b := range report.Buckets {
+		byKey[b.Key] = b
+	}
+	if got := byKey[string(RegimeTrending)].Net.StringFixed(); got != "12.00" {
+		t.Errorf("TRENDING net = %s, want 12.00", got)
+	}
+	if got := byKey[string(RegimeHighVolatility)].Net.StringFixed(); got != "-30.00" {
+		t.Errorf("HIGH_VOLATILITY net = %s, want -30.00", got)
+	}
+	// An entry with no recorded regime is unattributed, not folded into
+	// UNKNOWN: "the classifier said unknown" and "nothing was recorded" are
+	// different facts and only one of them is a market condition.
+	un, ok := byKey[UnattributedKey]
+	if !ok {
+		t.Fatal("an entry with no recorded regime was dropped")
+	}
+	if un.Net.StringFixed() != "-1.00" {
+		t.Errorf("unattributed net = %s, want -1.00", un.Net.StringFixed())
+	}
+	if !report.Reconciled {
+		t.Errorf("not reconciled: discrepancy %s", report.Discrepancy)
+	}
+	// The label carries the explanation, so a reader does not have to know
+	// what HIGH_VOLATILITY means to read the table.
+	if !strings.Contains(byKey[string(RegimeHighVolatility)].Label, "volatile") {
+		t.Errorf("label = %q, want it to describe the regime",
+			byKey[string(RegimeHighVolatility)].Label)
 	}
 }

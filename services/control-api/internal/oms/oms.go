@@ -41,6 +41,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +70,17 @@ type Service struct {
 	converter   *fx.Converter
 	clock       domain.Clock
 	marketClock *domain.MarketClock
+	// regimePolicy is the versioned threshold set for regime inference.
+	regimePolicy domain.RegimePolicy
+	// regimeTrackers hold the hysteresis state, one per instrument.
+	//
+	// Per instrument because a spread blowing out on gold says nothing about
+	// EURUSD, and a single shared tracker would let one instrument's
+	// conditions suppress trading on another. Guarded by a mutex because the
+	// scheduler and a manual order can arrive at once.
+	regimeMu       sync.Mutex
+	regimeTrackers map[string]*domain.RegimeTracker
+
 	// replayRun reports the market replay that currently owns the clock, or
 	// nil. A function rather than an engine reference: the OMS must not import
 	// the replay package, and it has no business knowing that replay exists
@@ -149,6 +161,8 @@ func New(
 	return &Service{
 		store: s, brokers: brokers, riskEngine: riskEngine, portfolio: pf, booking: bk,
 		converter: converter, clock: clock, marketClock: marketClock, mode: mode,
+		regimePolicy:   domain.DefaultRegimePolicy(),
+		regimeTrackers: map[string]*domain.RegimeTracker{},
 	}, nil
 }
 
@@ -179,6 +193,21 @@ type PlaceOrderRequest struct {
 	UserAgent     *string
 	RequestID     string
 	CorrelationID string
+
+	// ReportedRegime is the research plane's classification of the market's
+	// SHAPE, from the bars it was sent. Empty for a manual order, which is
+	// correct: a human clicking buy has no strategy evaluation behind them
+	// and the platform should not invent one.
+	//
+	// It is one input to the regime actually recorded -- the OMS's own
+	// evidence (feed health, spread, event proximity, drawdown) can override
+	// it with RISK_OFF or EVENT_RISK, because those are conditions the
+	// research plane cannot see.
+	ReportedRegime domain.Regime
+	// BarsAvailable is how much history the classification rested on. Below
+	// domain.MinBarsForRegime the verdict is UNKNOWN rather than a guess, and
+	// the OMS cannot count bars itself without a query per decision.
+	BarsAvailable int
 }
 
 // Result is the outcome of a placement attempt.
@@ -530,6 +559,8 @@ type gatheredContext struct {
 	eventName  string
 	eventAt    time.Time
 	blackout   bool
+	// regime is the market's shape as acted on, after hysteresis.
+	regime domain.RegimeAssessment
 	// sessions are the liquidity sessions live at decision time. Recorded
 	// because P&L attributed to a session has to use the session that was
 	// live THEN: recomputing it later from the order's timestamp would judge
@@ -747,6 +778,12 @@ func (s *Service) gather(ctx context.Context, account domain.Account, req PlaceO
 		ExistingPosition: existing,
 		Now:              now,
 	}
+
+	// Last, because the regime is a statement about all of the above together:
+	// the feed, the event window and the account's own drawdown. Inferring it
+	// from any one of them alone would be a weaker and different claim.
+	g.regime = s.regimeFor(req, g)
+
 	return g, nil, nil
 }
 
@@ -1297,6 +1334,73 @@ func (s *Service) resultFromStoredCommand(ctx context.Context, req PlaceOrderReq
 	return res, nil
 }
 
+// regimeFor infers the market regime and applies hysteresis.
+//
+// Called at the END of gather, once the feed, the event window and the
+// portfolio snapshot are all in hand: the regime is a statement about all of
+// them together, and inferring it from any one alone would be a different and
+// weaker claim.
+//
+// The tracker is stateful, so this is where flapping is suppressed. Without
+// it a spread oscillating either side of a threshold would switch a strategy
+// set on and off on consecutive bars, and the platform would trade the
+// threshold rather than the market.
+func (s *Service) regimeFor(req PlaceOrderRequest, g gatheredContext) domain.RegimeAssessment {
+	evidence := domain.RegimeEvidence{
+		Reported: req.ReportedRegime,
+		Health:   g.health,
+		// The account's configured acceptable spread stands in for a measured
+		// normal. See RegimeEvidence.SpreadBaseline for why that is weaker
+		// than it sounds and what would fix it.
+		SpreadBaseline:   g.limits.MaxSpreadFraction,
+		Blackout:         g.blackout,
+		EventName:        g.eventName,
+		DrawdownFraction: g.snapshot.State.DrawdownFraction(),
+		// Not yet measured. Recorded as zero rather than guessed, and the
+		// classifier reports the check as passing on zero -- which is honest:
+		// nothing has observed instability, as opposed to observing stability.
+		ProviderReconnects: 0,
+		HasQuote:           !g.quote.SourceTime.IsZero(),
+		BarsAvailable:      req.BarsAvailable,
+	}
+
+	assessment := domain.InferRegime(evidence, s.regimePolicy)
+
+	s.regimeMu.Lock()
+	tracker, ok := s.regimeTrackers[req.InstrumentID]
+	if !ok {
+		tracker = domain.NewRegimeTracker(s.regimePolicy)
+		s.regimeTrackers[req.InstrumentID] = tracker
+	}
+	held := tracker.Observe(assessment)
+	s.regimeMu.Unlock()
+
+	return held
+}
+
+// ResetRegimeTrackers clears the hysteresis memory for every instrument.
+//
+// Called when a replay rewinds. A tracker carrying confirmations from a
+// previous pass would make the first bars of the next one depend on which run
+// preceded them, and a replay whose result depends on history is not
+// reproducible -- which is the entire claim a replay makes.
+func (s *Service) ResetRegimeTrackers() {
+	s.regimeMu.Lock()
+	defer s.regimeMu.Unlock()
+	s.regimeTrackers = map[string]*domain.RegimeTracker{}
+}
+
+// CurrentRegime reports the regime in force for an instrument, for a reader
+// that wants it without placing an order.
+func (s *Service) CurrentRegime(instrumentID string) domain.Regime {
+	s.regimeMu.Lock()
+	defer s.regimeMu.Unlock()
+	if tracker, ok := s.regimeTrackers[instrumentID]; ok {
+		return tracker.Current()
+	}
+	return domain.RegimeUnknown
+}
+
 // buildDecisionSnapshot captures every input the decision depended on.
 func (s *Service) buildDecisionSnapshot(req PlaceOrderRequest, account domain.Account,
 	g gatheredContext, decision domain.RiskDecision, outcome, code, reason string) domain.DecisionSnapshot {
@@ -1368,6 +1472,14 @@ func (s *Service) buildDecisionSnapshot(req PlaceOrderRequest, account domain.Ac
 			"session":       domain.PrimarySession(g.sessions),
 			"sessions":      g.sessions,
 		}),
+		// The regime AS ACTED ON, after hysteresis, with the checks behind it.
+		// Recorded rather than recomputed later: moved thresholds would
+		// otherwise reattribute historical P&L to regimes the platform never
+		// acted in.
+		Regime:              g.regime.Regime,
+		RegimePolicyVersion: g.regime.PolicyVersion,
+		RegimeReasons:       marshal(g.regime.Reasons),
+
 		SignalAction:  signalActionFor(req.Side),
 		Confidence:    confidence,
 		RequestedQty:  req.Quantity,

@@ -29,6 +29,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/vantage/control-api/internal/crypto"
+	"github.com/vantage/control-api/internal/domain"
 )
 
 // Client calls the research service.
@@ -194,6 +195,19 @@ type SignalResponse struct {
 	Features        json.RawMessage   `json:"features,omitempty"`
 	BarTime         string            `json:"bar_time"`
 	CodeHash        string            `json:"code_hash"`
+	// Regime is the market's shape at the instant of the signal, as the
+	// research plane classified it from the bars it was sent.
+	//
+	// Carried because nothing else knows it. The control plane sends bars,
+	// receives a signal, and until this field existed had no way to record
+	// what kind of market it had just acted in -- so every decision's regime
+	// was UNKNOWN and attribution by regime was impossible.
+	Regime string `json:"regime"`
+	// RegimeMeasures are the numbers behind the label: ADX, ATR fraction,
+	// volatility ratio. A regime with no measures cannot be argued with after
+	// the fact, and the label alone is the sort of thing an operator stops
+	// believing.
+	RegimeMeasures map[string]decimal.Decimal `json:"regime_measures,omitempty"`
 }
 
 // Validate checks a response before it is allowed to influence anything.
@@ -220,7 +234,30 @@ func (r SignalResponse) Validate() error {
 	if len(r.Explanation) > 2000 {
 		return fmt.Errorf("%w: explanation is implausibly long", ErrBadResponse)
 	}
+	// An unrecognised regime is refused rather than normalised here.
+	//
+	// The research plane is a dependency, not an authority: if it starts
+	// reporting a label this build does not know, the honest outcome is a
+	// rejected response and a NO TRADE, not a silent UNKNOWN that looks like
+	// a thin market. `ParseRegime` handles the normalisation once the value is
+	// known to be one of ours.
+	if r.Regime != "" {
+		if _, ok := domain.ParseRegime(r.Regime); !ok {
+			return fmt.Errorf("%w: unknown regime %q", ErrBadResponse, r.Regime)
+		}
+	}
 	return nil
+}
+
+// MarketRegime is the reported regime, normalised, or UNKNOWN when the
+// research plane sent nothing.
+//
+// Empty is not an error: an older research build reports no regime, and the
+// control plane's own inference still runs. It is UNKNOWN, which is a real
+// answer and an untradable one.
+func (r SignalResponse) MarketRegime() domain.Regime {
+	regime, _ := domain.ParseRegime(r.Regime)
+	return regime
 }
 
 // Signal requests one strategy evaluation.

@@ -30,6 +30,9 @@ const DIMENSIONS: Array<{ key: AttributionDimension; label: string }> = [
   // dataset is not evidence about live behaviour.
   { key: "run_kind", label: "Forward vs replay" },
   { key: "replay_run", label: "Replay run" },
+  // Recorded at decision time, never recomputed: a reclassification would
+  // reattribute old P&L to conditions the platform never acted in.
+  { key: "regime", label: "Regime" },
 ];
 
 export default function PortfolioPage() {

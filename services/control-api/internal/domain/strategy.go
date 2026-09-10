@@ -230,6 +230,17 @@ type DecisionSnapshot struct {
 	EventContext     json.RawMessage
 	PortfolioContext json.RawMessage
 	RiskState        json.RawMessage
+	// Regime is the market's shape AS IT WAS when this decision was taken,
+	// after hysteresis. Stored rather than recomputed: a later recalculation
+	// under moved thresholds would silently reattribute historical P&L to
+	// regimes the platform never acted on.
+	Regime Regime
+	// RegimePolicyVersion identifies the thresholds that produced it, so two
+	// decisions can only be compared on regime when both used the same ones.
+	RegimePolicyVersion string
+	// RegimeReasons is every check behind the verdict, including the ones that
+	// passed. A verdict listing only its triggers cannot be argued with.
+	RegimeReasons    json.RawMessage
 	AuthorityState   json.RawMessage
 	MarketDataHealth json.RawMessage
 	SignalAction     SignalAction

@@ -813,7 +813,8 @@ func (s *TradingStore) LedgerEntriesForAttribution(ctx context.Context,
 		       COALESCE(o.strategy_version, 0),
 		       COALESCE(d.market_data_health->>'session', ''),
 		       (d.event_context->>'blackout')::boolean,
-		       o.replay_run_id
+		       o.replay_run_id,
+		       COALESCE(d.regime, '')
 		FROM transactions t
 		LEFT JOIN orders o             ON o.id = t.order_id
 		LEFT JOIN instruments i        ON i.id = o.instrument_id
@@ -839,7 +840,7 @@ func (s *TradingStore) LedgerEntriesForAttribution(ctx context.Context,
 		if serr := rows.Scan(&e.Sequence, &e.Type, &amount, &ccy,
 			&e.InstrumentID, &e.Symbol, &e.Source,
 			&e.StrategyID, &e.StrategyName, &e.StrategyVersion,
-			&e.Session, &blackout, &runID); serr != nil {
+			&e.Session, &blackout, &runID, &e.Regime); serr != nil {
 			return nil, mapError(serr)
 		}
 		if runID != nil {

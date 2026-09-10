@@ -131,6 +131,11 @@ class SignalResponse(BaseModel):
     features: dict[str, float] = Field(default_factory=dict)
     bar_time: str
     code_hash: str
+    # The market's shape at the instant of the signal, and the measures behind
+    # it. UNKNOWN is a real answer and is returned whenever the evidence is
+    # thin; it must never be coerced into a tradable label.
+    regime: str = "UNKNOWN"
+    regime_measures: dict[str, float] = Field(default_factory=dict)
 
 
 class BacktestRequest(BaseModel):
@@ -308,6 +313,17 @@ async def generate_signal(request: SignalRequest) -> SignalResponse:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # The market's shape at the instant of the signal, from the same
+    # classifier the scanner uses.
+    #
+    # Reported rather than left to the caller because the caller does not have
+    # the bars: the control plane sends them here, gets a signal back, and had
+    # no way to know whether the market was trending or ranging when it acted.
+    # `event_risk` is deliberately NOT passed -- the control plane holds the
+    # authoritative economic calendar and infers EVENT_RISK itself, and two
+    # sources for one label is how they disagree.
+    regime, measures = scanner.classify_regime(frame)
+
     return SignalResponse(
         action=signal.action,
         confidence=round(signal.confidence, 6),
@@ -318,6 +334,12 @@ async def generate_signal(request: SignalRequest) -> SignalResponse:
         features={k: round(v, 8) for k, v in signal.features.items() if np.isfinite(v)},
         bar_time=frame.index[-1].isoformat(),
         code_hash=spec.code_hash,
+        regime=regime,
+        # The measures are the account of the label. A regime with no numbers
+        # behind it cannot be argued with after the fact.
+        regime_measures={
+            k: round(v, 6) for k, v in measures.items() if np.isfinite(v)
+        },
     )
 
 

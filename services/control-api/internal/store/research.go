@@ -388,16 +388,40 @@ func (s *ResearchStore) CreateDecisionTx(ctx context.Context, tx pgx.Tx, d domai
 		INSERT INTO decision_snapshots (account_id, strategy_id, strategy_version, model_id,
 			model_version, instrument_id, bar_time, quote, indicators, features, event_context,
 			portfolio_context, risk_state, authority_state, market_data_health, signal_action,
-			confidence, requested_quantity, approved_quantity, outcome, outcome_code, outcome_reason)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+			confidence, requested_quantity, approved_quantity, outcome, outcome_code, outcome_reason,
+			regime, regime_policy_version, regime_reasons)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+			$23,$24,$25)
 		RETURNING id`,
 		d.AccountID, d.StrategyID, d.StrategyVersion, d.ModelID, d.ModelVersion,
 		d.InstrumentID, d.BarTime, orEmpty(d.Quote), orEmpty(d.Indicators), orEmpty(d.Features),
 		orEmpty(d.EventContext), orEmpty(d.PortfolioContext), orEmpty(d.RiskState),
 		orEmpty(d.AuthorityState), orEmpty(d.MarketDataHealth), string(d.SignalAction),
-		d.Confidence, d.RequestedQty, d.ApprovedQty, d.Outcome, d.OutcomeCode, d.OutcomeReason).
+		d.Confidence, d.RequestedQty, d.ApprovedQty, d.Outcome, d.OutcomeCode, d.OutcomeReason,
+		regimeOrUnknown(d.Regime), d.RegimePolicyVersion, orEmptyList(d.RegimeReasons)).
 		Scan(&id)
 	return id, mapError(err)
+}
+
+// regimeOrUnknown keeps the CHECK constraint satisfied.
+//
+// A zero-value Regime is the empty string, which is not one of the seven
+// labels. UNKNOWN is the right substitute because it means exactly what an
+// unset regime means: this market was not characterised.
+func regimeOrUnknown(r domain.Regime) string {
+	if _, ok := domain.ParseRegime(string(r)); !ok {
+		return string(domain.RegimeUnknown)
+	}
+	return string(r)
+}
+
+// orEmptyList defaults a reasons array, which is a LIST and not an object --
+// `{}` would fail to unmarshal into a slice on the way back out.
+func orEmptyList(r json.RawMessage) json.RawMessage {
+	if len(r) == 0 {
+		return json.RawMessage(`[]`)
+	}
+	return r
 }
 
 // DecisionSummary is a compact view for the activity timeline.
