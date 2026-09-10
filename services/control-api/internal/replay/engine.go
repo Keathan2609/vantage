@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,6 +116,21 @@ type Engine struct {
 	// warnings are conditions that will stop this run trading, reported at
 	// Start rather than discovered from an empty result.
 	warnings []string
+
+	// currentRun is the active run's id, published OUTSIDE the mutex.
+	//
+	// It is read from inside the pipeline this engine is driving: the OMS tags
+	// every order with the replay that produced it, and the engine holds its
+	// mutex for the whole of a step. A reader that took the mutex would
+	// deadlock against the step that invoked it.
+	//
+	// That is not hypothetical. The first version of the order tag called
+	// Status(), which locks, and the run wedged silently at the first order of
+	// the first run that reached one -- state "running", four steps played,
+	// no error, and reconciliation still ticking on its own interval so the
+	// process looked healthy. Anything reachable from inside a step must be
+	// lock-free.
+	currentRun atomic.Pointer[uuid.UUID]
 }
 
 // Run is the record of one replay.
@@ -328,10 +344,14 @@ func (e *Engine) Start(opts Options) (Run, error) {
 			}
 			e.state = StateIdle
 			e.run = nil
+			e.currentRun.Store(nil)
 			return Run{}, fmt.Errorf("replay: recording the run: %w", rerr)
 		}
 		e.lastPersist = time.Now()
 	}
+
+	runID := e.run.ID
+	e.currentRun.Store(&runID)
 
 	e.log.Warn("market replay engaged: this process is now on replay time",
 		"run", e.run.ID.String(), "dataset", ds.ID, "dataset_hash", ds.Hash[:12],
@@ -635,6 +655,15 @@ func (e *Engine) Status() (Run, bool) {
 	return run, true
 }
 
+// RunID reports the run that currently owns the clock, or nil.
+//
+// Lock-free, deliberately, and the ONLY accessor safe to call from inside the
+// pipeline the engine is driving. See the currentRun field for the deadlock
+// this shape prevents.
+func (e *Engine) RunID() *uuid.UUID {
+	return e.currentRun.Load()
+}
+
 // Progress reports how far through the dataset the run is.
 func (e *Engine) Progress() (played, total int) {
 	e.mu.Lock()
@@ -660,6 +689,10 @@ func (e *Engine) ReplayNow() (time.Time, bool) {
 // dataset, refuse everything, and report a healthy feed while doing it.
 func (e *Engine) finishLocked(state State, cause error) {
 	e.state = state
+	// Cleared first. An order placed after the run has ended was decided on
+	// whatever feed the process is on now, and tagging it with a finished
+	// replay would be worse than not tagging it at all.
+	e.currentRun.Store(nil)
 	if e.run != nil {
 		now := time.Now().UTC()
 		e.run.State = state

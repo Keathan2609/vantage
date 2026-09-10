@@ -62,6 +62,30 @@ const (
 	// AttributeByType is the cost breakdown: realised P&L against commission,
 	// swap and fees.
 	AttributeByType AttributionDimension = "type"
+	// AttributeByRunKind splits PAPER_FORWARD from BACKTEST/REPLAY.
+	//
+	// The single most important split in the set, and the one a paper-forward
+	// programme rests on. A replay writes real orders through the real OMS
+	// into the real ledger -- that is why it is evidence -- but those orders
+	// were decided against dataset prices at a dataset instant. Mixed into one
+	// account with a live-feed session's, they are indistinguishable, and every
+	// question about how the platform behaves on a live feed gets a polluted
+	// answer.
+	AttributeByRunKind AttributionDimension = "run_kind"
+	// AttributeByReplayRun separates individual replays, so two runs of the
+	// same dataset can be compared from the ledger rather than by capturing an
+	// API response.
+	AttributeByReplayRun AttributionDimension = "replay_run"
+)
+
+// Run kinds. Named to match the vocabulary the milestone briefs use.
+const (
+	// RunKindPaperForward is an order decided on a live simulated feed. The
+	// only kind that is evidence about forward behaviour.
+	RunKindPaperForward = "paper_forward"
+	// RunKindReplay is an order decided against a dataset at a dataset
+	// instant, by a market replay.
+	RunKindReplay = "replay"
 )
 
 // ErrUnknownDimension means a caller asked to group by something the platform
@@ -88,6 +112,10 @@ func ParseAttributionDimension(s string) (AttributionDimension, error) {
 		return AttributeByEventContext, nil
 	case AttributeByType:
 		return AttributeByType, nil
+	case AttributeByRunKind:
+		return AttributeByRunKind, nil
+	case AttributeByReplayRun:
+		return AttributeByReplayRun, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownDimension, s)
 	}
@@ -98,7 +126,7 @@ func AttributionDimensions() []AttributionDimension {
 	return []AttributionDimension{
 		AttributeByInstrument, AttributeByStrategy, AttributeByStrategyVersion,
 		AttributeBySource, AttributeBySession, AttributeByEventContext,
-		AttributeByType,
+		AttributeByType, AttributeByRunKind, AttributeByReplayRun,
 	}
 }
 
@@ -132,6 +160,15 @@ type LedgerEntry struct {
 	// Session and Blackout come from the decision snapshot the order carried.
 	Session  string
 	Blackout *bool
+
+	// ReplayRunID is the market replay that owned the clock when the order was
+	// created, and empty for an order decided on a live feed.
+	//
+	// Empty is NOT "unattributed" for this dimension, which is why it is the
+	// one field here whose absence is meaningful rather than missing: a
+	// deposit has no order and no run, but an order with no run genuinely was
+	// paper-forward. The bucketing distinguishes the two.
+	ReplayRunID string
 }
 
 // AttributionBucket is one group's contribution.
@@ -257,6 +294,15 @@ func Attribute(dimension AttributionDimension, ccy money.Currency,
 	return report
 }
 
+// shortID abbreviates a uuid for a label. The full value stays the key, so
+// nothing is lost -- this is only so a table column is readable.
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
 func newBucket(key, label string, ccy money.Currency) AttributionBucket {
 	return AttributionBucket{
 		Key: key, Label: label,
@@ -357,6 +403,28 @@ func bucketFor(dimension AttributionDimension, e LedgerEntry) (key, label string
 
 	case AttributeByType:
 		return string(e.Type), string(e.Type)
+
+	case AttributeByRunKind:
+		// An entry with no order at all -- a deposit -- is neither kind. It is
+		// not paper-forward evidence and it is not a replay's doing, and
+		// filing it as either would put funding on one side of the comparison
+		// the whole dimension exists to make.
+		if e.Source == "" {
+			return UnattributedKey, "no order: neither a forward session nor a replay"
+		}
+		if e.ReplayRunID != "" {
+			return RunKindReplay, "BACKTEST/REPLAY: decided against a dataset, not a live feed"
+		}
+		return RunKindPaperForward, "PAPER_FORWARD: decided on a live simulated feed"
+
+	case AttributeByReplayRun:
+		if e.Source == "" {
+			return UnattributedKey, "no order: neither a forward session nor a replay"
+		}
+		if e.ReplayRunID == "" {
+			return RunKindPaperForward, "PAPER_FORWARD: no replay was engaged"
+		}
+		return e.ReplayRunID, "replay run " + shortID(e.ReplayRunID)
 
 	default:
 		// Unreachable through ParseAttributionDimension, which fails closed.

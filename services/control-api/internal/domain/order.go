@@ -305,6 +305,16 @@ type Order struct {
 	RejectReason    *string
 	RejectCode      *string
 	Version         int64
+	// ReplayRunID is the market replay that owned the clock when this order
+	// was created, and nil for every order decided on a live feed.
+	//
+	// Carried on the order rather than inferred later because it is not
+	// recoverable afterwards: nothing in a filled order's own data says
+	// whether its price came from a dataset or a feed, and once the two are
+	// mixed in one account no question about paper-forward behaviour has a
+	// clean answer.
+	ReplayRunID *uuid.UUID
+
 	// ReconciliationRequired marks an order whose venue-side outcome Vantage
 	// cannot determine, or which an unresolved reconciliation issue concerns.
 	//

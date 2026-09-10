@@ -167,7 +167,7 @@ const orderColumns = `o.id, o.account_id, o.user_id, o.instrument_id, i.symbol, 
 	o.stop_price, o.stop_loss, o.take_profit, o.source, o.strategy_id, o.strategy_version,
 	o.decision_id, o.command_id, o.idempotency_key, o.broker_name, o.broker_order_id,
 	o.reject_code, o.reject_reason, o.version, o.created_at, o.updated_at, o.submitted_at,
-	o.closed_at, o.reconciliation_required`
+	o.closed_at, o.reconciliation_required, o.replay_run_id`
 
 func scanOrder(row pgx.Row) (domain.Order, error) {
 	var o domain.Order
@@ -176,7 +176,7 @@ func scanOrder(row pgx.Row) (domain.Order, error) {
 		&o.StopPrice, &o.StopLoss, &o.TakeProfit, &o.Source, &o.StrategyID, &o.StrategyVersion,
 		&o.DecisionID, &o.CommandID, &o.IdempotencyKey, &o.BrokerName, &o.BrokerOrderID,
 		&o.RejectCode, &o.RejectReason, &o.Version, &o.CreatedAt, &o.UpdatedAt, &o.SubmittedAt,
-		&o.ClosedAt, &o.ReconciliationRequired)
+		&o.ClosedAt, &o.ReconciliationRequired, &o.ReplayRunID)
 	if err != nil {
 		return domain.Order{}, mapError(err)
 	}
@@ -193,13 +193,13 @@ func (s *TradingStore) CreateOrderTx(ctx context.Context, tx pgx.Tx, o domain.Or
 		INSERT INTO orders (account_id, user_id, instrument_id, mode, side, type, time_in_force,
 			status, quantity, filled_quantity, avg_fill_price, limit_price, stop_price,
 			stop_loss, take_profit, source, strategy_id, strategy_version, decision_id,
-			command_id, idempotency_key, broker_name)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			command_id, idempotency_key, broker_name, replay_run_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		RETURNING id`,
 		o.AccountID, o.UserID, o.InstrumentID, o.Mode, o.Side, o.Type, o.TimeInForce,
 		o.Status, o.Quantity, o.LimitPrice, o.StopPrice, o.StopLoss, o.TakeProfit,
 		o.Source, o.StrategyID, o.StrategyVersion, o.DecisionID, o.CommandID,
-		o.IdempotencyKey, o.BrokerName).Scan(&id)
+		o.IdempotencyKey, o.BrokerName, o.ReplayRunID).Scan(&id)
 	if err != nil {
 		return domain.Order{}, mapError(err)
 	}
@@ -812,7 +812,8 @@ func (s *TradingStore) LedgerEntriesForAttribution(ctx context.Context,
 		       COALESCE(o.strategy_id::text, ''), COALESCE(st.name, ''),
 		       COALESCE(o.strategy_version, 0),
 		       COALESCE(d.market_data_health->>'session', ''),
-		       (d.event_context->>'blackout')::boolean
+		       (d.event_context->>'blackout')::boolean,
+		       o.replay_run_id
 		FROM transactions t
 		LEFT JOIN orders o             ON o.id = t.order_id
 		LEFT JOIN instruments i        ON i.id = o.instrument_id
@@ -834,11 +835,15 @@ func (s *TradingStore) LedgerEntriesForAttribution(ctx context.Context,
 			ccy      string
 			blackout *bool
 		)
+		var runID *uuid.UUID
 		if serr := rows.Scan(&e.Sequence, &e.Type, &amount, &ccy,
 			&e.InstrumentID, &e.Symbol, &e.Source,
 			&e.StrategyID, &e.StrategyName, &e.StrategyVersion,
-			&e.Session, &blackout); serr != nil {
+			&e.Session, &blackout, &runID); serr != nil {
 			return nil, mapError(serr)
+		}
+		if runID != nil {
+			e.ReplayRunID = runID.String()
 		}
 		e.Amount = money.New(amount, money.Currency(ccy))
 		e.Blackout = blackout

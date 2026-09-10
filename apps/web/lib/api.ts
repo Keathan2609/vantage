@@ -747,7 +747,9 @@ export type AttributionDimension =
   | "source"
   | "session"
   | "event_context"
-  | "type";
+  | "type"
+  | "run_kind"
+  | "replay_run";
 
 export interface AttributionBucket {
   key: string;

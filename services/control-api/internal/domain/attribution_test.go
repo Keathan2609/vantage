@@ -346,3 +346,143 @@ func TestPrimarySessionPrefersTheOverlap(t *testing.T) {
 		t.Errorf("PrimarySession = %s, want none", got)
 	}
 }
+
+// The PAPER_FORWARD versus BACKTEST/REPLAY split is the one a paper-forward
+// programme rests on, so it gets its own tests.
+
+func replayAndForwardLedger() []LedgerEntry {
+	run := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	momentum := "11111111-1111-1111-1111-111111111111"
+	return []LedgerEntry{
+		{Sequence: 1, Type: TxDeposit, Amount: zar("500.00")},
+		// Decided against a dataset.
+		{Sequence: 2, Type: TxRealizedPnL, Amount: zar("30.00"),
+			InstrumentID: "XAUUSD.m", Source: "autopilot",
+			StrategyID: momentum, StrategyName: "Momentum", StrategyVersion: 1,
+			ReplayRunID: run},
+		{Sequence: 3, Type: TxCommission, Amount: zar("-1.00"),
+			InstrumentID: "XAUUSD.m", Source: "autopilot",
+			StrategyID: momentum, StrategyName: "Momentum", StrategyVersion: 1,
+			ReplayRunID: run},
+		// Decided on a live simulated feed.
+		{Sequence: 4, Type: TxRealizedPnL, Amount: zar("-4.00"),
+			InstrumentID: "XAUUSD.m", Source: "autopilot",
+			StrategyID: momentum, StrategyName: "Momentum", StrategyVersion: 1},
+	}
+}
+
+func TestAReplayIsNeverCountedAsForwardEvidence(t *testing.T) {
+	// The mistake this prevents is the expensive one: reading a replay's
+	// profit as evidence about how the platform behaves on a live feed. A
+	// replay decides against dataset prices at a dataset instant, so its
+	// numbers answer a different question, and mixed into one account they are
+	// indistinguishable without this split.
+	report := Attribute(AttributeByRunKind, money.ZAR, replayAndForwardLedger(),
+		4, zar("525.00"))
+
+	byKey := map[string]AttributionBucket{}
+	for _, b := range report.Buckets {
+		byKey[b.Key] = b
+	}
+	replay, ok := byKey[RunKindReplay]
+	if !ok {
+		t.Fatalf("no replay bucket; got %v", byKey)
+	}
+	if replay.Net.StringFixed() != "29.00" {
+		t.Errorf("replay net = %s, want 29.00", replay.Net.StringFixed())
+	}
+	forward, ok := byKey[RunKindPaperForward]
+	if !ok {
+		t.Fatalf("no paper-forward bucket; got %v", byKey)
+	}
+	if forward.Net.StringFixed() != "-4.00" {
+		t.Errorf("forward net = %s, want -4.00", forward.Net.StringFixed())
+	}
+	// The whole point: the forward result is a LOSS while the total is a
+	// profit. A report that merged them would say the opposite of the truth
+	// about live behaviour.
+	if !forward.Net.IsNegative() || !report.Total.Net.IsPositive() {
+		t.Errorf("the split did not separate a losing forward session from a "+
+			"profitable replay: forward %s, total %s",
+			forward.Net.StringFixed(), report.Total.Net.StringFixed())
+	}
+	if !report.Reconciled {
+		t.Errorf("not reconciled: discrepancy %s", report.Discrepancy)
+	}
+}
+
+func TestFundingIsNeitherForwardNorReplay(t *testing.T) {
+	// A deposit has no order, so it belongs to neither side. Filing it as
+	// either would put 500 of funding on one arm of the comparison the
+	// dimension exists to make.
+	report := Attribute(AttributeByRunKind, money.ZAR, replayAndForwardLedger(),
+		4, zar("525.00"))
+	for _, b := range report.Buckets {
+		if b.Key == UnattributedKey {
+			if b.Other.StringFixed() != "500.00" {
+				t.Errorf("unattributed other = %s, want the deposit", b.Other.StringFixed())
+			}
+			if !b.Net.IsZero() {
+				t.Errorf("funding leaked into a trading result: %s", b.Net.StringFixed())
+			}
+			return
+		}
+	}
+	t.Fatal("the deposit was filed as forward or replay")
+}
+
+func TestEachReplayRunIsItsOwnBucket(t *testing.T) {
+	// Two runs of one dataset have to be comparable from the ledger. Before
+	// this, comparing them meant capturing an API response and trusting that
+	// nothing changed in between.
+	runA := "aaaaaaaa-0000-0000-0000-000000000001"
+	runB := "bbbbbbbb-0000-0000-0000-000000000002"
+	entries := []LedgerEntry{
+		{Sequence: 1, Type: TxRealizedPnL, Amount: zar("10.00"),
+			Source: "autopilot", ReplayRunID: runA},
+		{Sequence: 2, Type: TxRealizedPnL, Amount: zar("-2.00"),
+			Source: "autopilot", ReplayRunID: runB},
+		{Sequence: 3, Type: TxRealizedPnL, Amount: zar("1.00"), Source: "manual"},
+	}
+	report := Attribute(AttributeByReplayRun, money.ZAR, entries, 3, zar("9.00"))
+
+	byKey := map[string]AttributionBucket{}
+	for _, b := range report.Buckets {
+		byKey[b.Key] = b
+	}
+	if got := byKey[runA].Net.StringFixed(); got != "10.00" {
+		t.Errorf("run A net = %s, want 10.00", got)
+	}
+	if got := byKey[runB].Net.StringFixed(); got != "-2.00" {
+		t.Errorf("run B net = %s, want -2.00", got)
+	}
+	// An order with no run is paper-forward, NOT unattributed. This is the one
+	// dimension where an empty value is an answer rather than a gap, and
+	// filing it as unattributed would hide the forward result entirely.
+	if got := byKey[RunKindPaperForward].Net.StringFixed(); got != "1.00" {
+		t.Errorf("paper-forward net = %s, want 1.00; keys %v", got, byKey)
+	}
+	if _, unattributed := byKey[UnattributedKey]; unattributed {
+		t.Error("an order with no replay run was filed as unattributed")
+	}
+	if !report.Reconciled {
+		t.Errorf("not reconciled: discrepancy %s", report.Discrepancy)
+	}
+}
+
+func TestTheNewDimensionsStillCountEveryEntryOnce(t *testing.T) {
+	entries := replayAndForwardLedger()
+	for _, dim := range []AttributionDimension{AttributeByRunKind, AttributeByReplayRun} {
+		report := Attribute(dim, money.ZAR, entries, len(entries), zar("525.00"))
+		counted := 0
+		for _, b := range report.Buckets {
+			counted += b.Entries
+		}
+		if counted != len(entries) {
+			t.Errorf("%s: counted %d entries, want %d", dim, counted, len(entries))
+		}
+		if !report.Reconciled {
+			t.Errorf("%s: not reconciled, discrepancy %s", dim, report.Discrepancy)
+		}
+	}
+}

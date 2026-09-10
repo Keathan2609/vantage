@@ -250,6 +250,37 @@ authority, autopilot off. A run with zero orders and a run that was never
 permitted to place one are indistinguishable afterwards without them, and that
 difference is the whole question a paper-forward run exists to answer.
 
+## PAPER_FORWARD and BACKTEST/REPLAY
+
+Every order created while a run owns the clock is tagged with that run
+(`orders.replay_run_id`, migration 0014). An untagged order was decided on a
+live simulated feed; a tagged one was decided against a dataset at a dataset
+instant.
+
+The tag is what makes the two separable at all. A replay writes real orders
+through the real OMS into the real ledger — that is why it is evidence — and
+without the tag those numbers sit in the same account as a forward session's,
+indistinguishable, so every question about how the platform behaves on a live
+feed gets a polluted answer.
+
+Two attribution dimensions read it:
+
+- `?by=run_kind` splits `paper_forward` from `replay`. This is the comparison a
+  paper-forward programme rests on.
+- `?by=replay_run` separates individual runs, so two replays of one dataset can
+  be compared from the ledger rather than by capturing an API response.
+
+A deposit is neither: it has no order, so it lands in the unattributed bucket
+rather than being filed as one side of a comparison it is not part of.
+
+The tag is read at order-creation time, not passed in by the caller. A MANUAL
+order placed while a replay is engaged was also decided against dataset prices,
+and asking each caller to remember that is how half of them forget.
+
+The foreign key means a run with orders attributed to it cannot be deleted, and
+it is deliberately not `ON DELETE CASCADE`: cascading would destroy financial
+records to tidy a development artefact.
+
 ## Determinism
 
 **Proven.** Two runs of one dataset from a byte-identical database
@@ -304,11 +335,9 @@ reason the mock venue exists. It stays awkward, and awkward the same way twice.
   (`internal/orchestrator/scenario_test.go`) but are not yet driven end to end
   through the application. The infrastructure to do so now exists; the
   scenarios have not been rewritten onto it.
-- **Regime, model and replay run are still not attributed.** P&L is now
-  attributed by instrument, strategy, strategy version, source, session, event
-  context and transaction type — but no decision records the market regime or
-  the model that informed it, and no order carries the replay run that produced
-  it, so a replay's P&L cannot yet be separated from a paper-forward session's
-  in the same database.
+- **Regime and model are still not attributed.** No decision records the
+  market regime or the model that informed it, so P&L cannot be grouped by
+  either. Replay run and PAPER_FORWARD-versus-REPLAY are now attributed; those
+  two are what remain.
 - **No paper-forward versus backtest comparison.** Both exist; nothing compares
   them.

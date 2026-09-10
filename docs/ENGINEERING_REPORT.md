@@ -1087,6 +1087,26 @@ By session, the same run: tokyo -11.50 over 9 trades at an 11% win rate,
 new_york -4.80 over 4 at 0%, london -4.66 over 8 at 63%, and the London/New
 York overlap +0.30 over 3.
 
+### The split that matters most
+
+A replay writes real orders through the real OMS into the real ledger, which is
+why it is evidence. It also means a replay's P&L and a paper-forward session's
+sit in the same account, in the same tables, indistinguishable -- and a
+replay's orders were decided against dataset prices at a dataset instant, so
+reading them as evidence about live behaviour is the expensive mistake.
+
+`orders.replay_run_id` closes that. An untagged order was decided on a live
+simulated feed; a tagged one was not. `?by=run_kind` splits the two and
+`?by=replay_run` separates individual runs, so two replays of one dataset can
+be compared from the ledger rather than by capturing an API response and
+trusting nothing changed in between.
+
+The tag is read at order-creation time rather than supplied by the caller,
+because a MANUAL order placed while a replay is engaged was also decided
+against dataset prices. A deposit is neither kind and goes to the unattributed
+bucket: filing funding as one side of the comparison would corrupt the
+comparison.
+
 ### What the session dimension needed
 
 Nothing recorded the liquidity session a decision was taken in. The decision
@@ -1231,13 +1251,12 @@ been executed and moved into the tally — and what remains is what remains.
   beat the baseline is flagged. F1, PR-AUC, a confusion matrix and an actual
   calibration curve are not, so "0.80" is documented as a score rather than
   demonstrated to be a probability.
-- **Regime, model and replay-run attribution are still missing.** P&L is now
-  attributed by instrument, strategy, strategy version, source, session, event
-  context and transaction type, folded from the ledger so the buckets reconcile
-  to the account exactly. But no decision records the market regime and no
-  order carries the replay run that produced it, so a replay's P&L cannot be
-  separated from a paper-forward session's in one database. Those two are the
-  remaining dimensions the brief asked for.
+- **Regime and model attribution are still missing.** P&L is attributed by
+  instrument, strategy, strategy version, source, session, event context,
+  transaction type, replay run, and PAPER_FORWARD-versus-REPLAY -- folded from
+  the ledger so the buckets reconcile to the account exactly. No decision
+  records the market regime or the model that informed it, so those two
+  dimensions cannot be served and are not offered.
 - **No backtest versus paper-forward comparison.** Both engines exist and both
   produce metrics; nothing compares them, so the differences caused by the OMS,
   spread, slippage, latency, the scheduler and reconciliation are unmeasured.
@@ -1350,7 +1369,8 @@ trust needs the difference.
 | 29i | Market replay — scenario coverage | **PARTIAL** | One of twenty scenarios (A) is driven end to end. The rest remain decision-layer tests; the infrastructure to move them exists |
 | 29j | ReplayRun persistence | COMPLETE | `replay_runs` (0013). Written before the run is announced and updated as it plays, so an interrupted replay still leaves a trace; a run whose opening record cannot be written is refused, while a later recording failure never destroys a finished run. `simulated` cannot be false, and the app role cannot DELETE |
 | 29k | Replay run history API | COMPLETE | Admin-only `GET /replay/runs` and `/replay/runs/{id}`, answering in every process because a recorded run is evidence whether or not the engine is present |
-| 29l | P&L attribution across dimensions | COMPLETE for seven of nine | Instrument, strategy, strategy version, source, session, event context and transaction type. Folded from the ledger, so every entry is counted exactly once; the report compares itself against the account's own totals and reports itself unreconciled rather than presenting a truncated window as the account. Regime and replay run are NOT attributed |
+| 29n | PAPER_FORWARD separated from BACKTEST/REPLAY | COMPLETE | `orders.replay_run_id` (0014) tags every order created while a replay owned the clock, including a manual one. `?by=run_kind` and `?by=replay_run` read it. Without the tag a replay's numbers and a forward session's sit in one account indistinguishably |
+| 29l | P&L attribution across dimensions | COMPLETE for nine of eleven | Instrument, strategy, strategy version, source, session, event context and transaction type. Folded from the ledger, so every entry is counted exactly once; the report compares itself against the account's own totals and reports itself unreconciled rather than presenting a truncated window as the account. Regime and replay run are NOT attributed |
 | 29m | Attribution reconciliation | COMPLETE | Measured on a replay: 25 of 25 ledger entries in every one of the seven dimensions, discrepancy 0.00, and 500.00 funding plus -20.66 trading equal to the ledger's 479.34 |
 | 29e | Autopilot global switch | COMPLETE | Default OFF, ADMIN to change with a mandatory reason, any role to read, append-only history, enforced in the order transaction with its own rejection code, distinct from the kill switch |
 | 30 | Signal to order routing | COMPLETE | `TestEveryOrderPlacementGoesThroughTheSameOMSMethod` pins the two permitted call sites |

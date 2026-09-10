@@ -425,6 +425,18 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 			return nil
 		})
 
+		// Every order created while this run owns the clock is tagged with
+		// it, so a replay's P&L can be separated from a paper-forward
+		// session's afterwards. Without the tag the two are the same numbers
+		// in the same account and no question about live behaviour has a clean
+		// answer.
+		//
+		// RunID and not Status: this runs INSIDE the pipeline the engine is
+		// driving, and Status takes the engine's mutex, which the step already
+		// holds. The first version called Status and the run wedged at its
+		// first order.
+		a.OMS.SetReplayRunSource(a.Replay.RunID)
+
 		// And again when it ends, so a finished run does not leave a
 		// future-dated quote in the live feed's table for the next process.
 		a.Replay.SetOnFinish(func(rctx context.Context) error {

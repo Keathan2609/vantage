@@ -445,3 +445,100 @@ func TestACleanupFailureDoesNotFailTheRun(t *testing.T) {
 		t.Fatal("a failed cleanup left the process on replay time")
 	}
 }
+
+func TestTheRunIDIsReadableFromInsideAStep(t *testing.T) {
+	// The regression test for a silent wedge.
+	//
+	// The OMS tags every order with the replay that produced it, which means
+	// the tag is read from INSIDE the pipeline the engine is driving -- while
+	// the engine holds its mutex for the whole of a step. The first version of
+	// that reader called Status(), which locks, and the run deadlocked against
+	// its own step at the first order it reached.
+	//
+	// What made it expensive to find is how healthy it looked: state
+	// "running", four steps played, no error logged, and the reconciliation
+	// job still ticking on its own interval. Nothing said "stuck".
+	//
+	// This test fails by TIMING OUT rather than by asserting, which is the
+	// honest shape for a deadlock.
+	var seen []string
+	stepper := &recordingStepper{}
+	e, _ := testEngine(t, stepper)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := e.Start(Options{DatasetID: "day-boundary", Speed: "max"}); err != nil {
+			t.Errorf("Start: %v", err)
+			return
+		}
+		// Read the id from inside the step, exactly as the OMS does.
+		e.SetBeforeStep(func(context.Context, time.Time) error {
+			if id := e.RunID(); id != nil {
+				seen = append(seen, id.String())
+			}
+			return nil
+		})
+		if _, err := e.Step(context.Background(), 3); err != nil {
+			t.Errorf("Step: %v", err)
+		}
+		if _, err := e.Stop(); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("reading the run id from inside a step deadlocked against the step")
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("the run id was read %d times from inside a step, want 3", len(seen))
+	}
+	run, _ := e.Status()
+	for _, got := range seen {
+		if got != run.ID.String() {
+			t.Errorf("read %s from inside the step, want %s", got, run.ID)
+		}
+	}
+}
+
+func TestNoRunMeansNoTag(t *testing.T) {
+	// An order placed with no replay engaged was decided on a live feed, and
+	// an order placed AFTER a run ended was too. Tagging either with a
+	// finished replay would be worse than not tagging it: it would move
+	// forward evidence onto the replay side of the comparison.
+	e, _ := testEngine(t, &recordingStepper{})
+	if e.RunID() != nil {
+		t.Fatal("an idle engine reported a run")
+	}
+	if _, err := e.Start(Options{DatasetID: "day-boundary", Speed: "max"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if e.RunID() == nil {
+		t.Fatal("an engaged run reported no id")
+	}
+	if _, err := e.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if e.RunID() != nil {
+		t.Error("a finished run still tags orders as its own")
+	}
+}
+
+func TestARefusedStartTagsNothing(t *testing.T) {
+	// The clock is engaged before the record is written, so the refusal path
+	// unwinds by hand. It has to unwind the tag too, or every order the
+	// process places afterwards is attributed to a run that never began.
+	rec := &recordingRecorder{fail: errors.New("database is down")}
+	e, _ := testEngine(t, &recordingStepper{})
+	e.SetRecorder(rec.record)
+
+	if _, err := e.Start(Options{DatasetID: "day-boundary", Speed: "max"}); err == nil {
+		t.Fatal("Start succeeded with a failing recorder")
+	}
+	if e.RunID() != nil {
+		t.Error("a refused start left orders tagged with a run that never began")
+	}
+}

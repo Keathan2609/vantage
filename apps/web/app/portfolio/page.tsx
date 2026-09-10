@@ -26,6 +26,10 @@ const DIMENSIONS: Array<{ key: AttributionDimension; label: string }> = [
   { key: "session", label: "Session" },
   { key: "event_context", label: "Event context" },
   { key: "type", label: "Cost breakdown" },
+  // The split a paper-forward programme rests on: an order decided against a
+  // dataset is not evidence about live behaviour.
+  { key: "run_kind", label: "Forward vs replay" },
+  { key: "replay_run", label: "Replay run" },
 ];
 
 export default function PortfolioPage() {

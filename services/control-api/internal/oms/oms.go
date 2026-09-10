@@ -69,9 +69,14 @@ type Service struct {
 	converter   *fx.Converter
 	clock       domain.Clock
 	marketClock *domain.MarketClock
-	mode        domain.ExecutionMode
-	alerter     Alerter
-	halt        HaltGate
+	// replayRun reports the market replay that currently owns the clock, or
+	// nil. A function rather than an engine reference: the OMS must not import
+	// the replay package, and it has no business knowing that replay exists
+	// beyond "this order was not decided on a live feed".
+	replayRun func() *uuid.UUID
+	mode      domain.ExecutionMode
+	alerter   Alerter
+	halt      HaltGate
 }
 
 // Alerter is the subset of internal/notify the OMS needs, declared here so
@@ -394,6 +399,7 @@ func (s *Service) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (Result
 			CommandID:       commandID,
 			IdempotencyKey:  req.IdempotencyKey,
 			BrokerName:      account.BrokerName,
+			ReplayRunID:     s.currentReplayRun(),
 		}
 		created, cerr := s.store.Trading.CreateOrderTx(ctx, tx, o)
 		if cerr != nil {
@@ -529,6 +535,28 @@ type gatheredContext struct {
 	// live THEN: recomputing it later from the order's timestamp would judge
 	// an old trade against a calendar that has since been amended.
 	sessions []domain.SessionName
+}
+
+// SetReplayRunSource installs the function that reports the market replay
+// currently owning the clock.
+//
+// Nil, and a nil result, are both legitimate and mean the same thing: this
+// order was decided on a live feed. That is the ordinary case, so the absence
+// of the tag must not need configuring.
+func (s *Service) SetReplayRunSource(fn func() *uuid.UUID) {
+	s.replayRun = fn
+}
+
+// currentReplayRun tags an order with the replay that produced it.
+//
+// Read at order-creation time rather than passed in by the caller: a manual
+// order placed while a replay is engaged was ALSO decided against dataset
+// prices, and asking each caller to remember that is how half of them forget.
+func (s *Service) currentReplayRun() *uuid.UUID {
+	if s.replayRun == nil {
+		return nil
+	}
+	return s.replayRun()
 }
 
 // gather runs steps 6 to 10 and assembles the risk engine's input.
@@ -779,6 +807,7 @@ func (s *Service) persistRejection(ctx context.Context, req PlaceOrderRequest, a
 				Source: req.Source, StrategyID: req.StrategyID, StrategyVersion: req.StrategyVersion,
 				DecisionID: &decisionID, CommandID: commandID,
 				IdempotencyKey: req.IdempotencyKey, BrokerName: account.BrokerName,
+				ReplayRunID: s.currentReplayRun(),
 			}
 			created, cerr := s.store.Trading.CreateOrderTx(ctx, tx, o)
 			if cerr != nil {
