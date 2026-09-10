@@ -1,0 +1,147 @@
+# Dependabot, added because the workflows are now pinned to commit SHAs.
+#
+# # Why this file exists at all
+#
+# Pinning an action to a SHA closes a supply-chain hole and opens a
+# maintenance one. `actions/checkout@v4` silently received every v4 patch,
+# including security fixes; `actions/checkout@11d5960` receives nothing, ever.
+# Without something watching, a pinned workflow quietly rots on a version
+# nobody chose to keep.
+#
+# So the two halves belong together: the SHA makes the reference immutable and
+# this makes the immutability visible. Dependabot opens a pull request that
+# moves the SHA and updates the trailing version comment, which is a change
+# somebody reviews rather than one that happens on its own.
+#
+# # Why the other ecosystems are here too
+#
+# Go modules, npm and pip are already scanned for known vulnerabilities by
+# govulncheck, npm audit and OSV in `security.yml`. Those tell us a dependency
+# is vulnerable; this proposes the upgrade. Detection without a route to a fix
+# is how a finding stays open for months.
+#
+# Kept deliberately quiet: weekly, grouped, and with a low open-PR ceiling. A
+# single-operator project drowned in dependency PRs stops reading them, and an
+# unread PR is worse than no PR because it looks like coverage.
+#
+# Every ecosystem also sets a `cooldown`, and that is the half that matters
+# most here. Pinning to a SHA does nothing if the thing doing the pinning
+# adopts a malicious release the hour it is published -- Dependabot would
+# faithfully pin the compromised commit for us. Those releases are usually
+# yanked within days, so the updater keeps a week's distance from anything
+# new, and thirty days from a major, which needs reading anyway. Semgrep's
+# `dependabot-missing-cooldown` rule asks for exactly this and is right to.
+#
+# Not yet exercised. This repository has no remote, so neither these
+# workflows nor this configuration has ever been run by GitHub. The option
+# names follow GitHub's documented schema and the file parses, but "Dependabot
+# accepted it" is not something that has been observed.
+
+version: 2
+updates:
+  # ---- GitHub Actions ------------------------------------------------------
+  #
+  # The reason this file was created. Dependabot understands SHA pins and
+  # rewrites both the SHA and the `# vX.Y.Z` comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # See the header: a week of distance from a freshly published release.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine first-party bumps rather than five.
+      actions-official:
+        patterns:
+          - actions/*
+          - docker/*
+      # Security tooling stays separate: a Trivy or Gitleaks bump changes what
+      # CI refuses to merge, which deserves its own review rather than being
+      # buried in a batch.
+      security-tooling:
+        patterns:
+          - aquasecurity/*
+          - gitleaks/*
+          - google/osv-scanner-action
+          - zaproxy/*
+    commit-message:
+      prefix: "ci"
+
+  # ---- Go ------------------------------------------------------------------
+  - package-ecosystem: gomod
+    directory: /services/control-api
+    schedule:
+      interval: weekly
+      day: monday
+    # See the header: a week of distance from a freshly published release.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "deps"
+
+  # ---- Python (research plane) ---------------------------------------------
+  - package-ecosystem: pip
+    directory: /services/quant
+    schedule:
+      interval: weekly
+      day: monday
+    # See the header: a week of distance from a freshly published release.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "deps"
+
+  # ---- Node (terminal) -----------------------------------------------------
+  #
+  # Dev dependencies are grouped away from runtime ones. A bump to the
+  # Playwright toolchain and a bump to something that ships to the browser are
+  # different risks and should not arrive in the same pull request.
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+      day: monday
+    # See the header: a week of distance from a freshly published release.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      npm-runtime:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      npm-development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "deps"

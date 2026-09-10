@@ -1214,6 +1214,63 @@ it to be inferred from an empty result.
 
 ---
 
+## 30e. Two broken workflow references, found by pinning the actions
+
+Pinning every GitHub Action to a commit SHA was meant to be a supply-chain
+change: `actions/checkout@v4` is a MUTABLE tag, so a retagged or compromised
+action would run with the workflow's permissions and nothing in the repository
+would look different. Thirty-six references now name a 40-character commit,
+each resolved through the GitHub API and verified twice -- that it is a real
+commit in that repository, and that the named tag still points at it.
+
+Resolving them turned up two references that do not exist.
+
+### `aquasecurity/trivy-action@0.28.0`
+
+There is no such tag. The repository tags its releases `v0.28.0`, with the
+`v`. Both Trivy jobs -- the filesystem scan and the image scan -- would have
+failed at "resolve action" before scanning anything.
+
+Pinning the commit that `v0.28.0` points at fixes the reference and keeps the
+version the workflow always meant, so this is not a version change.
+
+### `google/osv-scanner-action@v1`
+
+There has never been a v1 tag in that repository; its releases start at v2.2.x.
+The dependency-scan job could not resolve its action either.
+
+Here the version could NOT be kept, because the version does not exist. The
+reference now points at v2.5.1, which is interface-compatible with what the
+step already passes -- the nested `osv-scanner-action/` path still exists and
+still takes a newline-separated `scan-args`. That is a deliberate two-major
+change, recorded in a comment beside the step rather than left to be inferred
+from a diff.
+
+### Why neither was noticed
+
+Because these workflows have never run. There is no remote, so GitHub has
+never executed them, and `actionlint` validates syntax and expressions rather
+than checking that a ref resolves. Three security jobs -- OSV and both Trivy
+scans -- were configuration that could not have worked, and the report's claim
+that OSV was "configured in CI" was true only in the narrowest sense. That
+claim is now corrected in section 33.
+
+The general lesson is the uncomfortable one: a scanner job nobody has watched
+succeed is not coverage, it is an intention. The same applies to the rest of
+`security.yml` until CI runs once.
+
+### The maintenance cost this creates
+
+A pinned SHA receives nothing. `actions/checkout@v4` silently absorbed every
+v4 patch including security fixes; `actions/checkout@11d5960` will absorb none.
+`.github/dependabot.yml` exists to close that: weekly, grouped, with a
+`cooldown` so a freshly published release is not adopted the hour it appears --
+which is the one window where a SHA pin offers no protection, since the updater
+would faithfully pin the compromised commit. It has never been exercised
+either, and says so.
+
+---
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This
@@ -1224,7 +1281,8 @@ been executed and moved into the tally — and what remains is what remains.
   with 0 findings and every command the workflows run has been executed by
   hand, which is not the same thing and must not be reported as if it were.
 - **OSV-Scanner and pip-audit were not run.** Neither is installed on this
-  machine. Both are configured in CI.
+  machine. Both are configured in CI, and CI has never run -- see the note
+  below on what pinning the workflows revealed about that configuration.
 - **No penetration test** against a deployed instance. The ZAP baseline is a
   passive scan of localhost, which is a much weaker claim.
 - **`httpapi` HANDLERS are still only covered end to end.** The layer beneath
@@ -1475,7 +1533,7 @@ reset and reseeded database. Nothing is carried over from an earlier run.
 | ZAP baseline — terminal (production build) | **0 FAIL, 1 WARN, 68 PASS**, 17 URLs including `/operations` — the WARN is the documented `unsafe-inline` acceptance |
 | actionlint | 0 findings, after fixing the 8 shellcheck issues it reported |
 | Restore drill | PASSED — backup, restore into a scratch database, and financial-integrity verification |
-| OSV-Scanner | **NOT RUN — not installed.** `osv-scanner --version` reports `command not found`. It is configured in CI, which has not run. No other scanner was substituted for it and no OSV result is claimed anywhere in this report |
+| OSV-Scanner | **NOT RUN — not installed, and until now not runnable in CI either.** `osv-scanner --version` reports `command not found`. The CI job referenced `google/osv-scanner-action@v1`, a tag that has never existed in that repository, so the step could not have resolved its action; pinning the workflows found it. The reference now points at a real commit (v2.5.1), but CI still has not run, so this remains NOT RUN. No other scanner was substituted and no OSV result is claimed anywhere in this report |
 | pip-audit | **NOT RUN — not installed**, in the project venv or on PATH. Configured in CI |
 | GitHub Actions | **NEVER RUN.** This repository has no remote. `actionlint` passing is not CI passing, and nothing in this report should be read as if it were |
 
