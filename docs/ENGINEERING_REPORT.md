@@ -394,10 +394,11 @@ read, enforced inside the order transaction with its own rejection code.
 without a reason 422, admin with a two-character reason 422, admin omitting
 `enabled` 422, admin valid 200. The migration applies twice cleanly.
 
-### The five untested packages
+### The untested packages
 
 The previous revision named `orchestrator`, `httpapi`, `fx`, `ratelimit`,
-`marketdata`, `quant` and `scheduler` as having no unit tests. Five now do:
+`marketdata`, `quant` and `scheduler` as having no unit tests. All seven now
+do:
 
 | Package | Tests | What the cases are about |
 | --- | --- | --- |
@@ -407,7 +408,12 @@ The previous revision named `orchestrator`, `httpapi`, `fx`, `ratelimit`,
 | `fx` | 13 | A stale direct rate must not fall through to a fresher inverse; no rate must never become 1.0 |
 | `scheduler` | 11 | Panic recovery, cancellation, the per-job timeout, and that a slow job is never entered twice |
 
-`httpapi` and `ratelimit` still have none.
+| `ratelimit` | 16 | The failures here are all silent: a bucket that never refills locks a trader out of closing a position, one that refills too fast removes the control, and a key built from the wrong parts lets one caller spend another's budget. Also two configuration invariants -- cancelling and the kill switch can never be scarcer than placing, or the platform can be filled faster than it can be stopped |
+| `httpapi` | 22 | The layer under the handlers: the error envelope every endpoint returns through, the request decoder, and the helpers whose failure modes are security-relevant. An internal error string never reaching the client; not-found and not-yours being indistinguishable so no endpoint becomes an enumeration oracle; an unknown field refused rather than silently dropped; `X-Forwarded-For` ignored unless a proxy is trusted, so a caller cannot pick a new address per request and walk past the login rate limit |
+
+The handlers themselves still need a database, a broker and a keyring to
+construct, so they are covered by the smoke and Playwright suites rather than
+by unit tests. That is a real limit and is recorded as one.
 
 ## 19b. Market replay
 
@@ -1221,8 +1227,12 @@ been executed and moved into the tally — and what remains is what remains.
   machine. Both are configured in CI.
 - **No penetration test** against a deployed instance. The ZAP baseline is a
   passive scan of localhost, which is a much weaker claim.
-- **`httpapi` and `ratelimit` still have no unit tests.** Nine packages now
-  do. This list was five packages long in the previous revision and is two now.
+- **`httpapi` HANDLERS are still only covered end to end.** The layer beneath
+  them now has direct tests -- the error envelope, the request decoder, the
+  address and trace-id helpers, the configuration digest -- and `ratelimit`
+  has its own. But a handler needs a database, a broker and a keyring to
+  construct, so the handlers are exercised by the smoke and Playwright suites.
+  Every package named in the previous revision's untested list now has tests.
 - **Only ONE scenario is driven end to end.** `trend-clean` runs the whole
   pipeline and is the determinism proof. The infrastructure now exists for the
   rest, and nine datasets are committed, but scenarios D, F, G, I, J and the
@@ -1425,8 +1435,9 @@ high-risk packages with no unit tests at all. Four of them now have some.
   not count as flat, gross and net must disagree for a hedged book, and
   currency exposure must net across instruments while gross does not.
 
-Still with none: `orchestrator`, `httpapi`, `fx`, `ratelimit`, `marketdata`,
-`quant`, `scheduler`.
+Still with none at the time of that revision: `orchestrator`, `httpapi`,
+`fx`, `ratelimit`, `marketdata`, `quant`, `scheduler`. All seven have tests
+now -- see section 19a.
 
 The reason integration coverage was not simply extended instead: it covers the
 paths the tests happen to take. But the reverse is also true and worth keeping
