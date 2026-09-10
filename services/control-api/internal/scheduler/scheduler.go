@@ -22,6 +22,7 @@ import (
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/marketdata"
 	"github.com/vantage/control-api/internal/metrics"
+	"github.com/vantage/control-api/internal/oms"
 	"github.com/vantage/control-api/internal/orchestrator"
 	"github.com/vantage/control-api/internal/portfolio"
 	"github.com/vantage/control-api/internal/reconcile"
@@ -36,6 +37,19 @@ const (
 	marketDataInterval     = 2 * time.Second
 	strategyInterval       = 30 * time.Second
 	reconciliationInterval = 5 * time.Minute
+	// correlationInterval is how often the matrix is remeasured.
+	//
+	// Ten minutes, against a six-hour staleness allowance: correlation over a
+	// thirty-day window does not move in seconds, and a scan over every
+	// instrument's bars is not free. The staleness label is what protects a
+	// decision if this loop stalls -- the measurement says how old it is
+	// rather than pretending to be current.
+	correlationInterval = 10 * time.Minute
+	// correlationTimeframe is the bar series correlation is measured on.
+	//
+	// One hour: short enough that thirty samples fit inside a few days of
+	// trading, long enough that the returns are not dominated by spread noise.
+	correlationTimeframe = "1h"
 	// reconciliationTimeout bounds one whole pass over every account. Shorter
 	// than the interval so an overrunning pass is abandoned rather than
 	// queued behind the next one.
@@ -62,9 +76,13 @@ type Deps struct {
 	Reconciler   *reconcile.Service
 	MockBroker   *brokermock.Broker
 	Portfolio    *portfolio.Service
-	Clock        domain.Clock
-	MarketClock  *domain.MarketClock
-	Log          *logging.Logger
+	// OMS receives the refreshed correlation matrix. The scheduler measures
+	// it because measuring needs a scan over every instrument's bars, and
+	// that must not sit between a signal and a fill.
+	OMS         *oms.Service
+	Clock       domain.Clock
+	MarketClock *domain.MarketClock
+	Log         *logging.Logger
 }
 
 // Scheduler runs periodic work.
@@ -118,6 +136,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 
 		go s.loop(ctx, "strategies", strategyInterval, s.runStrategies)
 	}
+	go s.loop(ctx, "correlation", correlationInterval, s.refreshCorrelations)
 	go s.loop(ctx, "reconciliation", reconciliationInterval, s.runReconciliation)
 	go s.loop(ctx, "outbox", outboxInterval, s.dispatchOutbox)
 	go s.loop(ctx, "cleanup", cleanupInterval, s.cleanup)
@@ -326,6 +345,65 @@ func (s *Scheduler) runStrategiesUnleased(ctx context.Context) error {
 	}(ctx)
 }
 
+// refreshCorrelations remeasures the instrument correlation matrix.
+//
+// Runs in every mode, including replay: correlation is decision-time
+// information and a replay that skipped it would exercise a different risk
+// path from the one production uses.
+//
+// A failure leaves the PREVIOUS matrix in place rather than clearing it. A
+// stale measurement is labelled stale and is still evidence; replacing it with
+// nil would turn a temporary database problem into "no correlated exposure",
+// which is the most permissive reading available.
+func (s *Scheduler) refreshCorrelations(ctx context.Context) error {
+	if s.deps.OMS == nil {
+		return nil
+	}
+	log := s.deps.Log
+
+	instruments, err := s.deps.Store.Market.ListInstruments(ctx, true)
+	if err != nil {
+		return fmt.Errorf("scheduler: list instruments for correlation: %w", err)
+	}
+	if len(instruments) < 2 {
+		// One instrument has nothing to correlate with. Not an error, and not
+		// worth a matrix.
+		return nil
+	}
+	ids := make([]string, 0, len(instruments))
+	for _, i := range instruments {
+		ids = append(ids, i.ID)
+	}
+
+	policy := domain.DefaultCorrelationPolicy()
+	now := s.deps.Clock.Now()
+	series, err := s.deps.Store.Market.InstrumentReturns(
+		ctx, ids, correlationTimeframe, now.Add(-policy.Lookback))
+	if err != nil {
+		// The PREVIOUS matrix is deliberately left in place. A stale
+		// measurement is labelled stale and is still evidence; clearing it
+		// would turn a temporary database problem into "no correlated
+		// exposure", which is the most permissive reading available.
+		return fmt.Errorf("scheduler: load returns for correlation: %w", err)
+	}
+
+	matrix := domain.NewCorrelationMatrix(series, now, policy)
+	s.deps.OMS.SetCorrelationMatrix(matrix)
+
+	known, unknown := 0, 0
+	for _, c := range matrix.Pairs() {
+		if c.Usable() {
+			known++
+		} else {
+			unknown++
+		}
+	}
+	log.Info("correlation matrix refreshed",
+		"instruments", len(ids), "measured", known, "unmeasurable", unknown,
+		"timeframe", correlationTimeframe, "policy", policy.Version)
+	return nil
+}
+
 // runReconciliation compares every account against its venue.
 //
 // Three separate mechanisms keep this bounded, and each covers a case the
@@ -513,6 +591,20 @@ func (s *Scheduler) ReplayStep(ctx context.Context, onPhase func(phase string)) 
 
 	// 2. Resting limit and stop orders, which can only trigger on a price that
 	//    actually occurred. Driven by market data in ordinary operation too.
+	// 1c. Correlation, remeasured at this replay instant.
+	//
+	// In production this is a ten-minute loop; in a replay it runs every step
+	// so the matrix moves with dataset time rather than with the wall clock.
+	// A replay that used a matrix measured at boot would exercise a different
+	// risk path from the one production uses.
+	phase("correlation")
+	if err := s.refreshCorrelations(ctx); err != nil {
+		// Not fatal to the step. A replay whose correlation refresh failed
+		// still exercises the rest of the pipeline, and the previous matrix
+		// (or the recorded absence of one) is what the risk check sees.
+		s.deps.Log.Warn("replay: correlation refresh failed", "error", err)
+	}
+
 	phase("resting_orders")
 	s.processRestingOrders(ctx)
 

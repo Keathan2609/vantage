@@ -72,6 +72,17 @@ type Service struct {
 	marketClock *domain.MarketClock
 	// regimePolicy is the versioned threshold set for regime inference.
 	regimePolicy domain.RegimePolicy
+	// correlationRiskPolicy is the versioned threshold set for the
+	// correlation check.
+	correlationRiskPolicy domain.CorrelationRiskPolicy
+	// correlations is the most recent measured matrix, or nil.
+	//
+	// Held rather than computed per order: measuring it needs a query over
+	// bars for every instrument, and doing that inside the order path would
+	// put a multi-instrument scan between a signal and a fill. Refreshed on a
+	// schedule, and nil until the first refresh -- which the risk check
+	// records as a gap rather than as an absence of correlation.
+	correlations *domain.CorrelationMatrix
 	// regimeTrackers hold the hysteresis state, one per instrument.
 	//
 	// Per instrument because a spread blowing out on gold says nothing about
@@ -161,8 +172,9 @@ func New(
 	return &Service{
 		store: s, brokers: brokers, riskEngine: riskEngine, portfolio: pf, booking: bk,
 		converter: converter, clock: clock, marketClock: marketClock, mode: mode,
-		regimePolicy:   domain.DefaultRegimePolicy(),
-		regimeTrackers: map[string]*domain.RegimeTracker{},
+		regimePolicy:          domain.DefaultRegimePolicy(),
+		regimeTrackers:        map[string]*domain.RegimeTracker{},
+		correlationRiskPolicy: domain.DefaultCorrelationRiskPolicy(),
 	}, nil
 }
 
@@ -777,6 +789,13 @@ func (s *Service) gather(ctx context.Context, account domain.Account, req PlaceO
 		PendingOrders:    snapshot.State.PendingOrders,
 		ExistingPosition: existing,
 		Now:              now,
+
+		// Correlation. The book is every OTHER open instrument's exposure:
+		// the same instrument is governed by the per-instrument ceiling, and
+		// applying both rules to one fact would refuse every scale-in.
+		Correlations:      s.correlationMatrix(),
+		CorrelatedBook:    correlatedBook(snapshot, req.InstrumentID),
+		CorrelationPolicy: s.correlationRiskPolicy,
 	}
 
 	// Last, because the regime is a statement about all of the above together:
@@ -1332,6 +1351,61 @@ func (s *Service) resultFromStoredCommand(ctx context.Context, req PlaceOrderReq
 	logging.FromContext(ctx).Info("duplicate order suppressed",
 		"idempotency_key", req.IdempotencyKey, "original_status", cmd.Status)
 	return res, nil
+}
+
+// SetCorrelationMatrix installs a freshly measured matrix.
+//
+// Called by the scheduler on an interval and by a replay step, so the
+// measurement moves with the market rather than being computed once at boot.
+// Guarded by the same mutex as the regime trackers: both are decision-time
+// state that a scheduler tick and a manual order can reach at once.
+func (s *Service) SetCorrelationMatrix(m *domain.CorrelationMatrix) {
+	s.regimeMu.Lock()
+	defer s.regimeMu.Unlock()
+	s.correlations = m
+}
+
+// correlationMatrix reads the current matrix, or nil.
+func (s *Service) correlationMatrix() *domain.CorrelationMatrix {
+	s.regimeMu.Lock()
+	defer s.regimeMu.Unlock()
+	return s.correlations
+}
+
+// CorrelationPolicy exposes the thresholds for a reader that wants to explain
+// a verdict without re-deriving them.
+func (s *Service) CorrelationPolicy() domain.CorrelationRiskPolicy {
+	return s.correlationRiskPolicy
+}
+
+// correlatedBook is every OTHER instrument's open exposure.
+//
+// Excludes the proposed instrument: adding to an existing gold position is a
+// per-instrument exposure question, and counting it here would apply two
+// different rules to one fact and refuse every scale-in.
+func correlatedBook(snapshot portfolio.Snapshot, proposed string) []domain.CorrelatedExposure {
+	out := make([]domain.CorrelatedExposure, 0, len(snapshot.Positions))
+	for _, p := range snapshot.Positions {
+		if p.Position.InstrumentID == proposed {
+			continue
+		}
+		// An UNVALUED position is skipped rather than counted as zero.
+		//
+		// Zero would understate exposure at exactly the wrong moment -- a
+		// position the platform cannot price is not a position it can rule
+		// out as a correlation risk. Skipping it means the check does not
+		// fire, which is a gap; counting it as zero would mean the check
+		// fires and reports safety, which is a false statement.
+		if !p.Valued {
+			continue
+		}
+		out = append(out, domain.CorrelatedExposure{
+			InstrumentID: p.Position.InstrumentID,
+			Exposure:     p.NotionalValue.Decimal().Abs(),
+			Side:         p.Position.Side,
+		})
+	}
+	return out
 }
 
 // regimeFor infers the market regime and applies hysteresis.

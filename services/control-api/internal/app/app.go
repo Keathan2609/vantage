@@ -322,9 +322,13 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		Reconciler:   a.Reconciler,
 		MockBroker:   a.MockBroker,
 		Portfolio:    a.Portfolio,
-		Clock:        a.Clock,
-		MarketClock:  a.MarketClock,
-		Log:          log,
+		// The scheduler measures the correlation matrix and hands it to the
+		// OMS. Measuring needs a scan over every instrument's bars, which
+		// must not sit between a signal and a fill.
+		OMS:         a.OMS,
+		Clock:       a.Clock,
+		MarketClock: a.MarketClock,
+		Log:         log,
 	})
 
 	// The replay engine, after the scheduler because it drives it.
@@ -391,6 +395,16 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 
 		// Each run begins from a clean market-data state.
 		a.Replay.SetOnStart(func(startCtx context.Context) error {
+			// And the regime hysteresis memory, which is in-process state the
+			// purge cannot reach.
+			//
+			// A tracker carrying confirmations from a previous run would make
+			// the first bars of this one depend on which run preceded them.
+			// Two runs of one dataset in one process would then differ, which
+			// is precisely the claim a replay makes and the hardest kind of
+			// non-determinism to find: nothing in the database would explain
+			// it.
+			a.OMS.ResetRegimeTrackers()
 			_, perr := a.Store.Market.PurgeReplayMarketData(startCtx)
 			return perr
 		})

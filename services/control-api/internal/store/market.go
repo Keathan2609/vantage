@@ -413,6 +413,64 @@ func (s *MarketStore) LatestFXRate(ctx context.Context, base, quote money.Curren
 	return r, nil
 }
 
+// InstrumentReturns returns bar-to-bar returns per instrument, for
+// correlation.
+//
+// Returns rather than prices, deliberately. Two instruments both drifting
+// upwards over a year are correlated in price whatever they do day to day, and
+// a risk check wants to know whether they move TOGETHER now.
+//
+// Bucketed by the bar's open time so two instruments' observations line up
+// exactly. Correlation pairs observations by timestamp and drops unmatched
+// ones: aligning by proximity would manufacture correlation out of a sampling
+// artefact, and the failure would be invisible.
+func (s *MarketStore) InstrumentReturns(ctx context.Context, instrumentIDs []string,
+	timeframe string, since time.Time) (map[string][]domain.ReturnPoint, error) {
+
+	if len(instrumentIDs) == 0 {
+		return map[string][]domain.ReturnPoint{}, nil
+	}
+	// The window is bounded by the caller's `since` and by a row cap, so a
+	// long-lived database cannot make one correlation refresh load its whole
+	// history.
+	rows, err := s.pool.Query(ctx, `
+		SELECT instrument_id, open_time, close,
+		       lag(close) OVER (PARTITION BY instrument_id ORDER BY open_time)
+		FROM market_bars
+		WHERE instrument_id = ANY($1) AND timeframe = $2 AND open_time >= $3
+		  AND complete
+		ORDER BY instrument_id, open_time
+		LIMIT 20000`, instrumentIDs, timeframe, since.UTC())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+
+	out := map[string][]domain.ReturnPoint{}
+	for rows.Next() {
+		var (
+			id    string
+			at    time.Time
+			close decimal.Decimal
+			prev  *decimal.Decimal
+		)
+		if serr := rows.Scan(&id, &at, &close, &prev); serr != nil {
+			return nil, mapError(serr)
+		}
+		// The first bar of each instrument has no predecessor, so no return.
+		// Treating it as a zero return would inject a fake observation that
+		// both series share, pulling every correlation towards agreement.
+		if prev == nil || !prev.IsPositive() {
+			continue
+		}
+		out[id] = append(out[id], domain.ReturnPoint{
+			At:     at.UTC(),
+			Return: close.Sub(*prev).Div(*prev).Round(10),
+		})
+	}
+	return out, mapError(rows.Err())
+}
+
 // PurgeReplayMarketData removes market data produced by a previous replay.
 //
 // # Why a replay must start from a clean market-data state

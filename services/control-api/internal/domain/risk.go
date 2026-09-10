@@ -110,14 +110,19 @@ const (
 	CheckNetExposure        RiskCheckName = "max_net_exposure"
 	CheckInstrumentExposure RiskCheckName = "max_instrument_exposure"
 	CheckConcentration      RiskCheckName = "max_concentration"
-	CheckLeverage           RiskCheckName = "max_leverage"
-	CheckMargin             RiskCheckName = "available_margin"
-	CheckDailyLoss          RiskCheckName = "max_daily_loss"
-	CheckDrawdown           RiskCheckName = "max_drawdown"
-	CheckSpread             RiskCheckName = "max_spread"
-	CheckEventRisk          RiskCheckName = "event_risk"
-	CheckAccountTrading     RiskCheckName = "account_trading_enabled"
-	CheckInstrumentEnabled  RiskCheckName = "instrument_enabled"
+	// CheckPortfolioCorrelation catches what every other exposure check
+	// misses: a book of gold, silver and platinum passes all of them and is
+	// one position. Concentration counts three names and sees
+	// diversification.
+	CheckPortfolioCorrelation RiskCheckName = "portfolio_correlation"
+	CheckLeverage             RiskCheckName = "max_leverage"
+	CheckMargin               RiskCheckName = "available_margin"
+	CheckDailyLoss            RiskCheckName = "max_daily_loss"
+	CheckDrawdown             RiskCheckName = "max_drawdown"
+	CheckSpread               RiskCheckName = "max_spread"
+	CheckEventRisk            RiskCheckName = "event_risk"
+	CheckAccountTrading       RiskCheckName = "account_trading_enabled"
+	CheckInstrumentEnabled    RiskCheckName = "instrument_enabled"
 )
 
 // RiskCheckResult records one check's verdict. Every check reports its limit

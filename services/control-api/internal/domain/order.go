@@ -402,14 +402,18 @@ const (
 	RejectMaxPendingOrders     RejectCode = "max_pending_orders"
 	RejectExposureLimit        RejectCode = "exposure_limit_breached"
 	RejectConcentration        RejectCode = "concentration_limit_breached"
-	RejectLeverageLimit        RejectCode = "leverage_limit_breached"
-	RejectEventRisk            RejectCode = "event_risk_blackout"
-	RejectDuplicateCommand     RejectCode = "duplicate_command"
-	RejectIdempotencyConflict  RejectCode = "idempotency_key_payload_mismatch"
-	RejectStaleVersion         RejectCode = "stale_object_version"
-	RejectBrokerRejected       RejectCode = "broker_rejected"
-	RejectBrokerUnavailable    RejectCode = "broker_unavailable"
-	RejectInternalError        RejectCode = "internal_error"
+	// RejectCorrelatedExposure refuses a proposal that measured correlation
+	// shows is effectively adding to an existing position. Distinct from
+	// concentration, which counts instruments rather than positions.
+	RejectCorrelatedExposure  RejectCode = "correlated_exposure_limit_breached"
+	RejectLeverageLimit       RejectCode = "leverage_limit_breached"
+	RejectEventRisk           RejectCode = "event_risk_blackout"
+	RejectDuplicateCommand    RejectCode = "duplicate_command"
+	RejectIdempotencyConflict RejectCode = "idempotency_key_payload_mismatch"
+	RejectStaleVersion        RejectCode = "stale_object_version"
+	RejectBrokerRejected      RejectCode = "broker_rejected"
+	RejectBrokerUnavailable   RejectCode = "broker_unavailable"
+	RejectInternalError       RejectCode = "internal_error"
 	// RejectReconciledAbsent closes out an order whose outcome was unknown and
 	// which reconciliation then found the venue had never accepted. It is not
 	// an internal error: nothing went wrong locally, and the order genuinely

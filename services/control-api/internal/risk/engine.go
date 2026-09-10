@@ -62,6 +62,18 @@ type Input struct {
 	PendingOrders    int
 	ExistingPosition *domain.Position
 	Now              time.Time
+
+	// Correlations is the measured relationship between instruments, or nil
+	// when none has been computed. Nil is honest and is recorded as a gap:
+	// treating an absent matrix as "everything is uncorrelated" would be the
+	// most permissive reading available.
+	Correlations *domain.CorrelationMatrix
+	// CorrelatedBook is the existing exposure the proposal might duplicate,
+	// in the account's currency.
+	CorrelatedBook []domain.CorrelatedExposure
+	// CorrelationPolicy is the versioned threshold set. Its zero value
+	// disables the check, which is why the OMS always supplies one.
+	CorrelationPolicy domain.CorrelationRiskPolicy
 }
 
 // Evaluate runs every check and returns a decision.
@@ -403,6 +415,52 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 			pct(in.Limits.MaxConcentrationFraction)),
 		Code: domain.RejectConcentration,
 	})
+
+	// --- Portfolio correlation ---------------------------------------------
+	//
+	// Placed after concentration because it answers the question
+	// concentration gets wrong. Concentration counts distinct instruments;
+	// this asks whether they are distinct positions.
+	//
+	// A reducing order skips it for the same reason it skips every other
+	// exposure check: a check that limits exposure must never refuse an order
+	// that reduces it. Three separate checks were once found blocking a
+	// flatten and trapping the operator in the position.
+	if in.CorrelationPolicy.Version != "" && !reducing {
+		verdict := domain.AssessCorrelationRisk(
+			in.Instrument.ID, in.Intent.Side, in.CorrelatedBook,
+			in.Correlations, in.CorrelationPolicy)
+
+		observed := "no correlated exposure"
+		if verdict.Driver != nil {
+			observed = fmt.Sprintf("%s at %s", verdict.Driver.InstrumentID,
+				verdict.Correlation.Coefficient.StringFixed(3))
+			if !verdict.Correlation.Usable() {
+				observed = fmt.Sprintf("%s, correlation %s",
+					verdict.Driver.InstrumentID, verdict.Correlation.State)
+			}
+		}
+
+		add(domain.RiskCheckResult{
+			Name: domain.CheckPortfolioCorrelation,
+			// REDUCE passes: the platform's standing rule is that risk may
+			// only reduce, and a correlated proposal is usually not wrong but
+			// too big. Only REJECT fails.
+			Passed: verdict.Action != domain.CorrelationReject,
+			Limit: fmt.Sprintf("reduce above %s, reject above %s",
+				in.CorrelationPolicy.ReduceAbove.StringFixed(2),
+				in.CorrelationPolicy.RejectAbove.StringFixed(2)),
+			Observed: observed,
+			Message:  verdict.Explanation,
+			Code:     domain.RejectCorrelatedExposure,
+		})
+
+		// The reduction is applied to the approved quantity, which only ever
+		// shrinks. Rounding is left to the instrument step below.
+		if verdict.Action == domain.CorrelationReduce {
+			d.ApprovedQuantity = d.ApprovedQuantity.Mul(verdict.ScaleFactor)
+		}
+	}
 
 	// --- Leverage ----------------------------------------------------------
 	leverage := decimal.Zero
