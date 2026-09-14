@@ -574,7 +574,7 @@ attribute, meaning they were not actually being scanned; that was fixed too.
 | `govulncheck` | 0 reachable. One module-level advisory (GO-2026-5932, `x/crypto/openpgp`, unmaintained, no fix) accepted: the module is required for Argon2id and that package is never imported |
 | `npm audit` | 0 vulnerabilities |
 | Trivy filesystem | 0 HIGH/CRITICAL in npm and gomod |
-| Trivy config | 0 misconfigurations across three Dockerfiles |
+| Trivy config | **carried — not re-run** | 0 misconfigurations across three Dockerfiles |
 | Trivy image | 0 HIGH/CRITICAL in all three, **under CI's `--ignore-unfixed`** |
 
 That last row needs its qualifier stated, not buried. Re-scanned on 2026-09-08
@@ -1807,35 +1807,41 @@ imagined. Both kinds of test earn their place; neither replaces the other.
 
 ## Test and scan tally
 
-Every row below was executed against the milestone's final commit, on a freshly
-reset and reseeded database. Nothing is carried over from an earlier run.
+**Read the "Run" column.** Rows marked *this milestone* were executed against
+this milestone's code. Rows marked *carried* were executed in an earlier
+milestone and have NOT been re-run here — they are reproduced because they were
+true when measured, not because they were measured again, and a reader deciding
+what to trust needs that difference. The stack-dependent suites are the ones
+most affected: the development stack spent this milestone in REPLAY mode, which
+puts the whole process on dataset time, and the smoke and Playwright suites
+need real time.
 
-| Suite | Result |
-| --- | --- |
-| Go unit | **681 pass, 0 fail, 0 skip** across 23 packages; `gofmt` and `go vet` clean. By package: domain 65, marketdata 59, orchestrator 49, risk 38, reconcile 34, quant 23, store 18, arch 13, fx 13, booking 12, scheduler 11, oms 10, econdata 9, portfolio 7, and the rest |
-| Go `-race` | **0 races across all 23 packages.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
-| Go concurrency and recovery integration | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
-| Python unit | **202 pass, 0 fail**; `ruff` clean; `mypy` clean on 7 source files |
-| Web static | `tsc --noEmit` clean; `eslint` clean; production build clean, 20 routes including `/operations` |
-| Playwright | **51 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 21 are the new reconciliation and operations tests |
-| Smoke: trading | **55 pass, 0 fail** |
-| Smoke: research | **35 pass, 0 fail** |
-| Gitleaks | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | 0 findings (`--config auto`, whole repository) |
-| govulncheck | 0 reachable (1 unreachable, in a required module) |
-| npm audit | 0 vulnerabilities |
-| Trivy filesystem (vuln) | 0 — `go.mod` and `package-lock.json` |
-| Trivy config | 0 HIGH/CRITICAL across all three Dockerfiles |
-| Trivy image — all three | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
-| Trivy image — unfiltered | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
-| Trivy image — the 3 fixable findings, named | `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964, HIGH), `setuptools` 70.3.0 → 78.1.1 (CVE-2025-47273, HIGH) and → 83.0.0 (CVE-2026-59890, MEDIUM). **Verified inside the image rather than accepted on trust:** the importable setuptools is 84.0.0, above both fixes; there is no setuptools 70.3.0 on disk at all — the version Trivy reports comes from `setuptools==70.3.0` in `pip/_vendor/vendor.txt`, a record of what pip vendored rather than installed code; msgpack 1.1.2 exists only as `pip/_vendor/msgpack` |
-| ZAP baseline — control plane | **0 FAIL, 1 WARN, 66 PASS** (`-I -s`, unauthenticated, `127.0.0.1` only). The WARN is Non-Storable Content, informational |
-| ZAP baseline — terminal (production build) | **0 FAIL, 3 WARN, 64 PASS** (`-I -s`, unauthenticated). The substantive WARN is the documented `script-src 'unsafe-inline'` acceptance; the others are Non-Storable Content and Modern Web Application, both informational |
-| actionlint | 0 findings, after fixing the 8 shellcheck issues it reported |
-| Restore drill | PASSED — backup, restore into a scratch database, and financial-integrity verification |
-| OSV-Scanner | **NOT RUN — not installed, and until now not runnable in CI either.** `osv-scanner --version` reports `command not found`. The CI job referenced `google/osv-scanner-action@v1`, a tag that has never existed in that repository, so the step could not have resolved its action; pinning the workflows found it. The reference now points at a real commit (v2.5.1), but CI still has not run, so this remains NOT RUN. No other scanner was substituted and no OSV result is claimed anywhere in this report |
-| pip-audit | **NOT RUN — not installed**, in the project venv or on PATH. Configured in CI |
-| GitHub Actions | **NEVER RUN.** This repository has no remote. `actionlint` passing is not CI passing, and nothing in this report should be read as if it were |
+| Suite | Run | Result |
+| --- | --- | --- |
+| Go unit | this milestone | **681 pass, 0 fail, 0 skip** across 23 packages; `gofmt` and `go vet` clean. By package: domain 65, marketdata 59, orchestrator 49, risk 38, reconcile 34, quant 23, store 18, arch 13, fx 13, booking 12, scheduler 11, oms 10, econdata 9, portfolio 7, and the rest |
+| Go `-race` | this milestone | **0 races across all 23 packages.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
+| Go concurrency and recovery integration | **carried — not re-run** | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
+| Python unit | this milestone | **202 pass, 0 fail**; `ruff` clean; `mypy` clean on 7 source files |
+| Web static | this milestone | `tsc --noEmit` clean; `eslint` clean; production build clean, 20 routes including `/operations` |
+| Playwright | **carried — not re-run** | **51 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 21 are the new reconciliation and operations tests |
+| Smoke: trading | **carried — not re-run** | **55 pass, 0 fail** |
+| Smoke: research | **carried — not re-run** | **35 pass, 0 fail** |
+| Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
+| Semgrep | this milestone | 0 findings (`--config auto`, whole repository) |
+| govulncheck | **carried — not re-run** | 0 reachable (1 unreachable, in a required module) |
+| npm audit | **carried — not re-run** | 0 vulnerabilities |
+| Trivy filesystem (vuln) | **carried — not re-run** | 0 — `go.mod` and `package-lock.json` |
+| Trivy config | **carried — not re-run** | 0 HIGH/CRITICAL across all three Dockerfiles |
+| Trivy image — all three | **carried — not re-run** | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
+| Trivy image — unfiltered | this milestone | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
+| Trivy image — the 3 fixable findings, named | this milestone | `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964, HIGH), `setuptools` 70.3.0 → 78.1.1 (CVE-2025-47273, HIGH) and → 83.0.0 (CVE-2026-59890, MEDIUM). **Verified inside the image rather than accepted on trust:** the importable setuptools is 84.0.0, above both fixes; there is no setuptools 70.3.0 on disk at all — the version Trivy reports comes from `setuptools==70.3.0` in `pip/_vendor/vendor.txt`, a record of what pip vendored rather than installed code; msgpack 1.1.2 exists only as `pip/_vendor/msgpack` |
+| ZAP baseline — control plane | this milestone | **0 FAIL, 1 WARN, 66 PASS** (`-I -s`, unauthenticated, `127.0.0.1` only). The WARN is Non-Storable Content, informational |
+| ZAP baseline — terminal (production build) | this milestone | **0 FAIL, 3 WARN, 64 PASS** (`-I -s`, unauthenticated). The substantive WARN is the documented `script-src 'unsafe-inline'` acceptance; the others are Non-Storable Content and Modern Web Application, both informational |
+| actionlint | this milestone | 0 findings, after fixing the 8 shellcheck issues it reported |
+| Restore drill | **carried — not re-run** | PASSED — backup, restore into a scratch database, and financial-integrity verification |
+| OSV-Scanner | not run | **NOT RUN — not installed, and until now not runnable in CI either.** `osv-scanner --version` reports `command not found`. The CI job referenced `google/osv-scanner-action@v1`, a tag that has never existed in that repository, so the step could not have resolved its action; pinning the workflows found it. The reference now points at a real commit (v2.5.1), but CI still has not run, so this remains NOT RUN. No other scanner was substituted and no OSV result is claimed anywhere in this report |
+| pip-audit | not run | **NOT RUN — not installed**, in the project venv or on PATH. Configured in CI |
+| GitHub Actions | not run | **NEVER RUN.** This repository has no remote. `actionlint` passing is not CI passing, and nothing in this report should be read as if it were |
 
 ### On the number of reseeds behind that table
 
