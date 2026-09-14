@@ -1299,6 +1299,85 @@ either, and says so.
 
 ---
 
+## 30g. Defects the restart and determinism milestone found
+
+Seven, of which three would have made a suite report a pass while proving
+nothing. Those are the worst kind, and they are listed first.
+
+**1. Four speed modes agreed on four empty accounts.** The research service was
+not running. Every strategy evaluation failed with "research service
+unavailable", the circuit breaker opened, the replay stepped happily to the end
+of the dataset, and the account finished exactly as it started. The digests
+matched perfectly and the suite reported speed invariance. Two things were
+wrong: there was no precondition on the research plane, and the vacuity guard
+read the account's TOTAL decision count rather than what the run added — so the
+restored snapshot's own rows satisfied it. Both fixed: `/health/ready` must
+report `quant: ok` before any scenario runs, and every vacuity guard now
+measures against a baseline taken from the restored snapshot.
+
+**2. The determinism suite skipped the preflight the scenario matrix makes.**
+It started runs through `control` directly rather than through the harness's
+`start`, so it never saw the warning that says a run cannot trade. On a freshly
+seeded database — where Autopilot is correctly OFF by default — this reproduced
+defect 1 exactly, with the research service perfectly healthy. The check is now
+extracted and every path that starts a run calls it.
+
+**3. Every end-to-end scenario had an evaluation window of zero.** The warm-up
+model introduced by the isolation milestone suppresses executable intent for
+the first 60 instants. Eight of the nine market scenarios stepped exactly 60.
+They were asserting on a phase that cannot trade, and passing. Found by adding
+the phase counters, which is the entire argument for having them. Every
+scenario now steps its dataset to the end.
+
+**4. The mock venue's jitter was seeded once, at construction.** Three runs of
+one dataset from a byte-identical snapshot agreed exactly on the DECISIONS
+section of the result digest and disagreed on orders, fills, positions and
+attribution. A second run in the same process continued the random sequence
+instead of repeating it. This is the hardest shape of non-determinism to find,
+because everything upstream agrees and only the money differs. `Broker.Reseed`
+is now called when a replay starts, alongside the regime trackers and the
+correlation matrix it belongs with.
+
+**5. A partial fill was not representable at all.** Every order the R500
+account produces is 0.01 lots, which on XAUUSD.m is simultaneously the minimum
+quantity AND the quantity step, so 40% of one order is 0.004 lots and the venue
+correctly declined to split it. The path that books a split execution — order
+state machine, position, weighted average price, fee accrual, ledger — was
+therefore untested. Fixed with a development-only synthetic instrument whose
+finer step makes 0.10 split into 0.04 and 0.06, inside the authority's existing
+0.10-lot ceiling. Nothing under test was relaxed.
+
+**6. The consensus policy has no production caller.** `orchestrator.Decide` is
+implemented, versioned, documented as the multi-strategy aggregation and
+unit-tested by ten decision-layer scenarios. Nothing calls it. The scheduler
+calls `EvaluateAndRoute` once per (strategy, instrument) and each call routes
+its own signal into the OMS independently, so two strategies disagreeing at one
+instant are not aggregated. Found while writing scenario G, which now asserts
+the invariant that holds under any policy rather than one that does not run.
+Not fixed: wiring it in is a change to the decision path and needs asking for
+in those words.
+
+**7. The seed refused to complete, correctly.** Adding the synthetic instrument
+broke `control-api seed`: it generates historical bars for every enabled
+instrument and had no starting price for the new one. It refused rather than
+skipping, which is right — an instrument in the tradable universe with no
+history is a trap — and it caught the omission on the first run.
+
+Two further findings are properties rather than defects, recorded because both
+cost time to diagnose:
+
+- **The pacing cap makes every finite speed identical on long timeframes.** The
+  engine caps the per-instant sleep at two seconds, so on 1h bars 1x, 10x and
+  100x all pace identically; only `max` differs. An uncapped 1x on this dataset
+  would take 140 hours, so the cap is right — but the speed NAMES overstate
+  what they control.
+- **A paced replay cannot be hand-stepped through the API.** The pacing sleep
+  happens inside the step request and the router gives every handler 30
+  seconds, so any batch large enough to be useful blows the deadline and
+  surfaces as `context deadline exceeded` from whichever query was in flight —
+  a database error for what is arithmetic. Paced runs use the background
+  `advance` control, which is what an operator would use anyway.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This
