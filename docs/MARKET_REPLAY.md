@@ -485,6 +485,13 @@ bracket the window between them — but it is a gap.
   platform filled both a buy and a sell on XAUUSD.m at the same bar, at 19
   instants on one dataset and 31 on another. Scenario G measures what actually
   happens rather than assuming the policy runs.
+- **Four of the trading authority's five numeric ceilings do not bind.**
+  `MaxOrderQuantity`, `MaxOrderNotional`, `MaxPositionExposure` and
+  `MaxDailyLoss` are stored, served and written into every decision snapshot's
+  `authority_state`, and are compared against nothing. Only `MaxLeverage` binds,
+  through `decimal.Min` with the account's limit in `risk.Evaluate`. Not a
+  replay property, found during replay work, and recorded here because a
+  replay's results are only as meaningful as the controls that shaped them.
 - **The model is still not attributed.** A decision now records the market
   regime, the regime policy version and the evidence behind it, along with the
   replay run; the model that informed it is still not recorded, so P&L cannot
