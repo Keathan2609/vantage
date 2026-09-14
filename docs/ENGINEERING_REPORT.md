@@ -1514,6 +1514,23 @@ been executed and moved into the tally — and what remains is what remains.
   scenarios were asserting on nothing. They now step their dataset to the end.
   This was introduced by the isolation work and found by this milestone.
 
+- **The four condition scenarios, measured.** Each on its own freshly seeded
+  fixture, because the 15 ZAR daily-loss limit is spent long before a
+  thirteen-dataset matrix finishes and every later refusal then has nothing to
+  do with what the scenario is testing.
+
+  | | Result | What it measured |
+  | --- | --- | --- |
+  | D high-impact release | PASS | 67 decisions taken inside a blackout and 67 clear of one. 39 refused naming `event_risk_blackout`; 28 accepted, every one a reducing order against an open position. No decision whose `event_risk` check FAILED was accepted |
+  | G conflicting strategies | **FAIL, deliberately** | 38 instants split the strategy set and **all 38** produced filled orders on both sides of XAUUSD.m. See the consensus finding below |
+  | I no risk capacity | PASS | 134 decisions, 132 exposure refusals, 1 accepted — and that one opposed the net exposure it saw, so exposure never grew |
+  | N news alongside agreement | PASS | 134 decisions with 79 news items published across the window, ledger gapless and balance reconciling |
+
+  The contrast between G and I is the useful part: on `capacity-exhausted` the
+  strategy set also split 38 times and produced **zero** both-sided fills,
+  because the tightened ceilings refused the opening leg. The controls that
+  exist do bind; the one that does not exist does not.
+
 - **The consensus policy is not on the execution path.**
   `orchestrator.Decide` -- which this repository's own map describes as "the
   multi-strategy aggregation policy: a PURE function, versioned, vetoes before
