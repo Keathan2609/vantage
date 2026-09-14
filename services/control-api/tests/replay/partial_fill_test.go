@@ -137,8 +137,11 @@ func TestAPartialFillOnTheSyntheticInstrumentBooksExactlyOnce(t *testing.T) {
 	// 2. The first execution is exactly the fraction that was forced. A split
 	//    at some other size would mean the fault is approximate, and every
 	//    later assertion would be measuring something unspecified.
+	// executed_at, not created_at: `fills` records when the VENUE executed,
+	// which is the ordering that matters for a split, and there is no
+	// created_at column at all.
 	first := psqlRow(t, `SELECT quantity::text FROM fills
-		WHERE order_id = '%s' ORDER BY created_at, id LIMIT 1`, orderID)
+		WHERE order_id = '%s' ORDER BY executed_at, id LIMIT 1`, orderID)
 	if first != "0.0400000000" {
 		t.Errorf("the first fill was %s lots, want 0.0400000000 (40%% of 0.1000)",
 			first)
@@ -178,7 +181,7 @@ func TestAPartialFillSurvivesARestartWithoutDuplicating(t *testing.T) {
 
 	partialOrder := psql(t, `
 		SELECT order_id::text FROM order_state_transitions
-		WHERE to_status = 'PARTIALLY_FILLED' ORDER BY created_at DESC LIMIT 1`)
+		WHERE to_status = 'PARTIALLY_FILLED' ORDER BY occurred_at DESC LIMIT 1`)
 	if partialOrder == "" {
 		t.Skip("no order reached PARTIALLY_FILLED, so there is nothing to " +
 			"carry across a restart")
