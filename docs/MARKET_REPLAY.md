@@ -304,6 +304,34 @@ The venue is now **seeded** in replay mode, not switched to `Deterministic`:
 that flag disables jitter and random rejection entirely, which would remove the
 reason the mock venue exists. It stays awkward, and awkward the same way twice.
 
+### Speed invariance
+
+**Measured.** Four modes over the same 140-instant dataset from one snapshot:
+
+| Mode | How it is driven | Wall clock | Digest |
+| --- | --- | --- | --- |
+| STEP | one instant per request | 4m32s | `f986a6b0790bb1fc` |
+| 1x | background `advance`, polled | 6m07s | `f986a6b0790bb1fc` |
+| 10x | background `advance`, polled | 5m39s | `f986a6b0790bb1fc` |
+| MAX | 20 instants per request | 54s | `f986a6b0790bb1fc` |
+
+Identical in every section — 46 decisions, 46 orders, 42 fills, 21 ledger
+entries, 6 positions, 4 attribution rows — while wall time varies by a factor
+of six. Speed alters pacing and nothing else.
+
+**1x and 10x take the same wall time, and that is the pacing cap rather than a
+broken speed.** The per-instant sleep is capped at two seconds, and on 1h bars
+every finite speed exceeds the cap (3600s/1, 3600s/10 and 3600s/100 all do), so
+they pace identically. An uncapped 1x here would take 140 hours. The cap is
+right; the speed NAMES overstate what they control on long timeframes.
+
+**A paced run cannot be hand-stepped through the API.** The pacing sleep
+happens inside the step request and the router gives every handler 30 seconds,
+so any useful batch blows the deadline and surfaces as `context deadline
+exceeded` from whichever query was in flight — a database error for what is
+arithmetic. Paced runs use `advance`, which is the control an operator would
+use for a paced replay anyway.
+
 ### Preconditions for a comparable run
 
 1. **The same starting database.** Account balance, open positions and the

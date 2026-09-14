@@ -1439,10 +1439,14 @@ been executed and moved into the tally — and what remains is what remains.
   comparison cannot be made; a container build stamps a real SHA. This is
   recorded rather than fixed because the honest answer for an uncommitted
   working tree is that there is no identity to record.
-- **Speed is not proven not to affect results.** It is designed to change
-  pacing only, and the pacing code touches no price, size or timestamp. The
-  determinism proof ran at `max` both times rather than comparing `1x` against
-  `100x`, so the property is argued rather than measured.
+- **Speed invariance is now MEASURED, not argued.** STEP, 1x, 10x and MAX over
+  the same 140-instant dataset from one snapshot all produce digest
+  `f986a6b0790bb1fc` — identical in all seven sections, 46 decisions, 46
+  orders, 42 fills, 21 ledger entries — while wall time ranges from 54s to
+  6m07s. 1x and 10x take the same wall time because the per-instant pacing
+  sleep is capped at two seconds and every finite speed exceeds the cap on 1h
+  bars; that is the cap working, and it means the speed names overstate what
+  they control on long timeframes.
 - **Walk-forward, sensitivity and Monte Carlo are library-only.**
   `vantage_quant.backtest` implements `walk_forward`, `sensitivity`,
   `cost_sensitivity` and `monte_carlo_trade_order`, and they have Python tests
