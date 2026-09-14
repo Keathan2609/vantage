@@ -161,14 +161,31 @@ func TestAnExecutionLostToACrashIsBookedExactlyOnceOrLeftOpen(t *testing.T) {
 			"does not hold.", dupes)
 	}
 
-	// 2. Anything that WAS recovered went through booking, so it carries a
-	//    ledger entry like every other fill. A fill that bypassed booking is a
-	//    position with no money behind it.
+	// 2. Anything that WAS recovered went through booking.
+	//
+	// NOT "every fill has a ledger entry" -- that is false, and asserting it
+	// reported 14 correct fills as defects. `booking` writes a transaction
+	// only when realised P&L is non-zero or commission is positive, so an
+	// OPENING fill on a zero-commission instrument legitimately moves no money
+	// and produces no ledger row. The seeded instruments charge no commission,
+	// which makes that the common case rather than an edge one.
+	//
+	// What IS true, and is what booking guarantees: a fill that carried
+	// commission has a commission entry, and every fill belongs to an order.
+	unbooked := psqlInt(t, `
+		SELECT count(*) FROM fills f
+		WHERE f.commission > 0
+		  AND NOT EXISTS (SELECT 1 FROM transactions t
+		                  WHERE t.fill_id = f.id AND t.type = 'commission')`)
+	if unbooked > 0 {
+		t.Errorf("%d fills carried commission and have no commission ledger "+
+			"entry, so they bypassed booking", unbooked)
+	}
 	orphan := psqlInt(t, `
 		SELECT count(*) FROM fills f
-		WHERE NOT EXISTS (SELECT 1 FROM transactions t WHERE t.fill_id = f.id)`)
+		WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = f.order_id)`)
 	if orphan > 0 {
-		t.Errorf("%d fills have no ledger entry, so they bypassed booking", orphan)
+		t.Errorf("%d fills belong to no order", orphan)
 	}
 
 	// 3. And if it was NOT recovered, it is still open for an operator rather

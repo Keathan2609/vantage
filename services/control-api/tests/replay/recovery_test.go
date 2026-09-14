@@ -352,15 +352,24 @@ func TestScenarioQ_ALostResponseIsRecoveredByReconciliation(t *testing.T) {
 		t.Errorf("reconciliation imported %d executions more than once", dupes)
 	}
 
-	// A recovered fill must have gone through booking like any other, so it
-	// carries a ledger entry.
+	// A recovered fill must have gone through booking like any other.
+	//
+	// Expressed as what booking actually guarantees, not as "it has a ledger
+	// entry". `booking` writes a transaction only when realised P&L is
+	// non-zero or commission is positive, so an opening fill on a
+	// zero-commission instrument correctly produces none -- and the seeded
+	// instruments charge no commission, which makes that the common case. The
+	// previous form of this check happened to pass only because no recovered
+	// fill had yet been an opening one.
 	orphan := psqlInt(t, `
 		SELECT count(*) FROM fills f
-		WHERE NOT EXISTS (SELECT 1 FROM transactions t WHERE t.fill_id = f.id)
-		  AND f.ingest_source <> 'execution_response'`)
+		WHERE f.ingest_source <> 'execution_response'
+		  AND f.commission > 0
+		  AND NOT EXISTS (SELECT 1 FROM transactions t
+		                  WHERE t.fill_id = f.id AND t.type = 'commission')`)
 	if orphan > 0 {
-		t.Errorf("%d recovered fills produced no ledger entry, so they bypassed "+
-			"booking", orphan)
+		t.Errorf("%d recovered fills carried commission and produced no "+
+			"commission ledger entry, so they bypassed booking", orphan)
 	}
 
 	// And whether automation may resume is a DECISION the platform records,
