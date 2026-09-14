@@ -246,12 +246,26 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   placed in that window is correctly refused for a stale feed. Wait for feed
   health rather than "fixing" the refusal.
 
-- **A replay needs three preconditions or it silently does nothing.** A
+- **A replay needs four preconditions or it silently does nothing.** A
   trading authority covering the dataset's dates (the dev seed grants three
   years; 90 days expired before a 2027 dataset started and skipped 610 runs
-  with "Trading authority has expired"), Autopilot on, and a starting database
-  whose market data does not postdate the dataset. The engine's preflight
-  reports the first two before a run begins.
+  with "Trading authority has expired"), Autopilot on, a starting database
+  whose market data does not postdate the dataset, and **the research service
+  running**. The engine's preflight reports the first two before a run begins.
+
+  The fourth is the one that produces a passing lie. With `services/quant`
+  down, every strategy evaluation fails with "research service unavailable",
+  the circuit breaker opens, the replay steps happily to the end of the
+  dataset, and the account finishes exactly as it started — so a determinism
+  or speed suite compares runs that all did nothing and reports agreement.
+  That happened. `/health/ready` must report `quant: ok`, and the replay
+  harness now refuses to start unless it does.
+
+  **Autopilot is OFF on a freshly seeded database**, correctly — a fresh
+  install must not trade unattended. Every replay suite therefore needs it
+  turned on after a reseed, and any code path that starts a run must check the
+  preflight warnings rather than calling `control` directly, or it will step
+  through the whole dataset producing nothing and pass.
 
 - **Time-dependent tests must not wait on the real market.** Use
   `marketdata.ReplayProvider` and the series generators
