@@ -364,12 +364,18 @@ func conditionScenarios() []scenario {
 				// this scenario exists to test, and a fixture cannot guarantee
 				// it -- so it is measured, and its absence is a skip rather than
 				// a pass.
+				// `bar_time IS NOT NULL` is not defensive noise. The column went
+				// unpopulated for the whole life of the schema, and grouping by
+				// NULL put every decision into ONE bucket -- so this query
+				// returned a single meaningless group and the scenario skipped
+				// while looking correct.
 				conflicts := psqlInt(t, fmt.Sprintf(`
 					SELECT count(*) FROM (
 						SELECT d.bar_time, d.instrument_id
 						FROM decision_snapshots d
 						WHERE d.id IN (SELECT o.decision_id FROM orders o
 						               WHERE o.replay_run_id = '%s')
+						  AND d.bar_time IS NOT NULL
 						  AND d.signal_action IN ('buy','sell')
 						GROUP BY 1,2
 						HAVING count(DISTINCT d.signal_action) > 1) c`, runID))
@@ -397,8 +403,19 @@ func conditionScenarios() []scenario {
 				if opposing > 0 {
 					t.Errorf("%d (instant, instrument) pairs carry orders on BOTH "+
 						"sides that were not rejected, across %d instants where "+
-						"strategies disagreed. Disagreement is not a reason to "+
-						"trade both ways.\n%s", opposing, conflicts, o.describe())
+						"strategies disagreed.\n\n"+
+						"THE CAUSE IS KNOWN AND IS NOT IN THIS TEST. "+
+						"orchestrator.Decide -- the aggregation policy whose own "+
+						"comment says netting opposing signals is 'how a system "+
+						"ends up trading its own indecision' -- has NO PRODUCTION "+
+						"CALLER. The scheduler calls EvaluateAndRoute once per "+
+						"(strategy, instrument) and each call routes its own "+
+						"signal into the OMS, so two strategies disagreeing at "+
+						"one instant produce two opposing orders and both fill. "+
+						"Wiring Decide in is a change to the decision path and "+
+						"needs asking for in those words; until then THIS TEST IS "+
+						"EXPECTED TO FAIL and the failure is the finding.\n%s",
+						opposing, conflicts, o.describe())
 				}
 				t.Logf("scenario G: %d instants split the strategy set, %d produced "+
 					"orders on both sides", conflicts, opposing)
@@ -435,13 +452,21 @@ func conditionScenarios() []scenario {
 				// So the assertion is that every accepted order was on the
 				// opposite side to the net exposure it saw. Anything else added
 				// to exposure the account had no room for.
+				// split_part, because net_exposure is stored as MONEY -- "0.00
+				// ZAR", not a bare number -- exactly as this repository insists
+				// money be carried. Casting the whole string to numeric fails
+				// outright, which is how the first version of this query was
+				// caught: it errored rather than answering wrongly, which is the
+				// better of the two failures.
 				grew := psqlInt(t, decisionsInRun(runID, `
 					d.outcome = 'accepted' AND EXISTS (
 						SELECT 1 FROM orders o2 WHERE o2.decision_id = d.id AND (
-							(o2.side = 'buy'
-							   AND coalesce((d.portfolio_context->>'net_exposure')::numeric, 0) >= 0) OR
-							(o2.side = 'sell'
-							   AND coalesce((d.portfolio_context->>'net_exposure')::numeric, 0) <= 0)))`))
+							(o2.side = 'buy' AND coalesce(nullif(
+								split_part(d.portfolio_context->>'net_exposure', ' ', 1),
+								'')::numeric, 0) >= 0) OR
+							(o2.side = 'sell' AND coalesce(nullif(
+								split_part(d.portfolio_context->>'net_exposure', ' ', 1),
+								'')::numeric, 0) <= 0)))`))
 				if grew > 0 {
 					t.Errorf("%d orders were ACCEPTED with the exposure ceilings at "+
 						"0.01 and were NOT reducing -- each added to exposure the "+
