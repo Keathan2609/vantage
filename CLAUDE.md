@@ -190,6 +190,18 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   the app never hydrates, and around twenty Playwright tests fail on missing
   selectors while looking exactly like a broken API.
 
+- **One seeded database serves ONE replay suite, not one invocation.** The
+  replay tests share an account whose daily-loss limit is 15 ZAR and whose
+  exposure ceilings fill up, and several suites play the same dataset. Running
+  the recovery scenarios and then the market matrix in one `go test` left the
+  matrix measuring an exhausted fixture: 285 strategy runs, all skipped, no
+  decision, and scenario B reporting "every decision recorded the same regime
+  (map[])" — which is what an empty set looks like, not a broken classifier.
+
+  The per-bar watermark is NOT the problem here; a replay's `start` purges
+  `strategy_runs` for the window it is about to play. The account is. Reseed
+  between suites, not between invocations.
+
 - **The daily-loss budget is a finite fixture resource.** The seeded account's
   limit is 15 ZAR and every order in a suite pays commission, so running the
   race suite twice in a row spends it. After that the risk engine correctly
