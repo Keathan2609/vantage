@@ -1301,7 +1301,7 @@ either, and says so.
 
 ## 30g. Defects the restart and determinism milestone found
 
-Seven, of which three would have made a suite report a pass while proving
+Ten, of which three would have made a suite report a pass while proving
 nothing. Those are the worst kind, and they are listed first.
 
 **1. Four speed modes agreed on four empty accounts.** The research service was
@@ -1357,11 +1357,53 @@ the invariant that holds under any policy rather than one that does not run.
 Not fixed: wiring it in is a change to the decision path and needs asking for
 in those words.
 
-**7. The seed refused to complete, correctly.** Adding the synthetic instrument
+**7. Four of the trading authority's five numeric ceilings do not bind.** A
+trading authority is described throughout this repository as a technical
+control, and it carries `MaxOrderQuantity`, `MaxOrderNotional`,
+`MaxPositionExposure`, `MaxLeverage` and `MaxDailyLoss`. Only `MaxLeverage` is
+compared against anything — `risk.Evaluate` takes `decimal.Min` of it and the
+account's limit. The other four are stored, returned by the API, and written
+into every decision snapshot's `authority_state`, and are never read by the
+risk engine, the OMS or the orchestrator. An operator who narrows
+`MaxOrderQuantity` to 0.10 sees it accepted, sees it echoed back, sees it
+recorded on every decision, and is not protected by it.
+
+That is worse than not having the field, because it creates confidence that
+nothing supports. Found while checking whether a 0.10-lot test order would be
+refused, which it is not — by the authority. NOT fixed in this milestone:
+making a control start refusing orders is a change to the trading path and
+should be asked for deliberately. `TestTheAuthoritysNumericCeilingsAreDocument-
+edAsEnforcedOrNot` pins the current shape so that adding another unenforced
+ceiling is a deliberate act, and the fix is to compare each one the way
+`MaxLeverage` already is: the more restrictive of the two, never the looser.
+
+**8. The seed refused to complete, correctly.** Adding the synthetic instrument
 broke `control-api seed`: it generates historical bars for every enabled
 instrument and had no starting price for the new one. It refused rather than
 skipping, which is right — an instrument in the tradable universe with no
 history is a trap — and it caught the omission on the first run.
+
+**9. A decision never recorded which bar it was taken on.**
+`decision_snapshots.bar_time` has existed since the schema was written and
+nothing ever set it: 168 snapshots, none with a value, while all 1488 strategy
+signals carried one. So a decision could not be joined to the signal that
+produced it, "which bar did this trade come from" was unanswerable, and the
+result digest coalesced every decision's bar to `'none'` — two decisions
+differing only in their bar were indistinguishable in it. Found by scenario G,
+which returned nothing because grouping by `bar_time` put every row in one NULL
+bucket. Fixed: the OMS request carries the bar, nil for a manual order.
+
+**10. A partial risk-limits update silently disabled three protections.**
+`require_stop_loss`, `block_on_high_impact_events` and both blackout windows
+were plain bools and ints assigned unconditionally from the decoded request,
+while every other field falls back to the stored value. A PUT that meant to
+tighten one exposure ceiling and said nothing else therefore set
+`require_stop_loss` to false, `block_on_high_impact_events` to false and both
+blackout minutes to zero — which is what a zero-valued bool and a zero int
+decode to. That is the opposite of what a risk endpoint should do with silence.
+Fixed: they are pointers, so omitting one leaves it alone and turning a
+protection off has to be said out loud. Nothing in the terminal sends this
+request; it only reads the fields.
 
 Two further findings are properties rather than defects, recorded because both
 cost time to diagnose:
