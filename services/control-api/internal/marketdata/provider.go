@@ -310,6 +310,15 @@ var StartingPrices = map[string]float64{
 	"GBPUSD":   1.2700,
 	"USDZAR":   18.2500,
 	"XAGUSD":   31.500,
+	// The synthetic partial-fill instrument. It tracks gold's price because
+	// only its LOT arithmetic is synthetic, not its market -- see the TEST_XAU
+	// comment in internal/seed.
+	//
+	// Present here because the seed generates historical bars for every
+	// enabled instrument and REFUSES rather than skipping one it cannot price.
+	// That refusal is correct: an instrument in the universe with no history
+	// is a trap, and it caught this omission the first time the seed ran.
+	"TEST_XAU": 2650.00,
 }
 
 // NewMockProvider builds a deterministic price generator.

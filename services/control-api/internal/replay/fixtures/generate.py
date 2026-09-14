@@ -312,3 +312,77 @@ emit("day_boundary.csv",
           # Late in the UTC day, so the series crosses midnight UTC and the
           # venue's daily break, on its own week.
           start=week(16) + timedelta(hours=14)))
+
+# ---------------------------------------------------------------------------
+# The condition scenarios: D, G, I and N.
+#
+# # Why these need their own fixtures at all
+#
+# Three of the four are not new MARKET shapes. An economic release, a news
+# item and an exhausted risk budget are conditions applied to an ordinary
+# market, and the behaviour under test is what the platform does when a
+# tradable signal meets one of them.
+#
+# They still need their own datasets, for the reason `week` exists: a strategy
+# is evaluated once per completed bar and that is recorded permanently in
+# strategy_runs, which a replay's purge deliberately does not touch. Two
+# scenarios sharing one dataset would mean the second found every bar already
+# evaluated and produced nothing -- which reads as a broken pipeline rather
+# than as a spent fixture. So each gets its own two-week slot.
+#
+# D, I and N are therefore deliberately the same trend shape as A. The market
+# is the control; the condition is the variable.
+
+# --- G. conflicting strategy signals ---------------------------------------
+# Five bars up hard, two down hard. The net drift is strongly positive, so a
+# trend or momentum strategy should read BUY -- while each impulse leaves the
+# price stretched well away from its own mean, which is what an oscillator or
+# a mean-reversion strategy reads as SELL.
+#
+# Whether the seeded strategy set actually splits on this is an empirical
+# question the fixture cannot settle, so the scenario VERIFIES that
+# disagreement occurred and skips rather than passing if it did not. A fixture
+# that merely hoped for conflict would otherwise assert nothing.
+def conflicting_step(i, price):
+    if i % 7 in (5, 6):
+        return price * Decimal("0.9965")
+    return price * Decimal("1.0030")
+
+
+emit("conflicting_signals.csv",
+     walk(GOLD, 120, P0, conflicting_step, wick=Decimal("0.0009"),
+          start=week(18)))
+
+# --- D. high-impact economic event -----------------------------------------
+emit("event_window.csv", walk(GOLD, 120, P0, trend_step(Decimal("0.002")),
+                              start=week(20)))
+
+# --- I. strong signal, no risk capacity ------------------------------------
+emit("capacity_exhausted.csv", walk(GOLD, 120, P0, trend_step(Decimal("0.002")),
+                                    start=week(22)))
+
+# --- N. news alongside strategy agreement ----------------------------------
+emit("news_agreement.csv", walk(GOLD, 120, P0, trend_step(Decimal("0.002")),
+                                start=week(24)))
+
+# --- Partial-fill testability ----------------------------------------------
+# A dataset on the SYNTHETIC instrument, which exists only so a partial fill is
+# a representable quantity at all. See the TEST_XAU comment in internal/seed.
+#
+# A replay serves quotes only for the instruments its dataset carries, so
+# without this fixture the synthetic instrument has no price during a replay
+# and every order against it is correctly refused for a stale feed.
+#
+# Gentle drift rather than a trend: the point of this run is the venue's fill
+# behaviour, not the market's. A strong move would add price movement to a
+# reconciliation the test wants to attribute entirely to the split fill.
+TEST_GOLD = "TEST_XAU"
+
+
+def gentle_step(i, price):
+    return price * (Decimal("1.0004") if i % 2 == 0 else Decimal("0.9997"))
+
+
+emit("test_partial_fill.csv",
+     walk(TEST_GOLD, 80, P0, gentle_step, wick=Decimal("0.0004"),
+          start=week(26)))

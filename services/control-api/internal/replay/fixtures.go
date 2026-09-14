@@ -87,6 +87,42 @@ func Declared() []Declaration {
 			File:        "day_boundary.csv",
 			Description: "Scenario T. A series crossing a UTC day boundary and the venue's daily maintenance break, so daily risk resets can be checked against documented semantics.",
 		},
+
+		// The condition scenarios. D, I and N carry the SAME trend shape as A
+		// on purpose: the market is the control and the condition -- a
+		// high-impact release, an exhausted risk budget, a news item -- is the
+		// variable. They are separate datasets rather than one because a
+		// strategy is evaluated once per completed bar for ever, so two
+		// scenarios sharing a bar range would leave the second with nothing to
+		// evaluate.
+		{
+			ID:          "conflicting-signals",
+			File:        "conflicting_signals.csv",
+			Description: "Scenario G. A strongly drifting market that overextends on every impulse, so a trend reading and a mean-reversion reading of the same bars disagree.",
+		},
+		{
+			ID:          "event-window",
+			File:        "event_window.csv",
+			Description: "Scenario D. A tradable uptrend, used with high-impact economic releases scheduled inside it so the blackout has a real signal to refuse.",
+		},
+		{
+			ID:          "capacity-exhausted",
+			File:        "capacity_exhausted.csv",
+			Description: "Scenario I. A tradable uptrend, used with the account's risk capacity removed so a strong signal meets no room to act on it.",
+		},
+		{
+			ID:          "news-agreement",
+			File:        "news_agreement.csv",
+			Description: "Scenario N. A tradable uptrend, used with news published alongside it so agreement between strategies can be checked against what the news context recorded.",
+		},
+		{
+			// A replay serves quotes only for the instruments its dataset
+			// carries, so the synthetic instrument needs one of its own or
+			// every order against it is refused for a stale feed.
+			ID:          "test-partial-fill",
+			File:        "test_partial_fill.csv",
+			Description: "Scenario P support. A quiet series on the SYNTHETIC TEST_XAU instrument, whose finer lot step makes a 40/60 split a representable quantity. Development only: no strategy trades this instrument.",
+		},
 	}
 }
 

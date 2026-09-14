@@ -21,6 +21,19 @@ import (
 // that must hold for the platform to be behaving correctly on that market --
 // and asserts them strictly enough to fail when it is not.
 
+// Every scenario steps its dataset to the END, and that is not an arbitrary
+// choice.
+//
+// The first sixty instants of any run are WARM-UP: they build indicators, the
+// regime and the correlation matrix, and produce no executable intent by
+// design. These scenarios used to step sixty, which was the whole dataset's
+// useful half before the warm-up model existed and is now exactly the half
+// that cannot trade. Eight of the nine would have asserted on an evaluation
+// window of zero instants.
+//
+// So the step count is the dataset's own length. A scenario that wants a
+// shorter window should shorten its FIXTURE, where the intent is visible.
+
 // scenario is one market condition driven end to end.
 type scenario struct {
 	// letter is the milestone's label, so a result can be read against the
@@ -41,7 +54,7 @@ type scenario struct {
 func datasetScenarios() []scenario {
 	return []scenario{
 		{
-			letter: "A", name: "clean trend", dataset: "trend-clean", steps: 60,
+			letter: "A", name: "clean trend", dataset: "trend-clean", steps: 140,
 			expect: func(t *testing.T, o observed) {
 				// A clean trend is the one market where the strategy set should
 				// find something. Zero decisions here means the pipeline is not
@@ -64,7 +77,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "B", name: "range", dataset: "range-bound", steps: 60,
+			letter: "B", name: "range", dataset: "range-bound", steps: 140,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("a range produced no decisions at all\n%s", o.describe())
@@ -101,7 +114,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "C", name: "volatility shock", dataset: "volatility-shock", steps: 60,
+			letter: "C", name: "volatility shock", dataset: "volatility-shock", steps: 140,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("a volatility shock produced no decisions\n%s", o.describe())
@@ -152,7 +165,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "H", name: "drawdown sequence", dataset: "drawdown", steps: 60,
+			letter: "H", name: "drawdown sequence", dataset: "drawdown", steps: 120,
 			expect: func(t *testing.T, o observed) {
 				// The point of a drawdown dataset is that a loss limit engages.
 				// If the account traded all the way through without a single
@@ -169,7 +182,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "K", name: "trend reversal", dataset: "trend-reversal", steps: 60,
+			letter: "K", name: "trend reversal", dataset: "trend-reversal", steps: 140,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("a trend reversal produced no decisions\n%s", o.describe())
@@ -177,7 +190,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "L", name: "false breakout", dataset: "false-breakout", steps: 60,
+			letter: "L", name: "false breakout", dataset: "false-breakout", steps: 120,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("a false breakout produced no decisions\n%s", o.describe())
@@ -185,7 +198,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "M", name: "correlated opportunities", dataset: "correlated-pair", steps: 60,
+			letter: "M", name: "correlated opportunities", dataset: "correlated-pair", steps: 120,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("a correlated pair produced no decisions\n%s", o.describe())
@@ -208,7 +221,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "T", name: "daily and session boundary", dataset: "day-boundary", steps: 60,
+			letter: "T", name: "daily and session boundary", dataset: "day-boundary", steps: 90,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("the day-boundary dataset produced no decisions\n%s", o.describe())
@@ -244,9 +257,26 @@ func (o observed) SkipReasonsContaining(needle string) int {
 }
 
 func TestScenarioMatrixThroughTheRealPipeline(t *testing.T) {
+	runScenarios(t, datasetScenarios())
+}
+
+// TestConditionScenariosThroughTheRealPipeline drives D, G, I and N.
+//
+// Separate from the market matrix above because each of these ARMS something
+// first -- a release, a news item, a tightened ceiling -- and a reader looking
+// for "what does the platform do when a signal meets a blackout" should not
+// have to find it inside a list of market shapes. They share the runner, so
+// the universal invariants and the single-shot guard apply identically.
+func TestConditionScenariosThroughTheRealPipeline(t *testing.T) {
+	runScenarios(t, conditionScenarios())
+}
+
+// runScenarios drives a set of scenarios, each as its own subtest.
+func runScenarios(t *testing.T, scenarios []scenario) {
+	t.Helper()
 	h := newHarness(t)
 
-	for _, sc := range datasetScenarios() {
+	for _, sc := range scenarios {
 		sc := sc
 		t.Run(fmt.Sprintf("%s_%s", sc.letter, strings.ReplaceAll(sc.name, " ", "_")), func(t *testing.T) {
 			// Each scenario starts its own run. Start purges the previous

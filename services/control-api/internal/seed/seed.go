@@ -127,6 +127,51 @@ var instrumentSeeds = []domain.Instrument{
 		},
 	},
 	{
+		// TEST_XAU exists so a PARTIAL FILL can be represented at all.
+		//
+		// # The arithmetic that forced it
+		//
+		// Every order the R500 account produces is 0.01 lots, which on
+		// XAUUSD.m is simultaneously the minimum quantity AND the quantity
+		// step. Forty percent of one step is 0.004 lots, which is not a
+		// representable quantity, so the venue correctly declines to split the
+		// order and the partial-fill path -- the one that touches the order
+		// state machine, the position, the weighted average price, the fee
+		// accrual and the ledger all at once -- could not be exercised at all.
+		//
+		// # What was NOT changed to fix it
+		//
+		// Not XAUUSD.m's minimum or step, and not the account's size or its
+		// authority ceiling. Those are the assumptions under test; relaxing
+		// them to make a test pass would be testing a different platform. The
+		// authority's 0.10-lot ceiling still applies to this instrument, and
+		// 0.10 lots here splits into 0.04 and 0.06 -- the 40/60 ratio -- on
+		// quantities this instrument can actually express.
+		//
+		// # Why it is safe to have in the universe
+		//
+		// The seed refuses to run outside development, no strategy declares
+		// it, and the trading authority grants it explicitly rather than by
+		// wildcard. Nothing autonomous can reach it. Its economics are
+		// deliberately synthetic and it must never appear in a research
+		// result: the name says so.
+		ID: "TEST_XAU", Symbol: "TEST_XAU",
+		Name:  "TEST ONLY - Synthetic Gold (1/100 oz, fine lot step)",
+		Class: domain.AssetClassMetal, BaseCcy: money.XAU, QuoteCcy: money.USD,
+		Enabled: true, SessionCalendarID: "fx_metals_24x5",
+		Spec: domain.InstrumentSpec{
+			ContractSize: dec("0.01"), PricePrecision: 2, TickSize: dec("0.01"),
+			// FOUR decimal places, which is the whole point: 0.10 lots can be
+			// split into 0.04 and 0.06 and both are legal quantities.
+			QuantityPrecision: 4, MinQuantity: dec("0.0001"), MaxQuantity: dec("10"),
+			QuantityStep: dec("0.0001"), MarginRate: dec("0.005"), MaxLeverage: dec("200"),
+			SupportedOrderTypes: domain.OrderTypeSet{
+				domain.OrderTypeMarket, domain.OrderTypeLimit, domain.OrderTypeStop},
+			CommissionPerLot: dec("0"),
+			SwapLongPerLot:   dec("0"), SwapShortPerLot: dec("0"),
+		},
+	},
+	{
 		ID: "EURUSD", Symbol: "EURUSD", Name: "Euro vs US Dollar",
 		Class: domain.AssetClassForex, BaseCcy: money.EUR, QuoteCcy: money.USD,
 		Enabled: true, SessionCalendarID: "fx_metals_24x5",
@@ -529,7 +574,7 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 		// mandate — that would defeat the point of it being a control — but it
 		// does reconcile the development grant to the seed's current intent,
 		// and the change is written to the authority history like any other.
-		wanted := []string{"XAUUSD.m", "XAUUSD"}
+		wanted := []string{"XAUUSD.m", "XAUUSD", "TEST_XAU"}
 		if !sameStrings(existingAuthority.AllowedInstruments, wanted) ||
 			len(existingAuthority.AllowedStrategyIDs) != len(paperStrategyIDs) {
 			updated := existingAuthority
@@ -561,7 +606,7 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 		if _, err := d.Store.Control.CreateAuthority(ctx, domain.TradingAuthority{
 			UserID: traderID, AccountID: account.ID, Mode: domain.ModePaper,
 			Active: true, AutomationEnabled: true,
-			AllowedInstruments: []string{"XAUUSD.m", "XAUUSD"},
+			AllowedInstruments: []string{"XAUUSD.m", "XAUUSD", "TEST_XAU"},
 			AllowedStrategyIDs: paperStrategyIDs,
 			AllowedOrderTypes: []domain.OrderType{
 				domain.OrderTypeMarket, domain.OrderTypeLimit},
