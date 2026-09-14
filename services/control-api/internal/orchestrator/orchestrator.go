@@ -51,6 +51,27 @@ type Service struct {
 	reconciler  *reconcile.Service
 	clock       domain.Clock
 	marketClock *domain.MarketClock
+	// replayWindowFn reports the active replay's historical context, or an
+	// inactive window. See SetReplayWindow.
+	replayWindowFn func() domain.ReplayWindow
+}
+
+// SetReplayWindow installs the source of the active replay's historical
+// context.
+//
+// A function rather than an engine reference: the orchestrator must not import
+// the replay package, and it has no business knowing that replay exists beyond
+// "this run may only see data from here onwards, and may not trade yet".
+func (s *Service) SetReplayWindow(fn func() domain.ReplayWindow) {
+	s.replayWindowFn = fn
+}
+
+// replayWindow reads the active window, or an inactive one.
+func (s *Service) replayWindow() domain.ReplayWindow {
+	if s.replayWindowFn == nil {
+		return domain.NoReplayWindow()
+	}
+	return s.replayWindowFn()
 }
 
 // New builds the orchestrator.
@@ -208,12 +229,42 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	}
 
 	// ---- Ask the research service -----------------------------------------
-	bars, err := s.store.Market.Bars(ctx, req.InstrumentID, strategyVersion.Timeframe, 300, true)
+	//
+	// Floored at the replay's warm-up start when one is active. Without the
+	// floor a replay's decisions are taken over a window that mixes SEEDED
+	// history with dataset bars: the indicators, the regime and the features
+	// then partly describe the seed, and the result depends on what happened
+	// to be in the database rather than on the dataset. That is not
+	// reproducible research.
+	//
+	// Zero outside a replay, which is no floor at all.
+	window := s.replayWindow()
+	bars, err := s.store.Market.BarsFrom(ctx, req.InstrumentID, strategyVersion.Timeframe,
+		300, true, window.Floor())
 	if err != nil {
 		return Outcome{}, fmt.Errorf("orchestrator: load bars: %w", err)
 	}
 	if len(bars) < 50 {
 		return skip(fmt.Sprintf("only %d complete bars available; the strategy needs more history", len(bars)))
+	}
+
+	// ---- Warm-up ----------------------------------------------------------
+	//
+	// State is built -- bars ingested, indicators warmed, correlation measured,
+	// the regime established -- and no executable intent is produced. A replay
+	// that traded its first bar would be trading indicator noise: ADX means
+	// nothing for fourteen periods and the volatility baseline averages fifty.
+	//
+	// Recorded as a SKIP with its reason rather than dropped silently, so a
+	// run's warm-up is visible in strategy_runs and cannot be mistaken for a
+	// strategy that found nothing.
+	if window.InWarmup(now) {
+		return skip(fmt.Sprintf(
+			"replay warm-up: evaluation begins at %s and this instant is %s; "+
+				"indicators, regime and correlation are being built and no "+
+				"executable intent is permitted yet",
+			window.EvaluationStart.UTC().Format(time.RFC3339),
+			now.UTC().Format(time.RFC3339)))
 	}
 
 	sessions := s.marketClock.ActiveSessions(now)

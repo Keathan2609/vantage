@@ -1452,6 +1452,18 @@ func (s *Service) regimeFor(req PlaceOrderRequest, g gatheredContext) domain.Reg
 	return held
 }
 
+// ClearCorrelationMatrix drops the measured matrix.
+//
+// Called when a replay starts. A matrix measured over the SEEDED history would
+// otherwise be the one in force for the replay's first instants, so a run's
+// risk decisions would depend on what happened to be in the database rather
+// than on its own declared data.
+func (s *Service) ClearCorrelationMatrix() {
+	s.regimeMu.Lock()
+	defer s.regimeMu.Unlock()
+	s.correlations = nil
+}
+
 // ResetRegimeTrackers clears the hysteresis memory for every instrument.
 //
 // Called when a replay rewinds. A tracker carrying confirmations from a

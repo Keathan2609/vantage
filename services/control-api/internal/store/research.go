@@ -424,6 +424,38 @@ func orEmptyList(r json.RawMessage) json.RawMessage {
 	return r
 }
 
+// PurgeStrategyRunsInRange removes the per-bar evaluation watermark for a
+// window.
+//
+// # Why a replay has to do this
+//
+// A strategy is evaluated once per completed bar and that fact is recorded in
+// strategy_runs, which is what stops the scheduler double-counting one
+// strategy's opinion. A replay's market-data purge does not touch it --
+// strategy_runs is research history, not market data -- so a SECOND replay of
+// the same dataset finds every bar already evaluated and produces nothing at
+// all, and the failures read as a broken pipeline.
+//
+// Measured before this existed: eight of nine scenarios recorded zero strategy
+// runs on a second pass.
+//
+// Bounded by the window the caller declares, so it removes the runs belonging
+// to the dataset about to be replayed and nothing else. A replay whose dates
+// overlap real research would still remove those rows, which is why the bound
+// is the dataset's own span and the operation is development-only.
+func (s *ResearchStore) PurgeStrategyRunsInRange(ctx context.Context,
+	from, to time.Time) (int64, error) {
+
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM strategy_runs
+		WHERE bar_time IS NOT NULL AND bar_time >= $1 AND bar_time <= $2`,
+		from.UTC(), to.UTC())
+	if err != nil {
+		return 0, mapError(err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DecisionSummary is a compact view for the activity timeline.
 type DecisionSummary struct {
 	ID            uuid.UUID

@@ -87,6 +87,9 @@ type Deps struct {
 
 // Scheduler runs periodic work.
 type Scheduler struct {
+	// replayWindowFn reports the active replay's historical context.
+	replayWindowFn func() domain.ReplayWindow
+
 	deps     Deps
 	holderID string
 	// externallyDriven suppresses the market-data and strategy loops.
@@ -377,8 +380,17 @@ func (s *Scheduler) refreshCorrelations(ctx context.Context) error {
 
 	policy := domain.DefaultCorrelationPolicy()
 	now := s.deps.Clock.Now()
+
+	// Floored at the replay's warm-up start when one is active, for the same
+	// reason the strategy's bar window is: a correlation measured partly over
+	// seeded history is a statement about the seed, and a risk decision that
+	// rests on it is not reproducible from the run's declared inputs.
+	since := now.Add(-policy.Lookback)
+	if floor := s.replayWindow().Floor(); !floor.IsZero() && floor.After(since) {
+		since = floor
+	}
 	series, err := s.deps.Store.Market.InstrumentReturns(
-		ctx, ids, correlationTimeframe, now.Add(-policy.Lookback))
+		ctx, ids, correlationTimeframe, since)
 	if err != nil {
 		// The PREVIOUS matrix is deliberately left in place. A stale
 		// measurement is labelled stale and is still evidence; clearing it
@@ -402,6 +414,19 @@ func (s *Scheduler) refreshCorrelations(ctx context.Context) error {
 		"instruments", len(ids), "measured", known, "unmeasurable", unknown,
 		"timeframe", correlationTimeframe, "policy", policy.Version)
 	return nil
+}
+
+// SetReplayWindow installs the source of the active replay's historical
+// context.
+func (s *Scheduler) SetReplayWindow(fn func() domain.ReplayWindow) {
+	s.replayWindowFn = fn
+}
+
+func (s *Scheduler) replayWindow() domain.ReplayWindow {
+	if s.replayWindowFn == nil {
+		return domain.NoReplayWindow()
+	}
+	return s.replayWindowFn()
 }
 
 // runReconciliation compares every account against its venue.

@@ -263,6 +263,25 @@ func (s *MarketStore) UpsertBars(ctx context.Context, bars []domain.Bar) error {
 // in-progress bar is reading the future relative to its own decision point,
 // which is the single most common way a backtest becomes fiction.
 func (s *MarketStore) Bars(ctx context.Context, instrumentID string, tf domain.Timeframe, limit int, completeOnly bool) ([]domain.Bar, error) {
+	return s.BarsFrom(ctx, instrumentID, tf, limit, completeOnly, time.Time{})
+}
+
+// BarsFrom is Bars with an earliest-bar floor.
+//
+// The floor exists for replay isolation. A strategy is evaluated over "the
+// last N bars the store holds", and a replay's purge removes only the rows the
+// replay itself provided -- so without a floor a replay's decisions are taken
+// over a window that mixes SEEDED history with dataset bars, and the
+// indicators, the regime and the features partly describe the seed.
+//
+// Measured before this existed: a deliberately range-bound fixture classified
+// TRENDING twelve times and RANGING never, while the same close series in
+// isolation gave ADX 11.2 and RANGING.
+//
+// A zero floor means no floor, which is ordinary operation.
+func (s *MarketStore) BarsFrom(ctx context.Context, instrumentID string, tf domain.Timeframe,
+	limit int, completeOnly bool, notBefore time.Time) ([]domain.Bar, error) {
+
 	if limit <= 0 || limit > 10000 {
 		limit = 500
 	}
@@ -275,13 +294,19 @@ func (s *MarketStore) Bars(ctx context.Context, instrumentID string, tf domain.T
 	if completeOnly {
 		q += ` AND complete = TRUE`
 	}
+	args := []any{instrumentID, string(tf), limit}
+	if !notBefore.IsZero() {
+		// $4 rather than an interpolated literal, like every other query here.
+		q += ` AND open_time >= $4`
+		args = append(args, notBefore.UTC())
+	}
 	q += `
 			ORDER BY open_time DESC
 			LIMIT $3
 		) recent
 		ORDER BY open_time ASC`
 
-	rows, err := s.pool.Query(ctx, q, instrumentID, string(tf), limit)
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, mapError(err)
 	}

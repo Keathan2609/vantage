@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 // ReplayStore persists the record of every market replay.
@@ -43,6 +44,33 @@ type ReplayRun struct {
 	StepErrors    int
 	Failure       string
 	Warnings      []string
+
+	// The declared window. Dataset time, and nil when a run declared none --
+	// which a run recorded before the column existed genuinely did.
+	WarmupStart        *time.Time
+	EvaluationStart    *time.Time
+	EvaluationEnd      *time.Time
+	AllowWarmupTrading bool
+
+	// The account as it stood when the run began. A run that started with an
+	// open position and a drawn-down balance behaves differently from one that
+	// started flat, and neither the dataset hash nor the code SHA records it.
+	StartingBalance   *decimal.Decimal
+	StartingCurrency  string
+	StartingPositions int
+
+	// What was in force. Digests rather than documents: enough to detect that
+	// a comparison between two runs is invalid, which is the question they
+	// exist to answer.
+	RiskConfigHash      string
+	AuthorityConfigHash string
+	CorrelationPolicy   string
+	RegimePolicy        string
+	// StrategyVersions and ModelVersions are JSON arrays. Readable directly
+	// because "which strategies ran" is asked of the record itself, and a hash
+	// would send the reader elsewhere to find out.
+	StrategyVersions []byte
+	ModelVersions    []byte
 }
 
 // ErrReplayRunIncomplete means a caller tried to record a run that could not
@@ -77,10 +105,18 @@ func (s *ReplayStore) RecordRun(ctx context.Context, run ReplayRun) error {
         INSERT INTO replay_runs (
             id, dataset_id, dataset_hash, code_sha, config_hash, seed,
             from_time, to_time, started_at, finished_at,
-            state, steps, bars_processed, step_errors, failure, warnings)
+            state, steps, bars_processed, step_errors, failure, warnings,
+            warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
+            starting_balance, starting_currency, starting_positions,
+            risk_config_hash, authority_config_hash, correlation_policy,
+            regime_policy, strategy_versions, model_versions)
         VALUES ($1, $2, $3, $4, $5, $6,
                 $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16)
+                $11, $12, $13, $14, $15, $16,
+                $17, $18, $19, $20,
+                $21, $22, $23,
+                $24, $25, $26,
+                $27, $28, $29)
         ON CONFLICT (id) DO UPDATE SET
             finished_at    = EXCLUDED.finished_at,
             state          = EXCLUDED.state,
@@ -88,10 +124,31 @@ func (s *ReplayStore) RecordRun(ctx context.Context, run ReplayRun) error {
             bars_processed = EXCLUDED.bars_processed,
             step_errors    = EXCLUDED.step_errors,
             failure        = EXCLUDED.failure,
-            warnings       = EXCLUDED.warnings`,
+            warnings       = EXCLUDED.warnings,
+            -- The declared inputs are immutable within a run, so rewriting
+            -- them with the same values is harmless -- and it makes the
+            -- record self-healing if the first write could not gather them.
+            warmup_start          = EXCLUDED.warmup_start,
+            evaluation_start      = EXCLUDED.evaluation_start,
+            evaluation_end        = EXCLUDED.evaluation_end,
+            allow_warmup_trading  = EXCLUDED.allow_warmup_trading,
+            starting_balance      = EXCLUDED.starting_balance,
+            starting_currency     = EXCLUDED.starting_currency,
+            starting_positions    = EXCLUDED.starting_positions,
+            risk_config_hash      = EXCLUDED.risk_config_hash,
+            authority_config_hash = EXCLUDED.authority_config_hash,
+            correlation_policy    = EXCLUDED.correlation_policy,
+            regime_policy         = EXCLUDED.regime_policy,
+            strategy_versions     = EXCLUDED.strategy_versions,
+            model_versions        = EXCLUDED.model_versions`,
 		run.ID, run.DatasetID, run.DatasetHash, run.CodeSHA, run.ConfigHash, run.Seed,
 		run.FromTime.UTC(), run.ToTime.UTC(), run.StartedAt.UTC(), run.FinishedAt,
-		run.State, run.Steps, run.BarsProcessed, run.StepErrors, run.Failure, warnings)
+		run.State, run.Steps, run.BarsProcessed, run.StepErrors, run.Failure, warnings,
+		run.WarmupStart, run.EvaluationStart, run.EvaluationEnd, run.AllowWarmupTrading,
+		run.StartingBalance, run.StartingCurrency, run.StartingPositions,
+		run.RiskConfigHash, run.AuthorityConfigHash, run.CorrelationPolicy,
+		run.RegimePolicy, jsonOrEmptyArray(run.StrategyVersions),
+		jsonOrEmptyArray(run.ModelVersions))
 	if err != nil {
 		return mapError(err)
 	}
@@ -103,7 +160,11 @@ func (s *ReplayStore) Run(ctx context.Context, id uuid.UUID) (ReplayRun, error) 
 	rows, err := s.query(ctx, `
         SELECT id, dataset_id, dataset_hash, code_sha, config_hash, seed,
                from_time, to_time, started_at, finished_at,
-               state, steps, bars_processed, step_errors, failure, warnings
+               state, steps, bars_processed, step_errors, failure, warnings,
+               warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
+               starting_balance, starting_currency, starting_positions,
+               risk_config_hash, authority_config_hash, correlation_policy,
+               regime_policy, strategy_versions, model_versions
         FROM replay_runs WHERE id = $1`, id)
 	if err != nil {
 		return ReplayRun{}, err
@@ -126,11 +187,24 @@ func (s *ReplayStore) Runs(ctx context.Context, datasetID string, limit int) ([]
 	return s.query(ctx, `
         SELECT id, dataset_id, dataset_hash, code_sha, config_hash, seed,
                from_time, to_time, started_at, finished_at,
-               state, steps, bars_processed, step_errors, failure, warnings
+               state, steps, bars_processed, step_errors, failure, warnings,
+               warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
+               starting_balance, starting_currency, starting_positions,
+               risk_config_hash, authority_config_hash, correlation_policy,
+               regime_policy, strategy_versions, model_versions
         FROM replay_runs
         WHERE ($1 = '' OR dataset_id = $1)
         ORDER BY started_at DESC, id
         LIMIT $2`, datasetID, limit)
+}
+
+// jsonOrEmptyArray keeps the jsonb columns valid. A nil slice would be a NULL
+// into a NOT NULL column, and `{}` would fail to unmarshal into a list.
+func jsonOrEmptyArray(b []byte) []byte {
+	if len(b) == 0 {
+		return []byte(`[]`)
+	}
+	return b
 }
 
 func (s *ReplayStore) query(ctx context.Context, sql string, args ...any) ([]ReplayRun, error) {
@@ -146,7 +220,11 @@ func (s *ReplayStore) query(ctx context.Context, sql string, args ...any) ([]Rep
 		if serr := rows.Scan(&r.ID, &r.DatasetID, &r.DatasetHash, &r.CodeSHA,
 			&r.ConfigHash, &r.Seed, &r.FromTime, &r.ToTime, &r.StartedAt,
 			&r.FinishedAt, &r.State, &r.Steps, &r.BarsProcessed, &r.StepErrors,
-			&r.Failure, &r.Warnings); serr != nil {
+			&r.Failure, &r.Warnings,
+			&r.WarmupStart, &r.EvaluationStart, &r.EvaluationEnd, &r.AllowWarmupTrading,
+			&r.StartingBalance, &r.StartingCurrency, &r.StartingPositions,
+			&r.RiskConfigHash, &r.AuthorityConfigHash, &r.CorrelationPolicy,
+			&r.RegimePolicy, &r.StrategyVersions, &r.ModelVersions); serr != nil {
 			return nil, mapError(serr)
 		}
 		out = append(out, r)

@@ -8,6 +8,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -394,19 +395,51 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		})
 
 		// Each run begins from a clean market-data state.
+		// Everything a run must not inherit, cleared in one place.
+		//
+		// The brief's list, and each item is here because leaving it behind
+		// makes a run depend on what preceded it rather than on its declared
+		// inputs -- which is exactly what stops a result being reproducible:
+		//
+		//   - prior replay bars and quotes  -> PurgeReplayMarketData
+		//   - prior regime hysteresis       -> ResetRegimeTrackers
+		//   - prior correlation state       -> ClearCorrelationMatrix
+		//   - prior strategy watermarks     -> PurgeStrategyRunsInRange
+		//   - seeded market bars            -> the window's floor, applied at
+		//                                      every historical read rather
+		//                                      than by deleting the fixture
+		//
+		// Seeded bars are FLOORED rather than deleted, deliberately: deleting
+		// them would leave the platform with no history the moment a replay
+		// ended, and the floor is the more honest control anyway -- it says
+		// what a run may see rather than destroying what it may not.
 		a.Replay.SetOnStart(func(startCtx context.Context) error {
-			// And the regime hysteresis memory, which is in-process state the
-			// purge cannot reach.
-			//
-			// A tracker carrying confirmations from a previous run would make
-			// the first bars of this one depend on which run preceded them.
-			// Two runs of one dataset in one process would then differ, which
-			// is precisely the claim a replay makes and the hardest kind of
-			// non-determinism to find: nothing in the database would explain
-			// it.
 			a.OMS.ResetRegimeTrackers()
-			_, perr := a.Store.Market.PurgeReplayMarketData(startCtx)
-			return perr
+			a.OMS.ClearCorrelationMatrix()
+
+			if _, perr := a.Store.Market.PurgeReplayMarketData(startCtx); perr != nil {
+				return perr
+			}
+
+			// The per-bar evaluation watermark for the span about to be
+			// replayed. Without this a second run of one dataset finds every
+			// bar already evaluated and produces nothing at all.
+			window := a.Replay.Window()
+			if window.Active {
+				n, perr := a.Store.Research.PurgeStrategyRunsInRange(
+					startCtx, window.WarmupStart, window.EvaluationEnd)
+				if perr != nil {
+					return perr
+				}
+				if n > 0 {
+					log.Warn("cleared the strategy evaluation watermark for this "+
+						"dataset's span so the run is not silently skipped",
+						"rows", n,
+						"from", window.WarmupStart.Format(time.RFC3339),
+						"to", window.EvaluationEnd.Format(time.RFC3339))
+				}
+			}
+			return nil
 		})
 
 		// FX rates are re-stamped at each replay instant, holding their
@@ -451,11 +484,72 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		// first order.
 		a.OMS.SetReplayRunSource(a.Replay.RunID)
 
+		// The historical context every consumer floors its reads at. Same
+		// shape and same reason as RunID: read from inside the pipeline the
+		// engine drives, so it must be lock-free.
+		a.Orchestrator.SetReplayWindow(a.Replay.Window)
+		a.Scheduler.SetReplayWindow(a.Replay.Window)
+
 		// And again when it ends, so a finished run does not leave a
 		// future-dated quote in the live feed's table for the next process.
 		a.Replay.SetOnFinish(func(rctx context.Context) error {
 			_, perr := a.Store.Market.PurgeReplayMarketData(rctx)
 			return perr
+		})
+
+		// The conditions a run begins under, so it can be re-executed and so
+		// two runs can be told apart when they differ.
+		a.Replay.SetInputGatherer(func(gctx context.Context) (replay.RunInputs, error) {
+			in := replay.RunInputs{
+				CorrelationPolicy: domain.DefaultCorrelationPolicy().Version,
+				RegimePolicy:      domain.DefaultRegimePolicy().Version,
+			}
+
+			accounts, aerr := a.Store.Accounts.ListAllAccounts(gctx)
+			if aerr != nil {
+				return in, aerr
+			}
+			if len(accounts) > 0 {
+				acct := accounts[0]
+				snapshot, serr := a.Portfolio.Compute(gctx, acct)
+				if serr == nil {
+					in.StartingBalance = snapshot.State.Balance.StringFixed()
+					in.StartingCurrency = string(snapshot.State.Balance.Currency())
+					in.StartingPositions = snapshot.State.OpenPositions
+				}
+				if limits, lerr := a.Store.Control.RiskLimitsForAccount(gctx, acct.ID); lerr == nil {
+					in.RiskConfigHash = digestOf(limits)
+				}
+				if auth, aerr2 := a.Store.Control.ActiveAuthorityForAccount(gctx, acct.ID); aerr2 == nil {
+					in.AuthorityConfigHash = digestOf(auth)
+				}
+			}
+
+			// Which strategies were live, and at which version. Recorded as a
+			// list rather than a digest because "which strategies ran" is
+			// asked of the record itself, and a hash would send the reader
+			// elsewhere to find out.
+			if strategies, serr := a.Store.Research.ListStrategies(gctx); serr == nil {
+				type liveVersion struct {
+					Key       string `json:"key"`
+					Version   int    `json:"version"`
+					Lifecycle string `json:"lifecycle"`
+				}
+				live := []liveVersion{}
+				for _, st := range strategies {
+					v, verr := a.Store.Research.LatestStrategyVersion(gctx, st.ID)
+					if verr != nil {
+						continue
+					}
+					live = append(live, liveVersion{
+						Key: st.Key, Version: v.Version, Lifecycle: string(v.Lifecycle),
+					})
+				}
+				if raw, merr := json.Marshal(live); merr == nil {
+					in.StrategyVersions = raw
+				}
+			}
+			return in, nil
 		})
 
 		// Every run is recorded before it is announced, so a replay result can
@@ -481,6 +575,22 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 				StepErrors:    run.Counters.Errors,
 				Failure:       run.Error,
 				Warnings:      warnings,
+
+				WarmupStart:        timePtr(run.WarmupStart),
+				EvaluationStart:    timePtr(run.EvaluationStart),
+				EvaluationEnd:      timePtr(run.EvaluationEnd),
+				AllowWarmupTrading: run.AllowWarmupTrading,
+
+				StartingBalance:   decimalPtr(run.Inputs.StartingBalance),
+				StartingCurrency:  run.Inputs.StartingCurrency,
+				StartingPositions: run.Inputs.StartingPositions,
+
+				RiskConfigHash:      run.Inputs.RiskConfigHash,
+				AuthorityConfigHash: run.Inputs.AuthorityConfigHash,
+				CorrelationPolicy:   run.Inputs.CorrelationPolicy,
+				RegimePolicy:        run.Inputs.RegimePolicy,
+				StrategyVersions:    run.Inputs.StrategyVersions,
+				ModelVersions:       run.Inputs.ModelVersions,
 			})
 		})
 

@@ -55,6 +55,72 @@ type Dataset struct {
 	Hash   string
 	Source string
 	Rows   []Row
+	// WarmupInstants is how many market instants build state before any
+	// executable intent is permitted.
+	//
+	// Indicators are noise until they have history: ADX over 14 periods means
+	// nothing for the first 14 bars, the volatility baseline averages 50, and
+	// a correlation needs its minimum sample count. A replay that traded its
+	// first bar would trade that warm-up noise and call it a result.
+	//
+	// Counted in INSTANTS rather than rows so a multi-instrument dataset warms
+	// every instrument for the same market time.
+	WarmupInstants int
+}
+
+// DefaultWarmupInstants is the warm-up applied when a dataset declares none.
+//
+// Sixty: comfortably past the 50-bar volatility baseline and the research
+// plane's own 60-bar floor for classifying a regime at all, so the first
+// evaluated instant has a characterised market rather than an UNKNOWN one.
+const DefaultWarmupInstants = 60
+
+// Instants returns the distinct timestamps in the dataset, in order.
+//
+// The unit of replay time. A multi-instrument dataset has several rows per
+// instant, and counting rows would warm a two-instrument dataset for half as
+// long as a one-instrument dataset covering the same hours.
+func (d Dataset) Instants() []time.Time {
+	out := make([]time.Time, 0, len(d.Rows))
+	var last time.Time
+	for _, r := range d.Rows {
+		if last.IsZero() || !r.Timestamp.Equal(last) {
+			out = append(out, r.Timestamp)
+			last = r.Timestamp
+		}
+	}
+	return out
+}
+
+// Window describes the historical context this dataset declares.
+//
+// The evaluation start is the CLOSE of the last warm-up instant: a bar's quote
+// is true at its close, so evaluation begins when the first tradable bar is
+// complete rather than when it opens.
+func (d Dataset) Window(allowWarmupTrading bool) domain.ReplayWindow {
+	instants := d.Instants()
+	if len(instants) == 0 {
+		return domain.NoReplayWindow()
+	}
+	warmup := d.WarmupInstants
+	if warmup <= 0 {
+		warmup = DefaultWarmupInstants
+	}
+	// A dataset shorter than its warm-up evaluates nothing, which is a
+	// legitimate configuration and must not panic. The evaluation start is
+	// then the end, and the run warms up and stops.
+	if warmup > len(instants) {
+		warmup = len(instants)
+	}
+
+	dur, _ := d.Rows[0].Timeframe.Duration()
+	return domain.ReplayWindow{
+		Active:             true,
+		WarmupStart:        instants[0],
+		EvaluationStart:    instants[warmup-1].Add(dur),
+		EvaluationEnd:      instants[len(instants)-1].Add(dur),
+		AllowWarmupTrading: allowWarmupTrading,
+	}
 }
 
 // Row is one observation.
@@ -453,6 +519,9 @@ type Declaration struct {
 	ID          string
 	File        string
 	Description string
+	// WarmupInstants overrides DefaultWarmupInstants for this dataset. Zero
+	// takes the default.
+	WarmupInstants int
 }
 
 // FormatRow renders a row as a dataset line, for generating fixtures.

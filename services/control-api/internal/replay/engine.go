@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/vantage/control-api/internal/domain"
 	"github.com/vantage/control-api/internal/logging"
 	"github.com/vantage/control-api/internal/marketdata"
 )
@@ -108,6 +109,8 @@ type Engine struct {
 	beforeStep func(ctx context.Context, now time.Time) error
 	// record persists the run. See SetRecorder.
 	record Recorder
+	// gatherInputs collects the declared inputs at Start.
+	gatherInputs InputGatherer
 	// lastPersist throttles the progress writes so a long run does not spend
 	// its time in the database. State CHANGES are never throttled.
 	lastPersist time.Time
@@ -131,6 +134,13 @@ type Engine struct {
 	// process looked healthy. Anything reachable from inside a step must be
 	// lock-free.
 	currentRun atomic.Pointer[uuid.UUID]
+
+	// window is the historical context this run declares, published OUTSIDE
+	// the mutex for the same reason as currentRun: it is read from inside the
+	// pipeline the engine is driving, while the engine holds its lock for the
+	// whole of a step. A reader that took the mutex would deadlock against the
+	// step that invoked it.
+	window atomic.Pointer[domain.ReplayWindow]
 }
 
 // Run is the record of one replay.
@@ -151,8 +161,23 @@ type Run struct {
 	Seed        int64     `json:"seed"`
 	// FromTime and ToTime are dataset times, not wall times. A run that
 	// covered three replay days in nine seconds is described by the days.
-	FromTime  time.Time `json:"from_time"`
-	ToTime    time.Time `json:"to_time"`
+	FromTime time.Time `json:"from_time"`
+	ToTime   time.Time `json:"to_time"`
+	// The declared historical context. Recorded because "what did this run
+	// see" must have exactly one answer, and because a result is only
+	// reproducible from inputs that were written down.
+	WarmupStart        time.Time `json:"warmup_start"`
+	EvaluationStart    time.Time `json:"evaluation_start"`
+	EvaluationEnd      time.Time `json:"evaluation_end"`
+	AllowWarmupTrading bool      `json:"allow_warmup_trading"`
+	// Inputs is everything else the run was declared with -- the account's
+	// starting state and the configurations in force. Gathered by the
+	// application, because the engine has no store and should not grow one.
+	//
+	// A run without these cannot be re-executed, and two such runs cannot be
+	// compared: a difference would be attributed to the code when it belonged
+	// to a threshold nobody wrote down.
+	Inputs    RunInputs `json:"inputs"`
 	StartedAt time.Time `json:"started_at"`
 	// FinishedAt is wall time, because "how long did this take to run" is an
 	// operational question about the machine, not about the market.
@@ -174,6 +199,39 @@ type Run struct {
 // they injected.
 type Recorder func(ctx context.Context, run Run, warnings []string) error
 
+// RunInputs are the declared conditions a run began under.
+//
+// Populated by an application-supplied function at Start. Kept as a plain
+// struct with no store dependency, for the same reason the Recorder is a
+// function: this package sits above marketdata, which sits above store.
+type RunInputs struct {
+	StartingBalance   string
+	StartingCurrency  string
+	StartingPositions int
+
+	RiskConfigHash      string
+	AuthorityConfigHash string
+	CorrelationPolicy   string
+	RegimePolicy        string
+	StrategyVersions    []byte
+	ModelVersions       []byte
+}
+
+// InputGatherer collects the declared inputs at Start.
+type InputGatherer func(ctx context.Context) (RunInputs, error)
+
+// SetInputGatherer installs it.
+//
+// A failure is NOT fatal to the run: a replay whose starting balance could not
+// be read is still a replay, and refusing to start would trade a usable result
+// for a complete record. The gap is logged and the record says so by carrying
+// empty fields.
+func (e *Engine) SetInputGatherer(fn InputGatherer) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.gatherInputs = fn
+}
+
 // Options configure a run.
 type Options struct {
 	DatasetID  string
@@ -181,6 +239,14 @@ type Options struct {
 	Speed      string
 	CodeSHA    string
 	ConfigHash string
+	// AllowWarmupTrading opts out of the warm-up suppression.
+	//
+	// Default false, and the default is the safe one: a replay that traded its
+	// first bar would be trading indicator noise -- ADX means nothing for
+	// fourteen bars -- and calling that a result is how a backtest flatters
+	// itself. Exposed because the brief requires the suppression to be
+	// configurable rather than absolute.
+	AllowWarmupTrading bool
 }
 
 // How often a run's progress reaches the database, and how long that write
@@ -257,8 +323,21 @@ func (e *Engine) Start(opts Options) (Run, error) {
 	// would refuse most of the run -- correctly, for a condition the harness
 	// created. Measured before this existed: 415 of 1082 strategy runs
 	// skipped.
+	// The historical context, published BEFORE the clearing hook.
+	//
+	// onStart clears state scoped to THIS window -- the strategy evaluation
+	// watermark for the dataset's span -- so it has to be able to read the
+	// window it is clearing for. Publishing afterwards meant the hook saw the
+	// PREVIOUS run's window, or none at all, and cleared the wrong span.
+	window := ds.Window(opts.AllowWarmupTrading)
+	if werr := window.Validate(); werr != nil {
+		return Run{}, werr
+	}
+	e.window.Store(&window)
+
 	if e.onStart != nil {
 		if err := e.onStart(context.Background()); err != nil {
+			e.window.Store(nil)
 			return Run{}, fmt.Errorf("replay: clearing previous market data: %w", err)
 		}
 	}
@@ -325,6 +404,27 @@ func (e *Engine) Start(opts Options) (Run, error) {
 	}
 	for _, w := range e.warnings {
 		e.log.Warn("replay preflight", "run", e.run.ID.String(), "warning", w)
+	}
+
+	e.run.WarmupStart = window.WarmupStart
+	e.run.EvaluationStart = window.EvaluationStart
+	e.run.EvaluationEnd = window.EvaluationEnd
+	e.run.AllowWarmupTrading = window.AllowWarmupTrading
+
+	// The conditions this run began under. Not fatal on failure: a replay
+	// whose starting balance could not be read is still a replay, and the
+	// record says so by carrying empty fields rather than by not existing.
+	if e.gatherInputs != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		inputs, ierr := e.gatherInputs(ctx)
+		cancel()
+		if ierr != nil {
+			e.log.Warn("could not gather the run's declared inputs; the record "+
+				"will be incomplete and the run not fully reproducible from it",
+				"error", ierr)
+		} else {
+			e.run.Inputs = inputs
+		}
 	}
 
 	// Written before the run is announced, and a failure aborts the start.
@@ -694,6 +794,20 @@ func (e *Engine) Status() (Run, bool) {
 	return run, true
 }
 
+// Window reports the historical context the active run declares.
+//
+// Inactive when no replay owns the clock, which is what every consumer checks
+// before applying a floor: a zero floor applied to ordinary operation would be
+// a silent no-op that looks like a control.
+//
+// Lock-free, and safe to call from inside the pipeline the engine is driving.
+func (e *Engine) Window() domain.ReplayWindow {
+	if w := e.window.Load(); w != nil {
+		return *w
+	}
+	return domain.NoReplayWindow()
+}
+
 // RunID reports the run that currently owns the clock, or nil.
 //
 // Lock-free, deliberately, and the ONLY accessor safe to call from inside the
@@ -730,8 +844,11 @@ func (e *Engine) finishLocked(state State, cause error) {
 	e.state = state
 	// Cleared first. An order placed after the run has ended was decided on
 	// whatever feed the process is on now, and tagging it with a finished
-	// replay would be worse than not tagging it at all.
+	// replay would be worse than not tagging it at all. The window goes with
+	// it: a floor left in place would silently truncate every later
+	// historical read in this process.
 	e.currentRun.Store(nil)
+	e.window.Store(nil)
 	if e.run != nil {
 		now := time.Now().UTC()
 		e.run.State = state

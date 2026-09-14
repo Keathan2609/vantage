@@ -46,18 +46,24 @@ import (
 const replayLabel = "SIMULATED — REPLAY — PAPER. Not a claim about future performance."
 
 type replayRunView struct {
-	ID          string  `json:"id"`
-	DatasetID   string  `json:"dataset_id"`
-	DatasetHash string  `json:"dataset_hash"`
-	CodeSHA     string  `json:"code_sha"`
-	ConfigHash  string  `json:"config_hash"`
-	Seed        int64   `json:"seed"`
-	State       string  `json:"state"`
-	FromTime    string  `json:"from_time"`
-	ToTime      string  `json:"to_time"`
-	StartedAt   string  `json:"started_at"`
-	FinishedAt  *string `json:"finished_at"`
-	Error       string  `json:"error,omitempty"`
+	ID          string `json:"id"`
+	DatasetID   string `json:"dataset_id"`
+	DatasetHash string `json:"dataset_hash"`
+	CodeSHA     string `json:"code_sha"`
+	ConfigHash  string `json:"config_hash"`
+	Seed        int64  `json:"seed"`
+	State       string `json:"state"`
+	FromTime    string `json:"from_time"`
+	ToTime      string `json:"to_time"`
+	// The declared historical context. A result is only reproducible from
+	// inputs that were written down, and "what did this run see" must have
+	// exactly one answer.
+	WarmupStart     string  `json:"warmup_start"`
+	EvaluationStart string  `json:"evaluation_start"`
+	EvaluationEnd   string  `json:"evaluation_end"`
+	StartedAt       string  `json:"started_at"`
+	FinishedAt      *string `json:"finished_at"`
+	Error           string  `json:"error,omitempty"`
 
 	Steps         int `json:"steps"`
 	BarsProcessed int `json:"bars_processed"`
@@ -78,11 +84,14 @@ func (s *Server) replayView(run replay.Run) replayRunView {
 	v := replayRunView{
 		ID: run.ID.String(), DatasetID: run.DatasetID, DatasetHash: run.DatasetHash,
 		CodeSHA: run.CodeSHA, ConfigHash: run.ConfigHash, Seed: run.Seed,
-		State:     string(run.State),
-		FromTime:  run.FromTime.UTC().Format(time.RFC3339),
-		ToTime:    run.ToTime.UTC().Format(time.RFC3339),
-		StartedAt: run.StartedAt.UTC().Format(time.RFC3339),
-		Error:     run.Error,
+		State:           string(run.State),
+		FromTime:        run.FromTime.UTC().Format(time.RFC3339),
+		ToTime:          run.ToTime.UTC().Format(time.RFC3339),
+		WarmupStart:     run.WarmupStart.UTC().Format(time.RFC3339),
+		EvaluationStart: run.EvaluationStart.UTC().Format(time.RFC3339),
+		EvaluationEnd:   run.EvaluationEnd.UTC().Format(time.RFC3339),
+		StartedAt:       run.StartedAt.UTC().Format(time.RFC3339),
+		Error:           run.Error,
 
 		Steps: run.Counters.Steps, BarsProcessed: run.Counters.BarsProcessed,
 		Errors: run.Counters.Errors,
