@@ -50,6 +50,16 @@ type ReplayProvider struct {
 	series map[string][]domain.Bar
 	// cursor is how many bars of each series have been played.
 	cursor map[string]int
+	// datasetSpread is the fraction the DATASET specifies for the current
+	// bar, pushed in by the replay engine as it steps.
+	//
+	// Separate from `spread` because the two have different authority. The
+	// dataset describes the market; an injected override describes a fault
+	// somebody is deliberately simulating. An override must therefore survive
+	// the next step rather than being clobbered by the dataset -- which is
+	// what happened when there was one map: the injected spike lasted until
+	// the following bar and no further.
+	datasetSpread map[string]decimal.Decimal
 	// spread is the fraction of mid applied to build a two-sided quote from a
 	// one-sided bar. Configurable per instrument so a spread-spike scenario
 	// can widen it mid-run.
@@ -72,6 +82,7 @@ func NewReplayProvider() *ReplayProvider {
 		series:        map[string][]domain.Bar{},
 		cursor:        map[string]int{},
 		spread:        map[string]decimal.Decimal{},
+		datasetSpread: map[string]decimal.Decimal{},
 		defaultSpread: decimal.RequireFromString("0.00012"),
 	}
 }
@@ -127,6 +138,21 @@ func (r *ReplayProvider) SetSeries(instrumentID string, bars []domain.Bar) error
 	// SetOutage.
 	r.cursor[instrumentID] = 0
 	return nil
+}
+
+// SetDatasetSpread records the spread the dataset specifies for the current
+// bar.
+//
+// Called by the replay engine as it steps. Without it the `spread_fraction`
+// column in every fixture was DECORATIVE: the provider built each book from a
+// single configured fraction, so a spread-spike dataset produced a tight book
+// and the scenario silently tested nothing. Found by the scenario matrix,
+// which reported that the platform traded through a 2% spread without a single
+// refusal.
+func (r *ReplayProvider) SetDatasetSpread(instrumentID string, fraction decimal.Decimal) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.datasetSpread[instrumentID] = fraction
 }
 
 // SetSpreadFraction overrides the spread for one instrument.
@@ -193,6 +219,7 @@ func (r *ReplayProvider) Reset() {
 		r.cursor[id] = 0
 	}
 	r.spread = map[string]decimal.Decimal{}
+	r.datasetSpread = map[string]decimal.Decimal{}
 	r.paused = false
 	r.outage = false
 }
@@ -260,8 +287,14 @@ func (r *ReplayProvider) Quote(_ context.Context, inst domain.Instrument,
 	bar := bars[r.cursor[inst.ID]]
 	mid := bar.Close
 
+	// An injected override wins, then the dataset's own column, then the
+	// default. The order is the authority order: a deliberately simulated
+	// fault outranks the recorded market, which outranks a fallback.
 	fraction, ok := r.spread[inst.ID]
 	if !ok {
+		fraction, ok = r.datasetSpread[inst.ID]
+	}
+	if !ok || !fraction.IsPositive() {
 		fraction = r.defaultSpread
 	}
 	half := mid.Mul(fraction).Div(decimal.NewFromInt(2))

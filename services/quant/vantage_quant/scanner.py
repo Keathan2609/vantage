@@ -32,6 +32,11 @@ Regime = Literal[
 ]
 
 
+# The least share of its own path a trend must actually cover. See
+# classify_regime for why ADX alone is not enough.
+TREND_EFFICIENCY_MIN = 0.30
+
+
 def classify_regime(
     bars: pd.DataFrame, event_risk: str = "none"
 ) -> tuple[Regime, dict[str, float]]:
@@ -56,6 +61,26 @@ def classify_regime(
     atr_baseline = float(atr_series.tail(50).mean())
     price = float(close.iloc[-1])
 
+    # Efficiency ratio: net displacement against the distance actually
+    # travelled, over the same window ADX uses.
+    #
+    # ADX cannot tell a trend from a regular oscillation. A cycle with a period
+    # of eight bars spends four bars going up and four coming down, and those
+    # sustained runs are exactly what ADX measures -- so a clean sine wave
+    # scores as strongly directional. The scenario matrix caught it: a
+    # deliberately range-bound fixture was classified TRENDING twelve times and
+    # RANGING never, which would run every trend strategy in precisely the
+    # market it should sit out.
+    #
+    # Displacement is the missing half. A trend GETS SOMEWHERE: over 14 bars
+    # its net move is a large fraction of the path length. An oscillation
+    # returns to where it started, so its ratio collapses towards zero however
+    # decisive each leg looked.
+    window = min(14, len(close) - 1)
+    travelled = float(close.diff().abs().tail(window).sum())
+    displacement = abs(float(close.iloc[-1]) - float(close.iloc[-1 - window]))
+    efficiency = displacement / travelled if travelled > 0 else 0.0
+
     measures = {
         "adx": adx_now if np.isfinite(adx_now) else 0.0,
         "atr_fraction": atr_now / price if np.isfinite(atr_now) and price > 0 else 0.0,
@@ -64,6 +89,7 @@ def classify_regime(
         ),
         "plus_di": float(plus_di.iloc[-1]) if pd.notna(plus_di.iloc[-1]) else 0.0,
         "minus_di": float(minus_di.iloc[-1]) if pd.notna(minus_di.iloc[-1]) else 0.0,
+        "efficiency": efficiency,
     }
 
     if not np.isfinite(adx_now) or not np.isfinite(atr_now):
@@ -79,10 +105,21 @@ def classify_regime(
         return "HIGH_VOLATILITY", measures
     if volatility_ratio < 0.6:
         return "LOW_VOLATILITY", measures
-    # ADX above 25 is the conventional threshold for a trending market.
-    if adx_now > 25:
+    # ADX above 25 is the conventional threshold for a trending market, and it
+    # is necessary but NOT sufficient: see the efficiency note above.
+    #
+    # 0.30 is a development default, not the output of a study. It separates
+    # the fixtures cleanly -- a clean trend runs well above it and an
+    # eight-bar cycle well below -- and it is stated as a constant so a later
+    # calibration is a visible change rather than a tweak.
+    if adx_now > 25 and efficiency >= TREND_EFFICIENCY_MIN:
         return "TRENDING", measures
     if adx_now < 20:
+        return "RANGING", measures
+    # Directional by ADX but going nowhere: an oscillation, not a trend. The
+    # honest label is RANGING, which is what a mean-reversion strategy needs
+    # and what a trend strategy must sit out.
+    if adx_now > 25:
         return "RANGING", measures
     return "UNKNOWN", measures
 

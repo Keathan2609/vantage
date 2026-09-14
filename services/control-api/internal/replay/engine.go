@@ -400,11 +400,35 @@ func (e *Engine) Step(ctx context.Context, n int) (Run, error) {
 }
 
 // stepOnceLocked plays exactly one dataset row.
+// stepOnceLocked plays one market INSTANT: every row sharing the current
+// timestamp, together.
+//
+// # Why an instant and not a row
+//
+// The dataset is sorted by timestamp, so a multi-instrument dataset
+// interleaves: gold at T0, silver at T0, gold at T1, silver at T1. Advancing
+// the provider once per ROW ran it through its series at N times the clock's
+// rate for N instruments, and the two desynchronised immediately -- 280 of 290
+// strategy runs on the two-instrument fixture were skipped for degraded market
+// data that the harness itself had created.
+//
+// One instant per step is also the honest model of a market: at a given
+// moment every instrument has a price, and a strategy comparing two
+// instruments must see both as of the same time. Stepping row by row meant one
+// leg of a correlated pair was always an hour behind the other, which is
+// exactly the condition the correlated-pair scenario exists to test.
 func (e *Engine) stepOnceLocked(ctx context.Context) error {
 	row := e.dataset.Rows[e.cursor]
 	dur, err := row.Timeframe.Duration()
 	if err != nil {
 		return err
+	}
+
+	// How many rows share this instant. Consumed together below.
+	rowsInInstant := 1
+	for e.cursor+rowsInInstant < len(e.dataset.Rows) &&
+		e.dataset.Rows[e.cursor+rowsInInstant].Timestamp.Equal(row.Timestamp) {
+		rowsInInstant++
 	}
 
 	// 1. Move the provider to this bar.
@@ -416,8 +440,21 @@ func (e *Engine) stepOnceLocked(ctx context.Context) error {
 	// data-quality policy correctly rejected the whole run as
 	// `future_timestamp`. The symptom looked like a broken clock; the cause
 	// was the order of these two lines.
+	//
+	// ONE step per instant, whatever the instrument count: the provider holds
+	// a cursor per instrument and advances all of them together.
 	if e.cursor > 0 {
 		e.provider.Step(1)
+	}
+
+	// 1b. The spread each instrument's bar specifies.
+	//
+	// Every row in this instant, so a multi-instrument dataset gets its own
+	// book per instrument. The dataset's column was previously ignored
+	// entirely, which made the spread-spike fixture inert.
+	for i := 0; i < rowsInInstant; i++ {
+		r := e.dataset.Rows[e.cursor+i]
+		e.provider.SetDatasetSpread(r.InstrumentID, r.SpreadFraction)
 	}
 
 	// 2. Move the application clock to this bar's close, which is when its
@@ -448,9 +485,11 @@ func (e *Engine) stepOnceLocked(ctx context.Context) error {
 	// 4. Drive the real pipeline.
 	stepErr := e.stepper.ReplayStep(ctx, func(string) { e.clock.Tick() })
 
-	e.cursor++
+	// Every row in this instant is consumed, so progress and the cursor track
+	// the dataset while the clock tracks market time.
+	e.cursor += rowsInInstant
 	e.counters.Steps++
-	e.counters.BarsProcessed++
+	e.counters.BarsProcessed += rowsInInstant
 	if stepErr != nil {
 		return stepErr
 	}

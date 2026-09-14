@@ -19,11 +19,19 @@ import csv
 import io
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, getcontext
 
 getcontext().prec = 28
 
-OUT = os.path.join("services", "control-api", "internal", "replay", "fixtures")
+# Relative to THIS FILE, not to the working directory.
+#
+# It was relative to the repository root, so running the generator from its own
+# directory silently created
+# `internal/replay/fixtures/services/control-api/internal/replay/fixtures/` and
+# wrote there. The committed fixtures were untouched and the script reported
+# success, which is the worst combination available.
+OUT = os.path.dirname(os.path.abspath(__file__))
 HEADER = [
     "instrument_id", "timeframe", "timestamp",
     "open", "high", "low", "close", "volume",
@@ -43,24 +51,36 @@ HEADER = [
 # whole run is refused for a reason that reads like a broken clock. Dating
 # fixtures ahead of the seed sidesteps that without weakening the check.
 #
-# US DST in 2027 begins on 14 March, so 2 March is EST (UTC-5) and the venue's
-# 17:00-18:00 New York maintenance break is 22:00-23:00 UTC, which is what the
-# tradable() filter below assumes.
+# The venue calendar is defined in NEW YORK time, and tradable() below now
+# evaluates it there rather than in fixed UTC hours.
+#
+# It used to assume EST, which was true for 2027-03-02 and false eleven days
+# later: US DST begins on 2027-03-14. That made the whole date range
+# unusable -- datasets could not be spaced forward without silently placing
+# bars inside the maintenance break -- and forced them backwards instead,
+# where a guard test correctly refused them for being behind a plausible seed.
+# Converting to New York time removes the constraint entirely.
 START = datetime(2027, 3, 2, 4, 0, 0, tzinfo=timezone.utc)
+NEW_YORK = ZoneInfo("America/New_York")
 TF = "1h"
 STEP = timedelta(hours=1)
 SPREAD = Decimal("0.00012")
 
-# The venue's daily maintenance break is 17:00-18:00 New York. On 2027-03-02
-# New York is UTC-5 (DST begins 2027-03-14), so the break is 22:00-23:00 UTC.
-BREAK_START_UTC_HOUR = 22
-# The weekly window, in the same UTC terms.
-WEEK_OPEN_UTC_HOUR = 22    # Sunday 17:00 New York
-WEEK_CLOSE_UTC_HOUR = 22   # Friday 17:00 New York
+# The venue's daily maintenance break and weekly window, in NEW YORK hours --
+# the terms the calendar is actually defined in. DST then takes care of itself.
+BREAK_START_NY_HOUR = 17   # 17:00-18:00 New York, Monday to Thursday
+WEEK_OPEN_NY_HOUR = 17     # Sunday 17:00 New York
+WEEK_CLOSE_NY_HOUR = 17    # Friday 17:00 New York
 
 
 def session_for(ts):
-    """The session label, for the fixture's advisory column."""
+    """The session label, for the fixture's advisory column.
+
+    Still expressed in UTC hours, which is what the London and Tokyo sessions
+    are anchored to closely enough for an advisory column. The AUTHORITATIVE
+    session on a decision comes from the market clock in the control plane, not
+    from here -- this is a convenience for someone reading the CSV.
+    """
     h = ts.hour
     if 13 <= h < 16:
         return "overlap"
@@ -84,17 +104,20 @@ def tradable(ts):
     reports as closed_weekend. Nine fixtures carried them until a test
     checking every bar against the real clock found it.
 
-    The venue's week runs Sunday 17:00 New York to Friday 17:00 New York, which
-    in EST is 22:00 UTC to 22:00 UTC.
+    The venue's week runs Sunday 17:00 New York to Friday 17:00 New York, and
+    this evaluates it IN NEW YORK, so a dataset either side of a DST boundary
+    is filtered correctly. The previous version hard-coded the EST equivalents
+    in UTC and was wrong for any range after 2027-03-14.
     """
-    wd = ts.weekday()          # Monday = 0
+    local = ts.astimezone(NEW_YORK)
+    wd = local.weekday()       # Monday = 0
     if wd == 5:                # Saturday: shut all day
         return False
     if wd == 6:                # Sunday: shut until the weekly open
-        return ts.hour >= WEEK_OPEN_UTC_HOUR
-    if wd == 4 and ts.hour >= WEEK_CLOSE_UTC_HOUR:   # Friday, after the close
+        return local.hour >= WEEK_OPEN_NY_HOUR
+    if wd == 4 and local.hour >= WEEK_CLOSE_NY_HOUR:  # Friday, after the close
         return False
-    if ts.hour == BREAK_START_UTC_HOUR:              # the daily break, Mon-Thu
+    if local.hour == BREAK_START_NY_HOUR:             # the daily break, Mon-Thu
         return False
     return True
 
@@ -134,6 +157,33 @@ def emit(name, rows):
     print(f"{name}: {len(rows)} rows")
 
 
+def week(n):
+    """Shift the start FORWARD by n weeks, keeping the weekday.
+
+    Every dataset needs its OWN date range. The per-bar guard evaluates a
+    strategy once per completed bar and records that in strategy_runs, so two
+    datasets covering the same hours cannot both be replayed into one account:
+    the second finds every bar already evaluated and produces nothing at all.
+    Measured before this existed: eight of nine scenarios recorded zero
+    strategy runs and the failures read as a broken pipeline.
+
+    Datasets are spaced TWO weeks apart, not one: a 140-bar hourly series spans
+    about eight days once non-tradable hours are skipped, so consecutive weeks
+    would still overlap by a couple of days and those bars would be evaluated
+    only once.
+
+    FORWARD, so every dataset stays ahead of any plausible seed date. A dataset
+    behind the seeded market data makes every replay quote look
+    `timestamp_regressed` -- correctly, since it is older -- and the run is
+    refused for a reason that reads like a broken clock. A guard test enforces
+    the margin.
+
+    Whole weeks preserve the weekday, which `tradable` depends on. DST is no
+    longer a constraint: `tradable` evaluates the venue calendar in New York.
+    """
+    return START + timedelta(weeks=n)
+
+
 def walk(instrument, count, start_price, next_close, wick=Decimal("0.0008"),
          spread_at=None, start=START):
     """Advance a price series, skipping non-tradable hours."""
@@ -170,7 +220,8 @@ def trend_step(rate):
     return f
 
 
-emit("trend_clean.csv", walk(GOLD, 140, P0, trend_step(Decimal("0.002"))))
+emit("trend_clean.csv", walk(GOLD, 140, P0, trend_step(Decimal("0.002")),
+                             start=week(0)))
 
 # --- B. range --------------------------------------------------------------
 CYCLE = [0, 1, 2, 1, 0, -1, -2, -1]
@@ -183,7 +234,7 @@ def range_step(base, amplitude):
 
 
 emit("range_bound.csv", walk(GOLD, 140, P0, range_step(P0, Decimal("0.004")),
-                             wick=Decimal("0.0006")))
+                             wick=Decimal("0.0006"), start=week(2)))
 
 # --- C. volatility shock ---------------------------------------------------
 SHOCK_AT = 70
@@ -196,7 +247,7 @@ def shock_step(i, price):
 
 
 emit("volatility_shock.csv",
-     walk(GOLD, 140, P0, shock_step,
+     walk(GOLD, 140, P0, shock_step, start=week(4),
           spread_at=lambda i: SPREAD if i < SHOCK_AT else Decimal("0.0009")))
 
 # --- E. spread spike -------------------------------------------------------
@@ -207,13 +258,13 @@ def flat_step(i, price):
 
 
 emit("spread_spike.csv",
-     walk(GOLD, 100, P0, flat_step, wick=Decimal("0.0002"),
+     walk(GOLD, 100, P0, flat_step, wick=Decimal("0.0002"), start=week(6),
           spread_at=lambda i: SPREAD if i < 60 else Decimal("0.02")))
 
 # --- H. drawdown -----------------------------------------------------------
 emit("drawdown.csv",
      walk(GOLD, 120, P0, lambda i, price: price * Decimal("0.996"),
-          wick=Decimal("0.0010")))
+          wick=Decimal("0.0010"), start=week(8)))
 
 # --- K. trend reversal -----------------------------------------------------
 REVERSE_AT = 70
@@ -226,7 +277,7 @@ def reversal_step(i, price):
     return price * (Decimal(1) + rate)
 
 
-emit("trend_reversal.csv", walk(GOLD, 140, P0, reversal_step))
+emit("trend_reversal.csv", walk(GOLD, 140, P0, reversal_step, start=week(10)))
 
 # --- L. false breakout -----------------------------------------------------
 # A long quiet range establishes the channel, one bar breaks well above it,
@@ -243,13 +294,14 @@ def false_breakout_step(i, price):
 
 
 emit("false_breakout.csv", walk(GOLD, 120, P0, false_breakout_step,
-                                wick=Decimal("0.0006")))
+                                wick=Decimal("0.0006"), start=week(12)))
 
 # --- M. correlated pair ----------------------------------------------------
 # Both instruments trend up together. Interleaved by timestamp, which is what
 # the dataset's sort guarantees, so the pipeline sees them as one market state.
-gold = walk(GOLD, 120, P0, trend_step(Decimal("0.002")))
-silver = walk(SILVER, 120, Decimal("31.50"), trend_step(Decimal("0.0022")))
+gold = walk(GOLD, 120, P0, trend_step(Decimal("0.002")), start=week(14))
+silver = walk(SILVER, 120, Decimal("31.50"), trend_step(Decimal("0.0022")),
+              start=week(14))
 emit("correlated_pair.csv", sorted(gold + silver, key=lambda r: (r[2], r[0])))
 
 # --- T. day boundary -------------------------------------------------------
@@ -257,4 +309,6 @@ emit("correlated_pair.csv", sorted(gold + silver, key=lambda r: (r[2], r[0])))
 # daily break, which the walk skips.
 emit("day_boundary.csv",
      walk(GOLD, 90, P0, trend_step(Decimal("0.0012")),
-          start=datetime(2027, 3, 2, 18, 0, 0, tzinfo=timezone.utc)))
+          # Late in the UTC day, so the series crosses midnight UTC and the
+          # venue's daily break, on its own week.
+          start=week(16) + timedelta(hours=14)))
