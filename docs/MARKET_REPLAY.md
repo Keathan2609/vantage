@@ -183,6 +183,13 @@ strategy is evaluated once per completed bar for ever — that is recorded in
 `strategy_runs` — so two datasets covering the same hours cannot both be
 replayed into one account: the second finds every bar already evaluated.
 
+**`correlated-pair` and `day-boundary` were lengthened to 180 for the same
+reason.** At 120 and 90 they produced, respectively, decisions with no
+`portfolio_correlation` check recorded and no decision at all — the correlation
+matrix needs paired history of its own, and thirty instants past the warm-up is
+not enough for a strategy to act. The market shapes are unchanged; there is
+more of each.
+
 **The condition fixtures are 180 instants, not 120, and that was measured.**
 The first sixty are warm-up, and the seeded strategy set produces nothing
 actionable until roughly 120 bars of history exist: a 120-instant version of

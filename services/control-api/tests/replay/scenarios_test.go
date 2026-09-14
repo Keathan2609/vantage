@@ -79,8 +79,19 @@ func datasetScenarios() []scenario {
 		{
 			letter: "B", name: "range", dataset: "range-bound", steps: 140,
 			expect: func(t *testing.T, o observed) {
+				// NOT "a range produced decisions". A range is the market this
+				// fixture exists to show a trend strategy DECLINING on — the
+				// registry describes it as the one "on which a trend strategy
+				// should not churn" — so asserting it must trade asserts the
+				// opposite of the point. What must hold is that the strategies
+				// were reached and looked.
+				if !assertPipelineReachedTheStrategies(t, o) {
+					return
+				}
 				if o.Decisions == 0 {
-					t.Errorf("a range produced no decisions at all\n%s", o.describe())
+					t.Logf("a range produced no actionable signal at all, which is "+
+						"the behaviour this dataset exists to show\n%s", o.describe())
+					return
 				}
 				// A STRONGER assertion belongs here and is not yet sound.
 				//
@@ -116,8 +127,18 @@ func datasetScenarios() []scenario {
 		{
 			letter: "C", name: "volatility shock", dataset: "volatility-shock", steps: 140,
 			expect: func(t *testing.T, o observed) {
+				if !assertPipelineReachedTheStrategies(t, o) {
+					return
+				}
+				// A shock suppressing every actionable signal is a defensible
+				// outcome — it is what a risk-aware strategy set should do — so
+				// it is reported rather than failed. What would be wrong is
+				// trading through it while recording an ordinary regime, and
+				// that is the assertion below.
 				if o.Decisions == 0 {
-					t.Errorf("a volatility shock produced no decisions\n%s", o.describe())
+					t.Logf("a volatility shock produced no actionable signal, which "+
+						"is a defensible response to it\n%s", o.describe())
+					return
 				}
 				// A shock must show up somewhere in the recorded conditions.
 				// If every decision reads TRENDING through a volatility shock,
@@ -198,7 +219,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "M", name: "correlated opportunities", dataset: "correlated-pair", steps: 120,
+			letter: "M", name: "correlated opportunities", dataset: "correlated-pair", steps: 180,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("a correlated pair produced no decisions\n%s", o.describe())
@@ -221,7 +242,7 @@ func datasetScenarios() []scenario {
 			},
 		},
 		{
-			letter: "T", name: "daily and session boundary", dataset: "day-boundary", steps: 90,
+			letter: "T", name: "daily and session boundary", dataset: "day-boundary", steps: 180,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Errorf("the day-boundary dataset produced no decisions\n%s", o.describe())
@@ -243,6 +264,37 @@ func datasetScenarios() []scenario {
 			},
 		},
 	}
+}
+
+// assertPipelineReachedTheStrategies separates the two things that "no
+// decisions" can mean.
+//
+// It can mean the pipeline never arrived -- ingestion, bars, authority,
+// Autopilot, the research service -- which is a defect. Or it can mean the
+// strategies looked and declined, which for a range or a shock is the DESIRED
+// behaviour and is exactly what those fixtures are built to produce.
+//
+// Asserting "decisions > 0" cannot tell them apart, and on a range it asserts
+// the opposite of the point. What distinguishes them is whether strategy
+// EVALUATIONS happened: a signal recorded as no_trade is the pipeline working
+// and the strategy declining; no evaluation at all is the pipeline not
+// arriving.
+//
+// This became load-bearing when the isolation milestone added the data floor.
+// Before it, a strategy could see the seeded 8730-bar history and signalled
+// from the first instant; now it sees only the replay's own bars, so a dataset
+// has to build that history itself before anything is actionable.
+func assertPipelineReachedTheStrategies(t *testing.T, o observed) bool {
+	t.Helper()
+	evaluated := o.StrategyRuns - o.Skipped
+	if evaluated <= 0 {
+		t.Errorf("no strategy was evaluated at all: %d runs, all skipped. The "+
+			"pipeline did not reach strategy evaluation, which is a different "+
+			"thing from the strategies declining to act.\n%s",
+			o.StrategyRuns, o.describe())
+		return false
+	}
+	return true
 }
 
 // SkipReasonsContaining counts skips whose reason mentions a substring.

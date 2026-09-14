@@ -299,16 +299,26 @@ emit("false_breakout.csv", walk(GOLD, 120, P0, false_breakout_step,
 # --- M. correlated pair ----------------------------------------------------
 # Both instruments trend up together. Interleaved by timestamp, which is what
 # the dataset's sort guarantees, so the pipeline sees them as one market state.
-gold = walk(GOLD, 120, P0, trend_step(Decimal("0.002")), start=week(14))
-silver = walk(SILVER, 120, Decimal("31.50"), trend_step(Decimal("0.0022")),
+# 180 instants each, for the reason the condition fixtures are 180: the data
+# floor means a strategy sees only the replay's own bars, and nothing is
+# actionable until roughly 120 of them exist. At 120 instants this dataset
+# produced decisions but none that recorded the portfolio_correlation check --
+# the matrix needs paired history of its own before it has anything to say.
+gold = walk(GOLD, 180, P0, trend_step(Decimal("0.002")), start=week(14))
+silver = walk(SILVER, 180, Decimal("31.50"), trend_step(Decimal("0.0022")),
               start=week(14))
 emit("correlated_pair.csv", sorted(gold + silver, key=lambda r: (r[2], r[0])))
 
 # --- T. day boundary -------------------------------------------------------
 # Starts late in the UTC day so the series crosses midnight UTC and the venue's
 # daily break, which the walk skips.
+# 180 instants, not 90. Ninety leaves thirty past the warm-up, and under the
+# data floor a strategy has not built enough history of its own to act by then:
+# this dataset produced no decision at all and the scenario could say nothing
+# about session boundaries. The market shape is unchanged; there is simply more
+# of it.
 emit("day_boundary.csv",
-     walk(GOLD, 90, P0, trend_step(Decimal("0.0012")),
+     walk(GOLD, 180, P0, trend_step(Decimal("0.0012")),
           # Late in the UTC day, so the series crosses midnight UTC and the
           # venue's daily break, on its own week.
           start=week(16) + timedelta(hours=14)))
