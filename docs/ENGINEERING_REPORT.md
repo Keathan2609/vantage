@@ -1469,6 +1469,30 @@ cost time to diagnose:
   a database error for what is arithmetic. Paced runs use the background
   `advance` control, which is what an operator would use anyway.
 
+### The market matrix, isolated on its own seed
+
+Nine scenarios, each stepping its dataset to the end:
+
+| | Result |
+| --- | --- |
+| A clean trend | PASS |
+| B range | was FAIL — corrected. It asserted "decisions > 0", which on a range asserts the opposite of the point: the registry describes this dataset as the market "on which a trend strategy should not churn". It now asserts the strategies were REACHED |
+| C volatility shock | was FAIL — corrected, same reason. A shock suppressing every actionable signal is a defensible response, not a defect |
+| E spread spike | PASS |
+| H drawdown | PASS |
+| K trend reversal | PASS |
+| L false breakout | PASS |
+| M correlated opportunities | was FAIL — no decision recorded the `portfolio_correlation` check. Fixture lengthened to 180 instants: the correlation matrix needs paired history of its own |
+| T day and session boundary | was FAIL — no decision at all. At 90 instants, 30 remain past the warm-up, which is not enough for a strategy to act under the data floor. Fixture lengthened to 180 |
+
+**All four failures trace to one cause, and it is the price of the isolation
+milestone's data floor.** A strategy now sees only the replay's own bars; before
+the floor it could see the seeded 8730-bar history and signalled from the first
+instant. Every dataset must now build that history itself, and the seeded
+strategy set produces nothing actionable until roughly 120 bars exist. That is
+correct behaviour and a real constraint on fixture design, and it was invisible
+until the scenarios were stepped past the warm-up.
+
 ### Restart safety, measured
 
 A real `Stop-Process` and a real restart, not an in-process reset. Four cases:
