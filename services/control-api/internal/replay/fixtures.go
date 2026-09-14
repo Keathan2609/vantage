@@ -98,7 +98,7 @@ func Declared() []Declaration {
 		{
 			ID:          "conflicting-signals",
 			File:        "conflicting_signals.csv",
-			Description: "Scenario G. A strongly drifting market that overextends on every impulse, so a trend reading and a mean-reversion reading of the same bars disagree.",
+			Description: "Scenario G. An ordinary sustained trend, which is measurably what splits the strategy set: the seeded strategies flip direction at different points in one move. An overextending design was tried first and split them zero times.",
 		},
 		{
 			ID:          "event-window",

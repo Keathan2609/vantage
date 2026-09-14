@@ -411,20 +411,42 @@ func conditionScenarios() []scenario {
 				// 1. The signal must have reached the risk engine. If nothing was
 				//    decided, the scenario measured a market that produced no
 				//    opinion rather than a refusal.
+				runID := latestRunID(t)
 				if o.Decisions == 0 {
 					t.Skipf("no decision was taken, so no signal met the tightened "+
 						"ceilings\n%s", o.describe())
 				}
 
-				// 2. THE INVARIANT. No capacity means no position, however good
-				//    the signal looked.
-				if o.Fills > 0 {
-					t.Errorf("%d fills occurred with the exposure ceilings at 0.01. "+
-						"A strong signal is not capacity.\n%s", o.Fills, o.describe())
-				}
-				if o.Accepted > 0 {
-					t.Errorf("%d decisions were ACCEPTED with no exposure capacity\n%s",
-						o.Accepted, o.describe())
+				// 2. THE INVARIANT, stated as what "no capacity" actually
+				//    guarantees: exposure must not GROW.
+				//
+				// Not "nothing trades". A reducing order is exempt from every
+				// exposure ceiling by design, and must be -- refusing a flatten
+				// because the ceiling is tight traps the position, and that is
+				// the third place that rule has had to be written down here.
+				//
+				// Measured on this dataset: 2 orders were accepted with
+				// max_gross_exposure at 0.01 ZAR against an observed 1660.88
+				// ZAR, and both were BUYs taken while net exposure was -553.58
+				// -- opposite side, so reducing. The check recorded itself
+				// PASSED, which is the exemption firing rather than the ceiling
+				// failing to bind.
+				//
+				// So the assertion is that every accepted order was on the
+				// opposite side to the net exposure it saw. Anything else added
+				// to exposure the account had no room for.
+				grew := psqlInt(t, decisionsInRun(runID, `
+					d.outcome = 'accepted' AND EXISTS (
+						SELECT 1 FROM orders o2 WHERE o2.decision_id = d.id AND (
+							(o2.side = 'buy'
+							   AND coalesce((d.portfolio_context->>'net_exposure')::numeric, 0) >= 0) OR
+							(o2.side = 'sell'
+							   AND coalesce((d.portfolio_context->>'net_exposure')::numeric, 0) <= 0)))`))
+				if grew > 0 {
+					t.Errorf("%d orders were ACCEPTED with the exposure ceilings at "+
+						"0.01 and were NOT reducing -- each added to exposure the "+
+						"account had no room for. A strong signal is not "+
+						"capacity.\n%s", grew, o.describe())
 				}
 
 				// 3. And the refusal must be the exposure family, not some
@@ -440,8 +462,10 @@ func conditionScenarios() []scenario {
 						"tightening is not what stopped this run. Refusal codes "+
 						"seen: %v\n%s", o.RejectCodes, o.describe())
 				}
-				t.Logf("scenario I: %d decisions, %d exposure refusals, %d fills",
-					o.Decisions, exposure, o.Fills)
+				accepted := psqlInt(t, decisionsInRun(runID, `d.outcome = 'accepted'`))
+				t.Logf("scenario I: %d decisions, %d exposure refusals, %d accepted "+
+					"— and every accepted one was reducing, or the check above "+
+					"would have failed", o.Decisions, exposure, accepted)
 			},
 		},
 		{

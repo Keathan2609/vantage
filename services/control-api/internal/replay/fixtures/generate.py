@@ -334,19 +334,22 @@ emit("day_boundary.csv",
 # is the control; the condition is the variable.
 
 # --- G. conflicting strategy signals ---------------------------------------
-# Five bars up hard, two down hard. The net drift is strongly positive, so a
-# trend or momentum strategy should read BUY -- while each impulse leaves the
-# price stretched well away from its own mean, which is what an oscillator or
-# a mean-reversion strategy reads as SELL.
+# The ORDINARY trend, and that is the correction this fixture records.
 #
-# Whether the seeded strategy set actually splits on this is an empirical
-# question the fixture cannot settle, so the scenario VERIFIES that
-# disagreement occurred and skips rather than passing if it did not. A fixture
-# that merely hoped for conflict would otherwise assert nothing.
+# It was designed as five bars up hard and two down hard, on the theory that
+# overextension would split a trend reading from a mean-reversion reading.
+# Measured against the seeded strategy set, it split it ZERO times in 180
+# instants -- while the plain trend used by scenarios D, I and N split it on
+# THIRTY-EIGHT instants each, and produced orders on both sides of the
+# instrument at 19 and 31 of them.
+#
+# So the disagreement this scenario needs does not come from stretching the
+# price away from its mean. It comes from strategies flipping direction at
+# different points in the same move. The fixture that provokes it is the one
+# that looks least provocative, and designing for the mechanism that seemed
+# obvious produced a dataset that tested nothing.
 def conflicting_step(i, price):
-    if i % 7 in (5, 6):
-        return price * Decimal("0.9965")
-    return price * Decimal("1.0030")
+    return trend_step(Decimal("0.002"))(i, price)
 
 
 # 180 instants, not 120, and the reason is measured rather than chosen.
