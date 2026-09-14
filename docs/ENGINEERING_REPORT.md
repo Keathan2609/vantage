@@ -1459,6 +1459,17 @@ cost time to diagnose:
   a database error for what is arithmetic. Paced runs use the background
   `advance` control, which is what an operator would use anyway.
 
+### Restart safety, measured
+
+A real `Stop-Process` and a real restart, not an in-process reset. Four cases:
+
+| Case | Result |
+| --- | --- |
+| Restart mid-run (scenario S) | PASS. 33 decisions, 33 orders, 28 fills, 15 ledger entries and the balance all unchanged. The run is `interrupted`, the clock is disengaged, `active` and `engaged` are both false, and no (strategy, bar) pair was evaluated twice. A run started afterwards reports `phase=warmup` with 3 of 3 instants in warm-up and 0 in evaluation, so the engine inherited no window or cursor from the process that died |
+| Unknown outcome (`timeout`) | PASS. The order was FAILED with 0 fills before and REJECTED with 0 fills after. No fill was invented and it did not become FILLED — the platform did not resolve an uncertainty it had no evidence for, in either direction |
+| Lost execution (`lost_response`) | The venue held 28 executions against 27 local fills; after the restart exactly 1 was imported, none twice, and the balance reconciled at 503.86 |
+| Interrupted runs are discoverable | PASS. Three abandoned runs listed with a resume verdict each, naming the cursor, the total, and the fact that the cursor is persisted at most every two seconds so a resume may re-play a few instants the per-bar guard will produce nothing for |
+
 ### One test in this repository fails on purpose
 
 `TestConditionScenariosThroughTheRealPipeline/G_conflicting_strategy_signals`
