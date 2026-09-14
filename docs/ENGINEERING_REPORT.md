@@ -1301,7 +1301,7 @@ either, and says so.
 
 ## 30g. Defects the restart and determinism milestone found
 
-Ten, of which three would have made a suite report a pass while proving
+Eleven, of which four would have made a suite report a pass while proving
 nothing. Those are the worst kind, and they are listed first.
 
 **1. Four speed modes agreed on four empty accounts.** The research service was
@@ -1421,6 +1421,28 @@ decode to. That is the opposite of what a risk endpoint should do with silence.
 Fixed: they are pointers, so omitting one leaves it alone and turning a
 protection off has to be said out loud. Nothing in the terminal sends this
 request; it only reads the fields.
+
+**11. Two of this milestone's own scenarios asserted the wrong thing, and a
+third tested nothing.** Recorded because they are the same class of error as
+the first three, and because a test that passes for the wrong reason is the
+defect this whole exercise is built to catch:
+
+- Scenarios D and I each treated any accepted order under their condition as a
+  failure. A REDUCING order is exempt from both the event blackout and the
+  exposure ceilings by design, and must be: refusing a flatten during a
+  high-impact release, or because the ceiling is tight, traps the position in
+  exactly the conditions the control exists to avoid. Both now assert what the
+  controls actually guarantee — for D, that no decision whose `event_risk`
+  check FAILED was accepted and that nothing accepted had zero open positions
+  to reduce; for I, that every accepted order opposed the net exposure it saw,
+  so exposure never grew.
+- Scenario G's fixture was designed to overextend on every impulse, on the
+  theory that this would divide a trend reading from a mean-reversion one. It
+  split the seeded strategy set **zero** times in 180 instants, while the plain
+  trend used by D, I and N split it on 38 instants each. The disagreement comes
+  from strategies flipping at different points in one move, not from price
+  stretching away from its mean. The fixture that provokes it is the one that
+  looks least provocative.
 
 Two further findings are properties rather than defects, recorded because both
 cost time to diagnose:
