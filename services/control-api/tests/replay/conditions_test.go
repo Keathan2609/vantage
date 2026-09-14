@@ -254,7 +254,7 @@ func conditionScenarios() []scenario {
 	return []scenario{
 		{
 			letter: "D", name: "high impact economic event",
-			dataset: "event-window", steps: 120, arm: armHighImpactEvents,
+			dataset: "event-window", steps: 180, arm: armHighImpactEvents,
 			expect: func(t *testing.T, o observed) {
 				runID := latestRunID(t)
 				blacked := psqlInt(t, decisionsInRun(runID,
@@ -307,7 +307,7 @@ func conditionScenarios() []scenario {
 		},
 		{
 			letter: "G", name: "conflicting strategy signals",
-			dataset: "conflicting-signals", steps: 120,
+			dataset: "conflicting-signals", steps: 180,
 			expect: func(t *testing.T, o observed) {
 				runID := latestRunID(t)
 				if o.Decisions == 0 {
@@ -362,7 +362,7 @@ func conditionScenarios() []scenario {
 		},
 		{
 			letter: "I", name: "strong signal with no risk capacity",
-			dataset: "capacity-exhausted", steps: 120, arm: armNoRiskCapacity,
+			dataset: "capacity-exhausted", steps: 180, arm: armNoRiskCapacity,
 			expect: func(t *testing.T, o observed) {
 				// 1. The signal must have reached the risk engine. If nothing was
 				//    decided, the scenario measured a market that produced no
@@ -402,7 +402,7 @@ func conditionScenarios() []scenario {
 		},
 		{
 			letter: "N", name: "news alongside strategy agreement",
-			dataset: "news-agreement", steps: 120, arm: armNews,
+			dataset: "news-agreement", steps: 180, arm: armNews,
 			expect: func(t *testing.T, o observed) {
 				if o.Decisions == 0 {
 					t.Skipf("no decision was taken, so agreement was never "+

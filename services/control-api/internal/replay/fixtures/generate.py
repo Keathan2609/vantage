@@ -349,21 +349,37 @@ def conflicting_step(i, price):
     return price * Decimal("1.0030")
 
 
+# 180 instants, not 120, and the reason is measured rather than chosen.
+#
+# The first 60 are warm-up and produce no executable intent. Of the remainder,
+# the seeded strategy set produces NOTHING actionable until roughly 120 bars of
+# history exist: a 120-bar version of this exact trend yielded 288 no_trade
+# signals and ONE sell, while the 140-bar trend-clean fixture yields 46
+# decisions. The signal region begins where the shorter dataset ends.
+#
+# So a condition scenario on a 120-bar market tests the condition against a
+# market that never traded -- which passes, or skips, for entirely the wrong
+# reason. 180 leaves about 60 instants inside the signal region.
+CONDITION_INSTANTS = 180
+
 emit("conflicting_signals.csv",
-     walk(GOLD, 120, P0, conflicting_step, wick=Decimal("0.0009"),
+     walk(GOLD, CONDITION_INSTANTS, P0, conflicting_step, wick=Decimal("0.0009"),
           start=week(18)))
 
 # --- D. high-impact economic event -----------------------------------------
-emit("event_window.csv", walk(GOLD, 120, P0, trend_step(Decimal("0.002")),
-                              start=week(20)))
+emit("event_window.csv",
+     walk(GOLD, CONDITION_INSTANTS, P0, trend_step(Decimal("0.002")),
+          start=week(20)))
 
 # --- I. strong signal, no risk capacity ------------------------------------
-emit("capacity_exhausted.csv", walk(GOLD, 120, P0, trend_step(Decimal("0.002")),
-                                    start=week(22)))
+emit("capacity_exhausted.csv",
+     walk(GOLD, CONDITION_INSTANTS, P0, trend_step(Decimal("0.002")),
+          start=week(22)))
 
 # --- N. news alongside strategy agreement ----------------------------------
-emit("news_agreement.csv", walk(GOLD, 120, P0, trend_step(Decimal("0.002")),
-                                start=week(24)))
+emit("news_agreement.csv",
+     walk(GOLD, CONDITION_INSTANTS, P0, trend_step(Decimal("0.002")),
+          start=week(24)))
 
 # --- Partial-fill testability ----------------------------------------------
 # A dataset on the SYNTHETIC instrument, which exists only so a partial fill is
