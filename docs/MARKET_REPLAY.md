@@ -326,6 +326,11 @@ Identical in every section — 46 decisions, 46 orders, 42 fills, 21 ledger
 entries, 6 positions, 4 attribution rows — while wall time varies by a factor
 of six. Speed alters pacing and nothing else.
 
+The hex is tied to the commit that measured it. Decisions have since started
+recording the bar they were taken on, which changes the canonical form and so
+changes every digest; what carries forward is the PROPERTY — one digest across
+all four modes — not the value.
+
 **1x and 10x take the same wall time, and that is the pacing cap rather than a
 broken speed.** The per-instant sleep is capped at two seconds, and on 1h bars
 every finite speed exceeds the cap (3600s/1, 3600s/10 and 3600s/100 all do), so

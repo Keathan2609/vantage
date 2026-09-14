@@ -1573,7 +1573,10 @@ been executed and moved into the tally — and what remains is what remains.
   6m07s. 1x and 10x take the same wall time because the per-instant pacing
   sleep is capped at two seconds and every finite speed exceeds the cap on 1h
   bars; that is the cap working, and it means the speed names overstate what
-  they control on long timeframes.
+  they control on long timeframes. The hex is tied to the commit that measured
+  it — decisions have since started recording their bar, which changes the
+  canonical form — so what carries forward is the property, one digest across
+  all four modes, not the value.
 - **Walk-forward, sensitivity and Monte Carlo are library-only.**
   `vantage_quant.backtest` implements `walk_forward`, `sensitivity`,
   `cost_sensitivity` and `monte_carlo_trade_order`, and they have Python tests
