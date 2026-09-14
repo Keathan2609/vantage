@@ -32,7 +32,8 @@ const (
 
 // Terminal reports whether no further stepping is possible.
 func (s State) Terminal() bool {
-	return s == StateStopped || s == StateDone || s == StateFailed
+	return s == StateStopped || s == StateDone || s == StateFailed ||
+		s == StateInterrupted
 }
 
 // Stepper is the slice of the scheduler the engine drives.
@@ -111,6 +112,9 @@ type Engine struct {
 	record Recorder
 	// gatherInputs collects the declared inputs at Start.
 	gatherInputs InputGatherer
+	// markInterrupted closes the books on runs whose process died. See
+	// restart.go for the policy.
+	markInterrupted InterruptedRunSink
 	// lastPersist throttles the progress writes so a long run does not spend
 	// its time in the database. State CHANGES are never throttled.
 	lastPersist time.Time

@@ -56,6 +56,31 @@ type harness struct {
 	base string
 	http *http.Client
 	csrf string
+	// password is kept so the session can be re-established after a process
+	// restart, which invalidates it along with everything else in memory.
+	password string
+}
+
+// signIn establishes an admin session.
+//
+// Separate from newHarness so a restart test can call it again: the session
+// dies with the process, and every later request would otherwise fail with a
+// 401 that says nothing about the restart being tested.
+func (h *harness) signIn() {
+	h.t.Helper()
+	jar, _ := cookiejar.New(nil)
+	h.http.Jar = jar
+	h.csrf = ""
+
+	var login struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if code := h.do("POST", "/api/v1/auth/login", map[string]string{
+		"email": "admin@vantage.local", "password": h.password,
+	}, &login); code != http.StatusOK {
+		h.t.Fatalf("admin sign-in returned %d", code)
+	}
+	h.csrf = login.CSRFToken
 }
 
 func requireReplayStack(t *testing.T) string {
@@ -92,15 +117,8 @@ func newHarness(t *testing.T) *harness {
 		Jar: jar, Timeout: 10 * time.Minute,
 	}}
 
-	var login struct {
-		CSRFToken string `json:"csrf_token"`
-	}
-	if code := h.do("POST", "/api/v1/auth/login", map[string]string{
-		"email": "admin@vantage.local", "password": password,
-	}, &login); code != http.StatusOK {
-		t.Fatalf("admin sign-in returned %d", code)
-	}
-	h.csrf = login.CSRFToken
+	h.password = password
+	h.signIn()
 
 	// Replay is admin-only and the routes exist only in a replay process.
 	if code := h.do("GET", "/api/v1/replay", nil, nil); code == http.StatusNotFound {

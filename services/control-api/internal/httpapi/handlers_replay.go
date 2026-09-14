@@ -211,6 +211,67 @@ func (s *Server) handleReplayRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, map[string]any{"run": replayRecord(run)})
 }
 
+// resumableFrom maps a stored run onto the engine's view of it.
+//
+// The CURSOR comes from the record, never from the client. A client that could
+// choose where a replay resumes could make it skip instants, and the resulting
+// gap would be invisible in the result.
+func resumableFrom(stored store.ReplayRun) replay.ResumableRun {
+	return replay.ResumableRun{
+		ID: stored.ID.String(), DatasetID: stored.DatasetID,
+		DatasetHash: stored.DatasetHash, CodeSHA: stored.CodeSHA,
+		Cursor: stored.Steps, State: stored.State, StartedAt: stored.StartedAt,
+	}
+}
+
+// handleReplayInterrupted lists runs whose process died, with a verdict on
+// whether each can safely be resumed.
+//
+// Admin-only like the other replay controls, and available in every process:
+// an interrupted run is a fact about the installation, and the engine being
+// absent does not unmake it.
+func (s *Server) handleReplayInterrupted(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.store.Replay.InterruptedRuns(r.Context(), 20)
+	if err != nil {
+		writeStoreError(w, r, err, "Interrupted runs not found.")
+		return
+	}
+	type view struct {
+		ID          string `json:"id"`
+		DatasetID   string `json:"dataset_id"`
+		DatasetHash string `json:"dataset_hash"`
+		Cursor      int    `json:"cursor"`
+		StartedAt   string `json:"started_at"`
+		Resumable   bool   `json:"resumable"`
+		Reason      string `json:"reason"`
+	}
+	out := make([]view, 0, len(runs))
+	for _, run := range runs {
+		verdict := replay.ResumableRun{
+			ID: run.ID.String(), DatasetID: run.DatasetID,
+			DatasetHash: run.DatasetHash, Cursor: run.Steps, State: run.State,
+		}
+		if s.replay != nil {
+			verdict = s.replay.VerifyResumable(verdict)
+		} else {
+			verdict.Reason = "this process has no replay engine, so nothing can " +
+				"be resumed here"
+		}
+		out = append(out, view{
+			ID: run.ID.String(), DatasetID: run.DatasetID,
+			DatasetHash: run.DatasetHash, Cursor: run.Steps,
+			StartedAt: run.StartedAt.UTC().Format(time.RFC3339),
+			Resumable: verdict.Resumable, Reason: verdict.Reason,
+		})
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"interrupted": out,
+		"policy": "a replay stops at a process restart and requires an explicit " +
+			"operator resume from a verified durable cursor",
+		"simulated": true, "label": replayLabel,
+	})
+}
+
 // handleReplayDatasets lists the allowlisted datasets.
 func (s *Server) handleReplayDatasets(w http.ResponseWriter, r *http.Request) {
 	if s.replay == nil {
@@ -280,6 +341,10 @@ type replayControlRequest struct {
 	// Reason is required for START and STOP, like every other control that
 	// changes what the platform does on its own.
 	Reason string `json:"reason"`
+	// RunID names the interrupted run to resume. Never a cursor: a client that
+	// could choose where a replay resumes could make it skip instants, and the
+	// cursor is the platform's own durable record.
+	RunID string `json:"run_id"`
 }
 
 const maxReplayStepsPerRequest = 2000
@@ -349,6 +414,42 @@ func (s *Server) handleReplayControl(w http.ResponseWriter, r *http.Request) {
 		run, err = s.replay.Stop()
 	case "speed":
 		run, err = s.replay.SetSpeed(req.Speed)
+	case "resume_interrupted":
+		// The deliberate act the restart policy requires.
+		//
+		// Separate from "resume", which releases a run paused in THIS process.
+		// This one continues a run whose process died, and only after the
+		// dataset hash has been verified against the registry -- a run resumed
+		// against an edited fixture would attribute a result to data that no
+		// longer exists.
+		if strings.TrimSpace(req.RunID) == "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "invalid_request",
+				"run_id is required. List resumable runs at GET /api/v1/replay/interrupted.")
+			return
+		}
+		runID, perr := uuid.Parse(strings.TrimSpace(req.RunID))
+		if perr != nil {
+			writeError(w, r, http.StatusUnprocessableEntity, "invalid_request",
+				"run_id must be a uuid.")
+			return
+		}
+		if len(strings.TrimSpace(req.Reason)) < 10 {
+			writeError(w, r, http.StatusUnprocessableEntity, "invalid_request",
+				"A reason of at least 10 characters is required: resuming a replay "+
+					"puts this process back on dataset time.")
+			return
+		}
+		stored, serr := s.store.Replay.Run(r.Context(), runID)
+		if serr != nil {
+			writeStoreError(w, r, serr, "No replay run with that id was recorded.")
+			return
+		}
+		run, err = s.replay.ResumeInterrupted(resumableFrom(stored), replay.Options{
+			Seed: stored.Seed, Speed: req.Speed,
+			CodeSHA: s.commit, ConfigHash: s.configHash,
+			AllowWarmupTrading: stored.AllowWarmupTrading,
+		})
+
 	case "reconcile":
 		if rerr := s.replay.Reconcile(r.Context()); rerr != nil {
 			s.writeReplayError(w, r, rerr)
@@ -357,8 +458,8 @@ func (s *Server) handleReplayControl(w http.ResponseWriter, r *http.Request) {
 		run, _ = s.replay.Status()
 	default:
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request",
-			"action must be one of start, step, advance, pause, resume, reset, "+
-				"stop, speed, reconcile.")
+			"action must be one of start, step, advance, pause, resume, "+
+				"resume_interrupted, reset, stop, speed, reconcile.")
 		return
 	}
 	if err != nil {

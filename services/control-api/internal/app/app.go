@@ -594,8 +594,27 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 			})
 		})
 
+		// Close the books on any run whose process died.
+		//
+		// Nothing is resumed: a replay puts the WHOLE PROCESS on dataset time,
+		// and a control plane that came back up and silently moved its own
+		// clock to 2027 because a row said a run was in progress would be
+		// deciding that for the operator, at the moment nobody is watching.
+		// See internal/replay/restart.go for the policy.
+		a.Replay.SetInterruptedRunSink(func(ictx context.Context, reason string) (int64, error) {
+			return a.Store.Replay.MarkInterruptedRuns(ictx, reason)
+		})
+		if aerr := a.Replay.AdoptInterruptedRuns(ctx); aerr != nil {
+			// Not fatal. A process that refused to boot because it could not
+			// tidy a previous run's record would turn a bookkeeping problem
+			// into an outage.
+			log.Warn("could not adopt interrupted replay runs at startup", "error", aerr)
+		}
+
 		log.Info("market replay is available",
-			"datasets", len(registry.IDs()))
+			"datasets", len(registry.IDs()),
+			"restart_policy", "a replay stops at a process restart and requires "+
+				"an explicit operator resume from a verified durable cursor")
 	}
 
 	a.Server, err = httpapi.NewServer(httpapi.Deps{

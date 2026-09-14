@@ -198,6 +198,49 @@ func (s *ReplayStore) Runs(ctx context.Context, datasetID string, limit int) ([]
         LIMIT $2`, datasetID, limit)
 }
 
+// MarkInterruptedRuns closes the books on runs whose process died.
+//
+// Called once at boot. A row that claims to be running while nothing is
+// running is worse than no row: it is a record that contradicts reality, and
+// the next person to read it will believe it.
+//
+// The reason is recorded in `failure` rather than in a log, because a log
+// rotates and this fact belongs to the run.
+func (s *ReplayStore) MarkInterruptedRuns(ctx context.Context, reason string) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE replay_runs
+		SET state = 'interrupted',
+		    failure = CASE WHEN failure = '' THEN $1 ELSE failure END,
+		    finished_at = COALESCE(finished_at, now())
+		WHERE state IN ('running', 'paused', 'idle')`, reason)
+	if err != nil {
+		return 0, mapError(err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// InterruptedRuns lists runs that stopped without finishing, newest first.
+//
+// Bounded, and ordered so the most recent interruption -- the one an operator
+// is most likely to be asking about -- is first.
+func (s *ReplayStore) InterruptedRuns(ctx context.Context, limit int) ([]ReplayRun, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	return s.query(ctx, `
+        SELECT id, dataset_id, dataset_hash, code_sha, config_hash, seed,
+               from_time, to_time, started_at, finished_at,
+               state, steps, bars_processed, step_errors, failure, warnings,
+               warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
+               starting_balance, starting_currency, starting_positions,
+               risk_config_hash, authority_config_hash, correlation_policy,
+               regime_policy, strategy_versions, model_versions
+        FROM replay_runs
+        WHERE state = 'interrupted'
+        ORDER BY started_at DESC
+        LIMIT $1`, limit)
+}
+
 // jsonOrEmptyArray keeps the jsonb columns valid. A nil slice would be a NULL
 // into a NOT NULL column, and `{}` would fail to unmarshal into a list.
 func jsonOrEmptyArray(b []byte) []byte {
