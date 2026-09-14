@@ -32,13 +32,12 @@ import (
 // bracket the window between them.
 
 // crashWindowSetup drives a run to the point where orders are being produced.
-func crashWindowSetup(t *testing.T, h *harness, reason string) bool {
+func crashWindowSetup(t *testing.T, h *harness, reason string) {
 	t.Helper()
 	h.start("trend-clean", reason)
 	// Past the warm-up and into the productive part, so the fault has
 	// order-producing instants left to land on.
 	h.step(95)
-	return true
 }
 
 func TestAnUnknownOutcomeStaysUnknownAcrossARestart(t *testing.T) {
