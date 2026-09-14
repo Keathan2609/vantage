@@ -64,6 +64,18 @@ type Counters struct {
 	// warm-up. Counted in instants, like Steps, because a multi-instrument
 	// dataset has several rows per instant and the phase is a property of the
 	// instant.
+	//
+	// WarmupInstants is ONE FEWER than the dataset's declared WarmupInstants,
+	// and that is correct rather than an off-by-one. The declaration means
+	// "evaluation begins once N bars of history are complete", and the clock
+	// sits at each bar's CLOSE -- so at instant N-1 there are exactly N
+	// complete bars and evaluation begins there. Instants 0..N-2 produce no
+	// executable intent; that count is what this reports. A reader who expects
+	// it to equal the declaration is reading it as "instants played before the
+	// boundary", which is the same number minus one.
+	//
+	// Measured live: a 60-instant declaration reports warmup_instants 59, and
+	// 59 + evaluation_instants always equals Steps.
 	WarmupInstants     int `json:"warmup_instants"`
 	EvaluationInstants int `json:"evaluation_instants"`
 }

@@ -315,6 +315,41 @@ reason the mock venue exists. It stays awkward, and awkward the same way twice.
    run starts.
 3. **Autopilot on.** Also reported by preflight.
 
+## Warm-up is observable
+
+`GET /api/v1/replay` reports which phase a run is in and splits its instants by
+that phase:
+
+```
+state                running
+steps                96
+phase                evaluation
+warmup_instants      59
+evaluation_instants  37
+allow_warmup_trading false
+warmup_start         2027-03-02T04:00:00Z
+evaluation_start     2027-03-04T18:00:00Z
+```
+
+Without this, a run that produced nothing and a run that never left warm-up
+look identical from the outside, and they need opposite responses. The
+transitions are also written to the structured log as `WARMUP_STARTED`,
+`WARMUP_COMPLETED` and `EVALUATION_STARTED` — in the log rather than in
+`strategy_runs`, because a phase change is a fact about the run and writing it
+as a strategy run would corrupt the per-bar watermark that decides whether a
+bar has been evaluated.
+
+**`warmup_instants` is one fewer than the declared warm-up, by construction.**
+The declaration means "evaluation begins once N bars of history are complete",
+and the clock sits at each bar's CLOSE, so at instant N-1 there are exactly N
+complete bars and evaluation begins there. Instants 0 to N-2 produce no
+executable intent. `warmup_instants + evaluation_instants` always equals
+`steps`.
+
+This reporting immediately paid for itself: every scenario in the end-to-end
+matrix stepped 60 instants, which the warm-up model had silently turned into an
+evaluation window of **zero**. Eight of the nine were asserting on nothing.
+
 ## What a restart does to each piece of state
 
 **A replay STOPS at a process restart and does not resume itself.** Engaging a

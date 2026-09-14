@@ -1319,20 +1319,39 @@ been executed and moved into the tally — and what remains is what remains.
   has its own. But a handler needs a database, a broker and a keyring to
   construct, so the handlers are exercised by the smoke and Playwright suites.
   Every package named in the previous revision's untested list now has tests.
-- **NINE scenarios are driven end to end**, with business invariants rather
-  than a PASS: A clean trend, B range, C volatility shock, E spread spike, H
-  drawdown, K trend reversal, L false breakout, M correlated opportunities and
-  T day boundary. Measured: 9 of 9 pass, 0 step errors, 683 orders, 39 fills,
-  23 ledger entries, 2795 strategy runs, attribution reconciled at 23 of 23
-  entries in six dimensions.
+- **The scenario matrix A-T is now driven end to end**, with business
+  invariants rather than a PASS. The market shapes (A clean trend, B range, C
+  volatility shock, E spread spike, H drawdown, K trend reversal, L false
+  breakout, M correlated opportunities, T day boundary) come from committed
+  fixtures; the failure and recovery cases (F outage, J kill switch, O stale
+  quote after reconnect, P partial fill, Q lost broker response, R duplicate
+  tick, S restart) drive the mock venue's fault modes through the real
+  pipeline; and the CONDITION cases (D high-impact release, G conflicting
+  strategies, I strong signal with no risk capacity, N news alongside
+  agreement) apply a condition to an ordinary market.
 
-  Scenarios D (high-impact economic event), F (market-data outage), G
-  (conflicting strategies), I (strong ML signal with no risk capacity), J (kill
-  switch during Autopilot) and N-S (news + agreement, stale-provider recovery,
-  partial fill, lost broker response, duplicate scheduler tick, Autopilot
-  restart) are NOT yet driven end to end. Several need fault injection wired
-  into the harness rather than a new dataset; the partial-fill and
-  lost-response cases need the mock venue's fault modes armed mid-run.
+  **Every scenario previously stepped 60 instants, which the warm-up model
+  silently turned into an evaluation window of ZERO.** Warm-up is 60 instants
+  and produces no executable intent by design, so eight of the nine market
+  scenarios were asserting on nothing. They now step their dataset to the end.
+  This was introduced by the isolation work and found by this milestone.
+
+- **The consensus policy is not on the execution path.**
+  `orchestrator.Decide` -- which this repository's own map describes as "the
+  multi-strategy aggregation policy: a PURE function, versioned, vetoes before
+  votes, and never a majority vote" -- is implemented, unit-tested by the ten
+  decision-layer scenarios, and **has no production caller**. The scheduler
+  calls `EvaluateAndRoute` once per (strategy, instrument) and each call routes
+  its own signal into the OMS independently, so two strategies disagreeing at
+  one instant are not aggregated at all. Scenario G therefore asserts the
+  invariant that holds under any policy -- the platform must not end one
+  instant holding orders on both sides of one instrument -- rather than
+  assuming a policy that does not run.
+
+- **News is stored and displayed but is not an input to any decision.**
+  Nothing in the orchestrator, the OMS or the risk engine reads `news_items`.
+  Scenario N asserts consistency rather than influence, and says so in its own
+  failure text.
 - **A replay run's code identity is only as good as the build.** The record
   is now persisted (`replay_runs`, migration 0013) and carries the dataset
   hash, code SHA, config hash and seed. But a `go run` binary has no commit
@@ -1519,7 +1538,12 @@ trust needs the difference.
 | 53 | Containers | COMPLETE | Three images, non-root, no HIGH or CRITICAL misconfigurations |
 | 53a | Walk-forward, sensitivity, Monte Carlo | **PARTIAL** | Implemented in `vantage_quant.backtest` with Python tests, but exposed by no HTTP route — the control plane cannot run one and no result is stored or displayed |
 | 53b | ML validation depth | **PARTIAL** | Precision, recall, ROC-AUC, Brier and a majority-class baseline, with a warning when the model does not beat it. No F1, PR-AUC, confusion matrix or calibration curve, so a 0.80 output is a score rather than a demonstrated probability |
-| 53c | P&L attribution | **PARTIAL** | By instrument only. Strategy, model, session, regime and event context are not attributed, so "which strategy made the money?" is unanswerable from the platform |
+| 53c | P&L attribution | PARTIAL | Eight dimensions — instrument, strategy, strategy version, source, session, event context, replay run and regime — folded from the LEDGER so each unit of money is counted exactly once, with an explicit UNATTRIBUTED bucket rather than a silent drop. **Model is still not a dimension**, so "which model made the money?" remains unanswerable |
+| 53d | Replay determinism | COMPLETE | A canonical result digest over seven sections, ordered by business keys only. Three runs of one dataset from a `pg_dump`/`pg_restore` snapshot produce one digest; the suite SKIPS rather than passes when a dataset produced no decisions of its own. Found and fixed the mock venue's unreseeded jitter |
+| 53e | Replay speed invariance | COMPLETE | STEP, 1x, 10x and MAX over the same dataset produce one digest. Paced modes run through the background `advance` control, because the pacing sleep happens inside a step request and no batch size stays under the 30s handler deadline |
+| 53f | Restart safety | COMPLETE | A real process kill, not an in-process reset. A replay STOPS and requires an explicit operator resume from a verified durable cursor; nothing financial is created or destroyed; no bar is evaluated twice; a half-filled order is not re-booked. Crash-TIMING variants (between order write and venue call, and so on) are **not** covered — that needs a fault mode that blocks at a named point |
+| 53g | Partial-fill coverage | COMPLETE | Was impossible: every order the R500 account produces is 0.01 lots, which is XAUUSD.m's minimum AND its step, so 40% of one order is not a representable quantity. A development-only synthetic instrument with a finer step makes 0.10 split into 0.04 and 0.06, within the authority's existing ceiling. Nothing under test was relaxed |
+| 53h | Multi-strategy consensus | **IMPLEMENTED BUT NOT WIRED** | `orchestrator.Decide` is a pure, versioned, unit-tested aggregation policy with **no production caller**. The scheduler routes each strategy's signal independently, so disagreement is not aggregated |
 | 54 | CI workflows | PARTIAL — **cannot be verified locally** | `actionlint` passes with 0 findings and every command the workflows run has been executed by hand. GitHub Actions itself has never run: this repository has no remote. Nothing here may be read as "CI passed" |
 | 55 | Regulatory and live-trading readiness | **BLOCKED** | Deliberately. No FSP licence, no client-money segregation, no live venue agreement, no independent audit. Recorded in `COMPLIANCE_READINESS.md` and `REGULATORY_BOUNDARY.md` |
 
