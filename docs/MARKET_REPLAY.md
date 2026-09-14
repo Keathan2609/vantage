@@ -481,8 +481,10 @@ bracket the window between them — but it is a gap.
   unit-tested and **has no production caller**. The scheduler calls
   `EvaluateAndRoute` once per (strategy, instrument) and each call routes its
   own signal independently, so two strategies disagreeing at one instant are
-  not aggregated at all. Scenario G measures what actually happens rather than
-  assuming the policy runs.
+  not aggregated at all. **Measured:** on one run of the condition matrix the
+  platform filled both a buy and a sell on XAUUSD.m at the same bar, at 19
+  instants on one dataset and 31 on another. Scenario G measures what actually
+  happens rather than assuming the policy runs.
 - **The model is still not attributed.** A decision now records the market
   regime, the regime policy version and the evidence behind it, along with the
   replay run; the model that informed it is still not recorded, so P&L cannot

@@ -1347,15 +1347,32 @@ therefore untested. Fixed with a development-only synthetic instrument whose
 finer step makes 0.10 split into 0.04 and 0.06, inside the authority's existing
 0.10-lot ceiling. Nothing under test was relaxed.
 
-**6. The consensus policy has no production caller.** `orchestrator.Decide` is
-implemented, versioned, documented as the multi-strategy aggregation and
-unit-tested by ten decision-layer scenarios. Nothing calls it. The scheduler
-calls `EvaluateAndRoute` once per (strategy, instrument) and each call routes
-its own signal into the OMS independently, so two strategies disagreeing at one
-instant are not aggregated. Found while writing scenario G, which now asserts
-the invariant that holds under any policy rather than one that does not run.
-Not fixed: wiring it in is a change to the decision path and needs asking for
-in those words.
+**6. The consensus policy has no production caller, and the platform
+demonstrably trades both sides of one instrument at one instant.**
+`orchestrator.Decide` is implemented, versioned, documented as the
+multi-strategy aggregation and unit-tested by ten decision-layer scenarios.
+Nothing calls it. The scheduler calls `EvaluateAndRoute` once per (strategy,
+instrument) and each call routes its own signal into the OMS independently.
+
+This is not only structural. **Measured on one run of the condition matrix:**
+the strategy set produced opposing actions on the same bar at 38 instants per
+dataset, and on two of those datasets the platform FILLED both a buy and a sell
+on XAUUSD.m at the same bar — 19 instants on one, 31 on the other. Sample:
+`2027-07-27 08:00`, `buy:FILLED, sell:FILLED`.
+
+In this fixture that happened to net +7.34 ZAR across 32 ledger entries,
+because commission on the seeded instrument is zero and the trend was rising.
+That is luck, not design: on any venue charging commission, opening and closing
+the same instrument at one instant is a guaranteed cost, and it is precisely
+what `consensus.go`'s own comment says must not happen — "netting opposing
+signals into whichever side has more weight is how a system ends up trading its
+own indecision". Here it does not even net; it takes both sides.
+
+Found by scenario G, which asserts the invariant that holds under any
+aggregation policy rather than one that does not run, and whose failure message
+names this cause so the next reader does not have to rediscover it. NOT fixed:
+wiring `Decide` in is a change to the decision path and needs asking for in
+those words.
 
 **7. Four of the trading authority's five numeric ceilings do not bind.** A
 trading authority is described throughout this repository as a technical
