@@ -187,11 +187,14 @@ func armNoRiskCapacity(h *harness) {
 	// like its cause.
 	t.Cleanup(func() {
 		trader.t = t
+		// Only the three fields this scenario changed. The request decoder
+		// rejects unknown fields, so there is no "reason" key here -- and
+		// every field left out now keeps its stored value, which is the whole
+		// point of the pointer fields on the request.
 		restore := map[string]any{
 			"max_gross_exposure":          before.Limits.MaxGrossExposure,
 			"max_net_exposure":            before.Limits.MaxNetExposure,
 			"max_per_instrument_exposure": before.Limits.MaxPerInstrumentExposre,
-			"reason":                      "restoring the risk limits scenario I tightened",
 		}
 		if code := trader.do("PUT", "/api/v1/risk/limits/"+accountID, restore, nil); code != 200 {
 			t.Errorf("RESTORING THE RISK LIMITS FAILED with %d. Every later suite "+
@@ -200,9 +203,14 @@ func armNoRiskCapacity(h *harness) {
 		}
 	})
 
-	// Only the three fields change: the handler falls back to the stored value
-	// for every field left empty, so a partial update cannot silently reset a
-	// limit this scenario never meant to touch.
+	// Only the three fields change.
+	//
+	// That is safe only because the request's booleans and blackout minutes
+	// are POINTERS: as plain values they decoded to false and zero, and this
+	// very call silently turned off require_stop_loss and
+	// block_on_high_impact_events and zeroed both blackout windows -- which
+	// would have quietly destroyed scenario D's premise had D run after this.
+	// Found by this scenario; fixed in handlers_control.go.
 	//
 	// Small but not zero. Zero would read as "not configured", and a positive
 	// ceiling no order can satisfy tests the comparison rather than a special
@@ -211,7 +219,6 @@ func armNoRiskCapacity(h *harness) {
 		"max_gross_exposure":          "0.01",
 		"max_net_exposure":            "0.01",
 		"max_per_instrument_exposure": "0.01",
-		"reason":                      "scenario I: removing the account's capacity to take risk",
 	}
 	if code := trader.do("PUT", "/api/v1/risk/limits/"+accountID, tightened, nil); code != 200 {
 		t.Fatalf("tightening the risk limits returned %d", code)
@@ -270,27 +277,64 @@ func conditionScenarios() []scenario {
 						"were taken clear of one\n%s", clear, o.describe())
 				}
 
-				// 2. THE INVARIANT. A high-impact release inside its window must
-				//    stop an automated order. Not reduce it -- stop it.
-				traded := psqlInt(t, decisionsInRun(runID,
-					`d.event_context->>'blackout' = 'true' AND d.outcome = 'accepted'`))
-				if traded > 0 {
-					t.Errorf("%d of %d decisions taken inside a high-impact blackout "+
-						"were ACCEPTED. A release inside its window is a refusal, "+
-						"not a discount.\n%s", traded, blacked, o.describe())
+				// 2. THE INVARIANT, and it has an exemption that is NOT a
+				//    loophole.
+				//
+				// A release inside its window must stop an OPENING order. It
+				// must not stop a REDUCING one: refusing a flatten during a
+				// high-impact release traps the position in exactly the
+				// conditions the blackout exists to avoid, and "a check that
+				// limits exposure or loss must never refuse a reducing order"
+				// is the rule three separate defects have already taught this
+				// repository.
+				//
+				// Measured on this dataset: 8 decisions were accepted inside a
+				// blackout, every one of them against an open position, and
+				// the engine recorded event_risk as PASSED on each -- the
+				// exemption firing, not the check failing to bind.
+				//
+				// So the assertion is made twice over. First: no decision
+				// whose event_risk check FAILED may be accepted. A failing
+				// check that does not refuse is decoration.
+				failedAndTraded := psqlInt(t, decisionsInRun(runID,
+					`d.outcome = 'accepted' AND EXISTS (
+						SELECT 1 FROM jsonb_array_elements(d.risk_state->'checks') c
+						WHERE c->>'Name' = 'event_risk' AND c->>'Passed' = 'false')`))
+				if failedAndTraded > 0 {
+					t.Errorf("%d decisions were ACCEPTED after the event_risk check "+
+						"failed on them\n%s", failedAndTraded, o.describe())
 				}
 
-				// 3. And the refusal must name the blackout, so an operator
-				//    reading the record learns why rather than only that.
+				// Second, and independently of the engine's own verdict:
+				// anything accepted inside a blackout must have had a position
+				// to REDUCE. With no open position there is nothing to reduce,
+				// the exemption cannot apply, and an acceptance is a defect.
+				nothingToReduce := psqlInt(t, decisionsInRun(runID,
+					`d.event_context->>'blackout' = 'true' AND d.outcome = 'accepted'
+					   AND coalesce((d.portfolio_context->>'open_positions')::int, 0) = 0`))
+				if nothingToReduce > 0 {
+					t.Errorf("%d decisions were ACCEPTED inside a high-impact "+
+						"blackout with NO open position, so none of them can be a "+
+						"reducing order. A release inside its window is a refusal, "+
+						"not a discount.\n%s", nothingToReduce, o.describe())
+				}
+
+				// 3. And the check must have BOUND at least once, or the
+				//    exemption swallowed everything and nothing was refused.
 				named := psqlInt(t, decisionsInRun(runID,
 					`d.event_context->>'blackout' = 'true'
 					   AND d.outcome_code = 'event_risk_blackout'`))
 				if named == 0 {
 					t.Errorf("%d decisions were taken inside a blackout and none "+
-						"recorded outcome_code 'event_risk_blackout': the refusal "+
-						"happened for some other reason, or is unattributable\n%s",
-						blacked, o.describe())
+						"recorded outcome_code 'event_risk_blackout': either the "+
+						"blackout refused nothing at all, or the refusal is "+
+						"unattributable\n%s", blacked, o.describe())
 				}
+				exempt := psqlInt(t, decisionsInRun(runID,
+					`d.event_context->>'blackout' = 'true' AND d.outcome = 'accepted'`))
+				t.Logf("scenario D: %d blacked-out decisions, %d refused naming the "+
+					"release, %d accepted as reducing orders against an open position",
+					blacked, named, exempt)
 
 				// 4. The scenario is only evidence if the platform was capable of
 				//    trading this market at all. Without a clear-window decision,
@@ -301,8 +345,8 @@ func conditionScenarios() []scenario {
 						"platform refusing everything would look identical\n%s",
 						o.describe())
 				}
-				t.Logf("scenario D: %d decisions inside a blackout (%d named it), "+
-					"%d clear of one", blacked, named, clear)
+				t.Logf("scenario D: %d decisions inside a blackout, %d clear of one",
+					blacked, clear)
 			},
 		},
 		{

@@ -291,6 +291,13 @@ wall-clock timestamp. Three runs of one dataset from a byte-identical database
 (`pg_dump`/`pg_restore` between them) produce the same digest, and the
 per-section components name WHICH part diverged when they do not.
 
+**A digest is only comparable within one code version.** It is a fingerprint of
+what this build produces, so a change to what is recorded — a column added to
+the canonical form, or a field that started being populated — moves every
+digest. That is why a run record carries `code_sha`, and why the digests quoted
+in this document are tied to the commit that measured them rather than being
+golden values to assert against.
+
 A digest proves REPRODUCIBILITY and nothing else. It says a result can be
 re-derived; it says nothing about whether the result is good, and two runs of a
 losing strategy agree on the same digest.

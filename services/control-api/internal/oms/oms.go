@@ -216,6 +216,19 @@ type PlaceOrderRequest struct {
 	// it with RISK_OFF or EVENT_RISK, because those are conditions the
 	// research plane cannot see.
 	ReportedRegime domain.Regime
+	// BarTime is the completed bar this decision was taken on.
+	//
+	// Nil for a manual order, which has no bar behind it. For a strategy
+	// order it is the SAME bar the signal records, so a decision and the
+	// signal that produced it join on it.
+	//
+	// It was missing entirely: decision_snapshots has had a bar_time column
+	// since the schema was written and nothing ever set it -- 168 snapshots,
+	// 0 with a value, while all 1488 signals carried one. So "which bar did
+	// this trade come from" was unanswerable from the decision, and two
+	// decisions differing only in their bar were indistinguishable in the
+	// result digest.
+	BarTime *time.Time
 	// BarsAvailable is how much history the classification rested on. Below
 	// domain.MinBarsForRegime the verdict is UNKNOWN rather than a guess, and
 	// the OMS cannot count bars itself without a query per decision.
@@ -1538,6 +1551,7 @@ func (s *Service) buildDecisionSnapshot(req PlaceOrderRequest, account domain.Ac
 		StrategyID:      req.StrategyID,
 		StrategyVersion: req.StrategyVersion,
 		InstrumentID:    req.InstrumentID,
+		BarTime:         req.BarTime,
 		Quote: marshal(map[string]any{
 			"bid": g.quote.Bid.String(), "ask": g.quote.Ask.String(),
 			"source_time": g.quote.SourceTime, "ingested_at": g.quote.IngestedAt,

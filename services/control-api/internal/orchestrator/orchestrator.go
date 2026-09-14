@@ -438,6 +438,10 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		// EVENT_RISK from its own evidence and every ordinary decision is
 		// UNKNOWN.
 		ReportedRegime: signal.MarketRegime(),
+		// The bar this decision was taken on, so the decision and the signal
+		// that produced it join on it. Without this the decision snapshot's
+		// bar_time column stayed NULL for every row ever written.
+		BarTime: &barTime,
 		// How much history that classification rested on. The OMS refuses to
 		// characterise a market below domain.MinBarsForRegime and cannot count
 		// bars itself without a query per decision.

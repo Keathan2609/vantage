@@ -123,10 +123,22 @@ func (s *Server) handleGetRiskLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateRiskLimitsRequest struct {
-	MaxOrderQuantity         string `json:"max_order_quantity"`
-	MaxOrderNotional         string `json:"max_order_notional"`
-	MaxRiskPerTradeFraction  string `json:"max_risk_per_trade_fraction"`
-	RequireStopLoss          bool   `json:"require_stop_loss"`
+	MaxOrderQuantity        string `json:"max_order_quantity"`
+	MaxOrderNotional        string `json:"max_order_notional"`
+	MaxRiskPerTradeFraction string `json:"max_risk_per_trade_fraction"`
+	// POINTERS, so that OMITTING a protection leaves it alone.
+	//
+	// These were plain bools and ints, assigned unconditionally from the
+	// decoded request. A partial update -- one that meant to tighten an
+	// exposure ceiling and said nothing about anything else -- therefore set
+	// require_stop_loss to false, block_on_high_impact_events to false and
+	// both blackout windows to zero, because that is what a zero-valued bool
+	// and a zero int decode to. Every other field in this request falls back
+	// to the stored value when empty; these four silently disabled three
+	// protections instead.
+	//
+	// A caller that genuinely wants to turn one off now has to say so.
+	RequireStopLoss          *bool  `json:"require_stop_loss"`
 	MaxOpenPositions         int    `json:"max_open_positions"`
 	MaxPendingOrders         int    `json:"max_pending_orders"`
 	MaxGrossExposure         string `json:"max_gross_exposure"`
@@ -138,9 +150,9 @@ type updateRiskLimitsRequest struct {
 	MaxDrawdownFraction      string `json:"max_drawdown_fraction"`
 	MaxSpreadFraction        string `json:"max_spread_fraction"`
 	MaxSlippageFraction      string `json:"max_slippage_fraction"`
-	EventBlackoutBefore      int    `json:"event_blackout_before_minutes"`
-	EventBlackoutAfter       int    `json:"event_blackout_after_minutes"`
-	BlockOnHighImpactEvents  bool   `json:"block_on_high_impact_events"`
+	EventBlackoutBefore      *int   `json:"event_blackout_before_minutes"`
+	EventBlackoutAfter       *int   `json:"event_blackout_after_minutes"`
+	BlockOnHighImpactEvents  *bool  `json:"block_on_high_impact_events"`
 	Version                  int64  `json:"version"`
 }
 
@@ -200,7 +212,9 @@ func (s *Server) handleUpdateRiskLimits(w http.ResponseWriter, r *http.Request) 
 	limits.MaxOrderNotional = amt("max_order_notional", req.MaxOrderNotional, existing.MaxOrderNotional)
 	limits.MaxRiskPerTradeFraction = dec("max_risk_per_trade_fraction",
 		req.MaxRiskPerTradeFraction, existing.MaxRiskPerTradeFraction)
-	limits.RequireStopLoss = req.RequireStopLoss
+	if req.RequireStopLoss != nil {
+		limits.RequireStopLoss = *req.RequireStopLoss
+	}
 	if req.MaxOpenPositions > 0 {
 		limits.MaxOpenPositions = req.MaxOpenPositions
 	}
@@ -220,13 +234,15 @@ func (s *Server) handleUpdateRiskLimits(w http.ResponseWriter, r *http.Request) 
 	limits.MaxSpreadFraction = dec("max_spread_fraction", req.MaxSpreadFraction, existing.MaxSpreadFraction)
 	limits.MaxSlippageFraction = dec("max_slippage_fraction",
 		req.MaxSlippageFraction, existing.MaxSlippageFraction)
-	if req.EventBlackoutBefore >= 0 {
-		limits.EventBlackoutBeforeMinutes = req.EventBlackoutBefore
+	if req.EventBlackoutBefore != nil && *req.EventBlackoutBefore >= 0 {
+		limits.EventBlackoutBeforeMinutes = *req.EventBlackoutBefore
 	}
-	if req.EventBlackoutAfter >= 0 {
-		limits.EventBlackoutAfterMinutes = req.EventBlackoutAfter
+	if req.EventBlackoutAfter != nil && *req.EventBlackoutAfter >= 0 {
+		limits.EventBlackoutAfterMinutes = *req.EventBlackoutAfter
 	}
-	limits.BlockOnHighImpactEvents = req.BlockOnHighImpactEvents
+	if req.BlockOnHighImpactEvents != nil {
+		limits.BlockOnHighImpactEvents = *req.BlockOnHighImpactEvents
+	}
 
 	// Application-level guard rails, ahead of the database's own constraints,
 	// so the user gets a sentence rather than a constraint name.
