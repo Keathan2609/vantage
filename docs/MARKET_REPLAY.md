@@ -483,8 +483,14 @@ bracket the window between them — but it is a gap.
   own signal independently, so two strategies disagreeing at one instant are
   not aggregated at all. **Measured:** on one run of the condition matrix the
   platform filled both a buy and a sell on XAUUSD.m at the same bar, at 19
-  instants on one dataset and 31 on another. Scenario G measures what actually
-  happens rather than assuming the policy runs.
+  instants on one dataset and 31 on another. On the fixture built to provoke
+  disagreement, the set split 38 times and **all 38** produced filled orders on
+  both sides. Scenario G measures what actually happens rather than assuming
+  the policy runs, and is left FAILING because the failure is the finding.
+
+  The useful contrast is with scenario I: on `capacity-exhausted` the set also
+  split 38 times and produced **zero** both-sided fills, because the tightened
+  exposure ceilings refused the opening leg. The controls that exist do bind.
 - **Four of the trading authority's five numeric ceilings do not bind.**
   `MaxOrderQuantity`, `MaxOrderNotional`, `MaxPositionExposure` and
   `MaxDailyLoss` are stored, served and written into every decision snapshot's
