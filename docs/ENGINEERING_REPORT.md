@@ -1447,6 +1447,16 @@ defect this whole exercise is built to catch:
 Two further findings are properties rather than defects, recorded because both
 cost time to diagnose:
 
+- **One seeded database serves one replay SUITE, not one invocation.** Running
+  the recovery scenarios and then the market matrix in a single `go test` left
+  the matrix measuring an exhausted account: 285 strategy runs, all skipped, no
+  decision, and scenario B reporting "every decision recorded the same regime
+  (map[])" — which is what an empty set looks like rather than a broken
+  classifier. The obvious suspect is wrong: the per-bar watermark is not the
+  cause, because a replay's `start` already purges `strategy_runs` for the
+  window it is about to play. The shared account's 15 ZAR daily-loss limit and
+  its exposure ceilings are.
+
 - **The pacing cap makes every finite speed identical on long timeframes.** The
   engine caps the per-instant sleep at two seconds, so on 1h bars 1x, 10x and
   100x all pace identically; only `max` differs. An uncapped 1x on this dataset
