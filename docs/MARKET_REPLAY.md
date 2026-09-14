@@ -315,6 +315,16 @@ wall-clock timestamp. Three runs of one dataset from a byte-identical database
 (`pg_dump`/`pg_restore` between them) produce the same digest, and the
 per-section components name WHICH part diverged when they do not.
 
+**Re-measured at the milestone's final code state**, after decisions started
+recording the bar they were taken on — a richer canonical form that could have
+exposed non-determinism the poorer one hid, and did not:
+
+| Dataset | Digest | Runs |
+| --- | --- | --- |
+| `trend-clean` | `45f2cf72fc4a0397` | 3, identical |
+| `range-bound` | `ca00376e75f72e42` | 3 identical, and **SKIPPED** — it produced no decision of its own, and agreeing about nothing is not evidence |
+| `correlated-pair` | `1638d574c83ea41d` | 3, identical |
+
 **A digest is only comparable within one code version.** It is a fingerprint of
 what this build produces, so a change to what is recorded — a column added to
 the canonical form, or a field that started being populated — moves every
