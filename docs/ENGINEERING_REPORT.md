@@ -1788,8 +1788,8 @@ reset and reseeded database. Nothing is carried over from an earlier run.
 
 | Suite | Result |
 | --- | --- |
-| Go unit | **419 pass, 0 fail, 0 skip** across 20 packages; `gofmt` and `go vet` clean. By package: domain 65, marketdata 59, orchestrator 49, risk 38, reconcile 34, quant 23, store 18, arch 13, fx 13, booking 12, scheduler 11, oms 10, econdata 9, portfolio 7, and the rest |
-| Go `-race` | **0 races across all 20 packages.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
+| Go unit | **681 pass, 0 fail, 0 skip** across 23 packages; `gofmt` and `go vet` clean. By package: domain 65, marketdata 59, orchestrator 49, risk 38, reconcile 34, quant 23, store 18, arch 13, fx 13, booking 12, scheduler 11, oms 10, econdata 9, portfolio 7, and the rest |
+| Go `-race` | **0 races across all 23 packages.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
 | Python unit | **202 pass, 0 fail**; `ruff` clean; `mypy` clean on 7 source files |
 | Web static | `tsc --noEmit` clean; `eslint` clean; production build clean, 20 routes including `/operations` |
