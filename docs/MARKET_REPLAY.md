@@ -390,14 +390,32 @@ carries a dead run's assumptions into a live one.
 | The correlation matrix's values | **RECONSTRUCTED** | Recomputed by the scheduler's correlation phase, which in a replay runs every step |
 | Whether an interrupted run may be resumed | **RECONSTRUCTED** | Derived by comparing the stored dataset hash against the registry at the moment the question is asked, never stored. A fixture edited since the run would otherwise still read as resumable |
 
-### What this does not yet cover
+### Crash timing
 
-Crash-timing variants — killing the process between the order write and the
-venue call, between the venue call and the fill booking, and immediately after
-the fill — are **not** exercised. The restart tests kill the process at an
-arbitrary point in a run and at a point where an order is half filled; they do
-not force the kill into a specific window inside one order's lifecycle. Doing
-that needs a fault mode that blocks at a named point, which does not exist.
+Killing the process faster does not reach the two moments that matter. They are
+reached by making the venue behave exactly as it would at that instant — which
+is what the deterministic fault modes are for — and then killing the process
+for real. Both are covered:
+
+- **The outcome was unknown.** `timeout` leaves the order FAILED with nothing
+  written at the venue, and the platform unable to know that. Across a restart
+  the order must gain no fill and must not become FILLED: resolving an
+  uncertainty without evidence invents a position either way.
+- **The venue executed and the answer was lost.** `lost_response` records the
+  order at the venue and drops the reply, so the execution exists and the
+  platform has no record of it. Across a restart, exactly two outcomes are
+  defensible — reconciliation imports it exactly once, or it stays an open
+  issue for an operator. Importing it twice, or closing the issue without
+  re-reading the evidence, is not.
+
+Plus a half-filled order carried across a restart, on the synthetic instrument
+that makes a partial fill representable at all.
+
+**What is still not covered:** killing the process at a chosen instruction
+boundary *inside* the OMS transaction. That needs a fault that blocks at a
+named point, which does not exist. The gap it leaves is narrow — the order
+write and the venue call are not in one transaction, and the two cases above
+bracket the window between them — but it is a gap.
 
 ## What a replay assumes
 
