@@ -390,6 +390,36 @@ This reporting immediately paid for itself: every scenario in the end-to-end
 matrix stepped 60 instants, which the warm-up model had silently turned into an
 evaluation window of **zero**. Eight of the nine were asserting on nothing.
 
+## A partial fill, and the instrument that makes one representable
+
+A partial fill touches the order state machine, the position, the weighted
+average price, the fee accrual and the ledger at once, and it could not be
+exercised at all. Every order the seeded R500 account produces is 0.01 lots,
+which on XAUUSD.m is simultaneously the minimum quantity AND the quantity step,
+so 40% of one order is 0.004 lots — not a representable quantity — and the
+venue correctly declined to split it.
+
+`TEST_XAU` is a development-only synthetic instrument with a finer lot step
+(4 decimal places, 0.0001 minimum and step) and a 1/100-ounce contract. On it,
+0.10 lots splits into 0.04 and 0.06.
+
+**Nothing under test was relaxed to get there.** XAUUSD.m keeps its minimum and
+step, the account keeps its size, and the trading authority keeps its 0.10-lot
+ceiling — which still applies, because the split happens inside it. The seed
+refuses to run outside development, no strategy declares the instrument, and
+the authority grants it explicitly rather than by wildcard, so nothing
+autonomous can reach it.
+
+Measured: `TEST_XAU buy 0.1000 filled=0.0400 PARTIALLY_FILLED`, with 0.0600
+still working.
+
+The order is placed by hand, and that is a real limitation rather than a
+detail. It goes through the same `oms.Submit` and the same `booking` package as
+an autonomous order — enforced structurally by
+`TestEveryOrderPlacementGoesThroughTheSameOMSMethod` — so the fill, position,
+ledger and state-machine behaviour is identical. What it does NOT exercise is
+the orchestrator's front end.
+
 ## What a restart does to each piece of state
 
 **A replay STOPS at a process restart and does not resume itself.** Engaging a
