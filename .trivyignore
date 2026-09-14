@@ -21,6 +21,29 @@
 GHSA-6v7p-g79w-8964
 # setuptools 70.3.0 -> 78.1.1, recorded in pip/_vendor/vendor.txt
 CVE-2025-47273
+# setuptools 70.3.0 -> 83.0.0. The same phantom package as the line above: a
+# NEW advisory against the same version string, so it arrives through the same
+# route and is accepted for the same reason.
+CVE-2026-59890
+
+# Re-verified on 2026-09-14 against a `docker build --no-cache --pull` of the
+# research image, rather than taken on trust from the previous review:
+#
+#   * The IMPORTABLE setuptools is 84.0.0
+#     (/opt/venv/lib/python3.12/site-packages/setuptools/__init__.py), which is
+#     above both fixed versions. The only setuptools dist-info on disk is
+#     84.0.0, in both site-packages trees.
+#   * There is NO setuptools 70.3.0 anywhere in the image. The version Trivy
+#     reports comes from the line `setuptools==70.3.0` in
+#     pip/_vendor/vendor.txt -- a text record of what pip vendored, not
+#     installed code. Nothing can import it because it is not there.
+#   * msgpack 1.1.2 exists only as pip/_vendor/msgpack, pip's own copy.
+#
+# So these are findings against a package the image does not actually contain
+# at that version, and the fix is already applied for the one that is real.
+# Raw totals from that build: 150 OS findings (0 CRITICAL, 44 HIGH, 48 MEDIUM,
+# 57 LOW, 1 UNKNOWN) plus 3 Python findings; CI-gated (CRITICAL/HIGH,
+# --ignore-unfixed, this file applied): 0.
 
 # --- golang.org/x/crypto/openpgp ---------------------------------------------
 #
