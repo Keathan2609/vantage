@@ -1828,10 +1828,10 @@ need real time.
 | Smoke: research | **carried — not re-run** | **35 pass, 0 fail** |
 | Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
 | Semgrep | this milestone | 0 findings (`--config auto`, whole repository) |
-| govulncheck | **carried — not re-run** | 0 reachable (1 unreachable, in a required module) |
-| npm audit | **carried — not re-run** | 0 vulnerabilities |
-| Trivy filesystem (vuln) | **carried — not re-run** | 0 — `go.mod` and `package-lock.json` |
-| Trivy config | **carried — not re-run** | 0 HIGH/CRITICAL across all three Dockerfiles |
+| govulncheck | this milestone | 0 reachable. "Your code is affected by 0 vulnerabilities"; 1 vulnerability in a required module that nothing calls |
+| npm audit | this milestone | 0 vulnerabilities |
+| Trivy filesystem (vuln) | this milestone | 0 — nothing reported across the tree |
+| Trivy config | this milestone | 0 HIGH/CRITICAL misconfigurations across all three Dockerfiles |
 | Trivy image — all three | **carried — not re-run** | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
 | Trivy image — unfiltered | this milestone | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
 | Trivy image — the 3 fixable findings, named | this milestone | `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964, HIGH), `setuptools` 70.3.0 → 78.1.1 (CVE-2025-47273, HIGH) and → 83.0.0 (CVE-2026-59890, MEDIUM). **Verified inside the image rather than accepted on trust:** the importable setuptools is 84.0.0, above both fixes; there is no setuptools 70.3.0 on disk at all — the version Trivy reports comes from `setuptools==70.3.0` in `pip/_vendor/vendor.txt`, a record of what pip vendored rather than installed code; msgpack 1.1.2 exists only as `pip/_vendor/msgpack` |
