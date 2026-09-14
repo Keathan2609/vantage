@@ -1214,6 +1214,34 @@ it to be inferred from an empty result.
 
 ---
 
+## 30f. ReplayRun: the verified state, and why the record contradicted itself
+
+A previous revision of this report said `ReplayRun` was not persisted, and a
+later one said it was. Both were true when written -- the table was added in
+between -- but the two statements outlived the change and read as a
+contradiction.
+
+**Verified against the repository, not from memory:**
+
+| Claim | Evidence |
+|---|---|
+| The table exists | `migrations/0013_replay_runs.sql`, applied; `\d replay_runs` shows 17 columns |
+| It is written | `internal/store/replay.go` → `RecordRun`, wired in `internal/app/app.go` via `Engine.SetRecorder` |
+| It is read | `GET /api/v1/replay/runs` and `/replay/runs/{id}`, admin-only |
+| Orders carry it | `orders.replay_run_id` (0014), with a foreign key that is deliberately not `ON DELETE CASCADE` |
+| It records identity | dataset id and hash, code SHA, config hash, seed, dataset span, wall-clock start and finish, state, counters, warnings |
+| It cannot claim to be live | `CHECK (simulated)`; the app role has INSERT and UPDATE but not DELETE |
+
+Measured on the scenario matrix: nine runs recorded, every one carrying a
+dataset hash and a code SHA, none claiming to be unsimulated.
+
+The lesson is about the report rather than the code. A standing document that
+describes a moving system needs its claims dated or derived, and this one had
+two undated claims about the same fact. Sections that state a capability now
+say what was run to establish it.
+
+---
+
 ## 30e. Two broken workflow references, found by pinning the actions
 
 Pinning every GitHub Action to a commit SHA was meant to be a supply-chain
@@ -1291,11 +1319,20 @@ been executed and moved into the tally — and what remains is what remains.
   has its own. But a handler needs a database, a broker and a keyring to
   construct, so the handlers are exercised by the smoke and Playwright suites.
   Every package named in the previous revision's untested list now has tests.
-- **Only ONE scenario is driven end to end.** `trend-clean` runs the whole
-  pipeline and is the determinism proof. The infrastructure now exists for the
-  rest, and nine datasets are committed, but scenarios D, F, G, I, J and the
-  new N-S are still decision-layer tests only. Rewriting them onto the replay
-  engine is the obvious next step and was not reached.
+- **NINE scenarios are driven end to end**, with business invariants rather
+  than a PASS: A clean trend, B range, C volatility shock, E spread spike, H
+  drawdown, K trend reversal, L false breakout, M correlated opportunities and
+  T day boundary. Measured: 9 of 9 pass, 0 step errors, 683 orders, 39 fills,
+  23 ledger entries, 2795 strategy runs, attribution reconciled at 23 of 23
+  entries in six dimensions.
+
+  Scenarios D (high-impact economic event), F (market-data outage), G
+  (conflicting strategies), I (strong ML signal with no risk capacity), J (kill
+  switch during Autopilot) and N-S (news + agreement, stale-provider recovery,
+  partial fill, lost broker response, duplicate scheduler tick, Autopilot
+  restart) are NOT yet driven end to end. Several need fault injection wired
+  into the harness rather than a new dataset; the partial-fill and
+  lost-response cases need the mock venue's fault modes armed mid-run.
 - **A replay run's code identity is only as good as the build.** The record
   is now persisted (`replay_runs`, migration 0013) and carries the dataset
   hash, code SHA, config hash and seed. But a `go run` binary has no commit
@@ -1319,21 +1356,30 @@ been executed and moved into the tally — and what remains is what remains.
   beat the baseline is flagged. F1, PR-AUC, a confusion matrix and an actual
   calibration curve are not, so "0.80" is documented as a score rather than
   demonstrated to be a probability.
-- **Regime and model attribution are still missing.** P&L is attributed by
-  instrument, strategy, strategy version, source, session, event context,
-  transaction type, replay run, and PAPER_FORWARD-versus-REPLAY -- folded from
-  the ledger so the buckets reconcile to the account exactly. No decision
-  records the market regime or the model that informed it, so those two
-  dimensions cannot be served and are not offered.
+- **Model attribution is still missing.** P&L is attributed by instrument,
+  strategy, strategy version, source, session, event context, transaction
+  type, replay run, PAPER_FORWARD-versus-REPLAY and now REGIME -- folded from
+  the ledger so the buckets reconcile to the account exactly. Measured across
+  the scenario matrix: 23 of 23 ledger entries in every dimension, discrepancy
+  0.00. No decision records the MODEL that informed it, so that one dimension
+  cannot be served and is not offered.
 - **No backtest versus paper-forward comparison.** Both engines exist and both
   produce metrics; nothing compares them, so the differences caused by the OMS,
   spread, slippage, latency, the scheduler and reconciliation are unmeasured.
-- **Correlation is still not measured.** Named in the previous two revisions.
-  The consensus policy accepts a portfolio veto and the `correlated-pair`
-  dataset exists to exercise one, but nothing computes that gold and silver
-  move together, so the veto is never raised.
-- **RISK_OFF is still never inferred**, and no regime-transition or hysteresis
-  tests exist.
+- **Correlation is measured and feeds risk.** Rolling Pearson over bar-to-bar
+  returns, paired by timestamp, with four states rather than a number: KNOWN,
+  STALE, INSUFFICIENT_DATA, UNDEFINED. `CheckPortfolioCorrelation` reduces
+  above 0.60 and refuses above 0.90 on the strongest single relationship. An
+  unmeasurable pair reduces to 0.75 and never refuses, and says the reduction
+  rests on an absence of evidence. Verified live: the matrix refreshes each
+  replay step and the check is recorded on every decision.
+- **RISK_OFF is inferred and the regime is recorded.** `domain.InferRegime`
+  reasons over feed health, spread absolute and relative, event proximity,
+  drawdown and provider stability; every verdict records every check including
+  the ones that passed. Hysteresis is asymmetric -- immediate into RISK_OFF,
+  three confirmations out -- and both named transitions are tested with a
+  noisy boundary. The regime is stored on the decision (0015) and never
+  recomputed.
 - **ML evaluation is unchanged.** No F1, PR-AUC, confusion matrix or
   calibration curve, so a 0.80 output remains a score rather than a
   demonstrated probability. Promotion gates are not formalised beyond the
@@ -1440,6 +1486,12 @@ trust needs the difference.
 | 29n | PAPER_FORWARD separated from BACKTEST/REPLAY | COMPLETE | `orders.replay_run_id` (0014) tags every order created while a replay owned the clock, including a manual one. `?by=run_kind` and `?by=replay_run` read it. Without the tag a replay's numbers and a forward session's sit in one account indistinguishably |
 | 29l | P&L attribution across dimensions | COMPLETE for nine of eleven | Instrument, strategy, strategy version, source, session, event context and transaction type. Folded from the ledger, so every entry is counted exactly once; the report compares itself against the account's own totals and reports itself unreconciled rather than presenting a truncated window as the account. Regime and replay run are NOT attributed |
 | 29m | Attribution reconciliation | COMPLETE | Measured on a replay: 25 of 25 ledger entries in every one of the seven dimensions, discrepancy 0.00, and 500.00 funding plus -20.66 trading equal to the ledger's 479.34 |
+| 30a | RISK_OFF inference with reasons | COMPLETE | Six components, every one recorded whether it fired or not. Two ordinary reasons make RISK_OFF; an invalid feed or a spread beyond five times expected is decisive alone |
+| 30b | Regime hysteresis | COMPLETE | Asymmetric by design: immediate in, three confirmations out. A contradicting observation resets the count, so an oscillation never accumulates |
+| 30c | Regime recorded at decision time | COMPLETE | `decision_snapshots.regime` + policy version + reasons (0015). Never recomputed: moved thresholds would reattribute historical P&L to conditions the platform never acted in |
+| 30d | Rolling correlation | COMPLETE | Four states, never a silent zero. 29 tests covering +1, -1, near zero, insufficient samples, non-overlapping series, a flat series, changing correlation and stale data |
+| 30e | Correlation-aware risk | COMPLETE | REDUCE before REJECT, strongest relationship rather than an average, absolute correlation by default |
+| 30f | Scenario matrix through the real pipeline | COMPLETE for 9 of 20 | A, B, C, E, H, K, L, M, T drive ingestion → bars → strategies → orchestration → risk → OMS → venue → booking → ledger → audit, each with business invariants. D, F, G, I, J, N-S are not yet driven |
 | 29e | Autopilot global switch | COMPLETE | Default OFF, ADMIN to change with a mandatory reason, any role to read, append-only history, enforced in the order transaction with its own rejection code, distinct from the kill switch |
 | 30 | Signal to order routing | COMPLETE | `TestEveryOrderPlacementGoesThroughTheSameOMSMethod` pins the two permitted call sites |
 | 31 | Backtesting engine | COMPLETE | Next-bar fills, stop assumed on an ambiguous bar, full costs, unaffordable trades counted rather than dropped. Rejects non-ascending bars |
