@@ -69,6 +69,17 @@ type replayRunView struct {
 	BarsProcessed int `json:"bars_processed"`
 	Errors        int `json:"errors"`
 
+	// Phase is which half of the window the run is in, and the two counters
+	// split Steps by it. Without them a run that produced nothing gives an
+	// operator no way to tell a strategy with no opinion from a run that never
+	// left warm-up -- and those need opposite responses.
+	Phase              string `json:"phase"`
+	WarmupInstants     int    `json:"warmup_instants"`
+	EvaluationInstants int    `json:"evaluation_instants"`
+	// AllowWarmupTrading says whether the suppression was waived, so a reader
+	// is never left inferring it from the absence of orders.
+	AllowWarmupTrading bool `json:"allow_warmup_trading"`
+
 	RowsPlayed int `json:"rows_played"`
 	RowsTotal  int `json:"rows_total"`
 	// ReplayNow is where the application clock currently sits. The single most
@@ -95,6 +106,11 @@ func (s *Server) replayView(run replay.Run) replayRunView {
 
 		Steps: run.Counters.Steps, BarsProcessed: run.Counters.BarsProcessed,
 		Errors: run.Counters.Errors,
+
+		Phase:              run.Phase,
+		WarmupInstants:     run.Counters.WarmupInstants,
+		EvaluationInstants: run.Counters.EvaluationInstants,
+		AllowWarmupTrading: run.AllowWarmupTrading,
 
 		Simulated: true,
 		Label:     replayLabel,
@@ -268,6 +284,36 @@ func (s *Server) handleReplayInterrupted(w http.ResponseWriter, r *http.Request)
 		"interrupted": out,
 		"policy": "a replay stops at a process restart and requires an explicit " +
 			"operator resume from a verified durable cursor",
+		"simulated": true, "label": replayLabel,
+	})
+}
+
+// handleReplayDigest reports the deterministic result digest of an account's
+// financial output.
+//
+// Development and research metadata. It proves that two runs produced
+// IDENTICAL CANONICAL OUTPUT from identical declared inputs -- a
+// reproducibility claim and nothing more. It says nothing about whether the
+// result is good: two runs of a losing strategy agree on the same digest.
+//
+// Computed on demand rather than stored, so a client cannot alter it: there is
+// no field to write.
+func (s *Server) handleReplayDigest(w http.ResponseWriter, r *http.Request) {
+	account, ok := s.accountForOperations(w, r, "accountID")
+	if !ok {
+		return
+	}
+	digest, err := s.store.Trading.ComputeResultDigest(r.Context(), account.ID.String())
+	if err != nil {
+		writeStoreError(w, r, err, "Account not found.")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"digest":     digest.Digest,
+		"components": digest.Components,
+		"counts":     digest.Counts,
+		"means": "identical canonical output for identical declared inputs. " +
+			"This is a reproducibility claim, not a statement about performance.",
 		"simulated": true, "label": replayLabel,
 	})
 }

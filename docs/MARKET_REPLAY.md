@@ -283,10 +283,17 @@ records to tidy a development artefact.
 
 ## Determinism
 
-**Proven.** Two runs of one dataset from a byte-identical database
-(`pg_dump`/`pg_restore` between them) produce byte-identical financial output:
-same signals, orders, fills, quantities, transactions, closing balance and open
-positions.
+**Proven, and measured on a canonical digest rather than on a list of
+assertions.** `GET /api/v1/replay/digest/{accountID}` hashes the account's
+financial output — decisions, orders, fills, ledger, positions, attribution and
+reconciliation — ordered by BUSINESS keys only, never by a generated id or a
+wall-clock timestamp. Three runs of one dataset from a byte-identical database
+(`pg_dump`/`pg_restore` between them) produce the same digest, and the
+per-section components name WHICH part diverged when they do not.
+
+A digest proves REPRODUCIBILITY and nothing else. It says a result can be
+re-derived; it says nothing about whether the result is good, and two runs of a
+losing strategy agree on the same digest.
 
 Getting there found the non-determinism. The first attempt produced identical
 *decisions* — 665 signals, 250 orders, 189 fills, 2.51 lots — and different
@@ -307,6 +314,55 @@ reason the mock venue exists. It stays awkward, and awkward the same way twice.
    refusal for an invisible reason. A preflight check now reports this before a
    run starts.
 3. **Autopilot on.** Also reported by preflight.
+
+## What a restart does to each piece of state
+
+**A replay STOPS at a process restart and does not resume itself.** Engaging a
+replay puts the whole process on dataset time, and a control plane that came
+back up and silently moved its own clock to 2027 because a row said a run was
+in progress would be deciding that for the operator at the moment nobody is
+watching. The abandoned run is marked `interrupted` and listed at
+`GET /api/v1/replay/interrupted` with a verdict on whether resuming it is safe;
+continuing it takes a deliberate `resume_interrupted` naming the run, and the
+cursor comes from the platform's own durable record rather than from the
+caller.
+
+Every piece of state is in exactly one of three categories. The distinction
+matters because the failure modes are opposite: RESET state that should have
+been persisted loses work, and PERSISTED state that should have been reset
+carries a dead run's assumptions into a live one.
+
+| State | At a restart | Where it lives, and why |
+| --- | --- | --- |
+| Orders, fills, positions, ledger, balance | **PERSISTED** | Database rows written inside the transaction that created them. Asserted unchanged across a real process kill by `TestScenarioS_ARestartStopsTheReplayAndDuplicatesNothing` and, for a half-filled order, by `TestAPartialFillSurvivesARestartWithoutDuplicating` |
+| Decision snapshots and audit chain | **PERSISTED** | Append-only tables with mutation-rejecting triggers |
+| The replay run record — cursor, dataset hash, seed, code SHA, config hash, window | **PERSISTED** | `replay_runs`. The cursor is what an operator resume reads; a client cannot supply one |
+| Per-bar strategy watermark | **PERSISTED** | `strategy_runs`. Deliberately survives, so a restart cannot re-evaluate and re-trade a bar. Verified by counting duplicate (strategy, bar) pairs after the restart |
+| Autopilot, kill switches, trading authority, risk limits | **PERSISTED** | Controls must not be released by a crash |
+| Reconciliation issues | **PERSISTED** | An unresolved divergence outlives the process that found it |
+| Replay market data (`provider = 'replay'`) | **PERSISTED**, then purged at the next `start` | Kept so the interrupted run's evidence survives; removed when a new run begins, because a dataset starting earlier makes the stored quote look like the future |
+| Rate-limit buckets | **PERSISTED** | Redis, a separate process. An API restart does not refill a caller's budget |
+| Sessions | **PERSISTED** in the database, but the restart invalidates the process's view — a client must sign in again | This is why the restart tests re-authenticate |
+| The replay clock and whether it is engaged | **RESET** | The process comes back on real time. `GET /api/v1/replay` reports `engaged: false`, asserted after the kill |
+| The replay window (the data floor and warm-up boundary) | **RESET** | An `atomic.Pointer` in the engine, nil until a run is started or resumed. A stale floor would silently hide history from a non-replay process |
+| The engine's dataset and in-memory cursor | **RESET** | Rebuilt from the registry and the durable cursor on resume |
+| Regime hysteresis trackers | **RESET** | `oms.regimeTrackers`, in process. A tracker carries "three confirmations to leave RISK_OFF"; inheriting one from a dead run would apply a previous market's confirmations to a new one |
+| Correlation matrix | **RESET** | `oms.correlationMatrix`, in process. Also cleared at every replay `start` for the same reason |
+| Mock venue jitter sequence | **RESET**, then re-seeded | In process, and re-seeded at every replay `start`. Seeding only at construction made a second run in one process continue the sequence, so two runs from a byte-identical snapshot produced identical decisions and different fill prices |
+| Research-client circuit breaker | **RESET** | In process, threshold 5, cooldown 30s. A restart gives the research service a fresh chance, which is the behaviour wanted |
+| Portfolio valuation — equity, margin, exposure, unrealised P&L | **RECONSTRUCTED** | Computed from persisted positions and current quotes on every read. Nothing is stored that could disagree with its inputs |
+| The market regime | **RECONSTRUCTED** | Recomputed from bars at the next evaluation, after a fresh warm-up. The *classification* returns; the hysteresis state behind it does not |
+| The correlation matrix's values | **RECONSTRUCTED** | Recomputed by the scheduler's correlation phase, which in a replay runs every step |
+| Whether an interrupted run may be resumed | **RECONSTRUCTED** | Derived by comparing the stored dataset hash against the registry at the moment the question is asked, never stored. A fixture edited since the run would otherwise still read as resumable |
+
+### What this does not yet cover
+
+Crash-timing variants — killing the process between the order write and the
+venue call, between the venue call and the fill booking, and immediately after
+the fill — are **not** exercised. The restart tests kill the process at an
+arbitrary point in a run and at a point where an order is half filled; they do
+not force the kill into a specific window inside one order's lifecycle. Doing
+that needs a fault mode that blocks at a named point, which does not exist.
 
 ## What a replay assumes
 
@@ -331,13 +387,17 @@ reason the mock venue exists. It stays awkward, and awkward the same way twice.
 
 ## Not yet done
 
-- **Scenarios D, F, G, I, J, N–S** exist as decision-layer tests
-  (`internal/orchestrator/scenario_test.go`) but are not yet driven end to end
-  through the application. The infrastructure to do so now exists; the
-  scenarios have not been rewritten onto it.
-- **Regime and model are still not attributed.** No decision records the
-  market regime or the model that informed it, so P&L cannot be grouped by
-  either. Replay run and PAPER_FORWARD-versus-REPLAY are now attributed; those
-  two are what remain.
+- **The consensus policy is not on the execution path.**
+  `orchestrator.Decide` — the multi-strategy aggregation this repository
+  documents as "vetoes before votes, never a majority vote" — is implemented,
+  unit-tested and **has no production caller**. The scheduler calls
+  `EvaluateAndRoute` once per (strategy, instrument) and each call routes its
+  own signal independently, so two strategies disagreeing at one instant are
+  not aggregated at all. Scenario G measures what actually happens rather than
+  assuming the policy runs.
+- **The model is still not attributed.** A decision now records the market
+  regime, the regime policy version and the evidence behind it, along with the
+  replay run; the model that informed it is still not recorded, so P&L cannot
+  be grouped by model.
 - **No paper-forward versus backtest comparison.** Both exist; nothing compares
   them.

@@ -138,7 +138,15 @@ type Broker struct {
 	market MarketStatusSource
 	cfg    Config
 
-	mu  sync.Mutex
+	mu sync.Mutex
+	// rng is the venue's jitter and rejection source.
+	//
+	// Reseedable so a replay can restart it. Seeding once at construction
+	// meant a SECOND run in the same process continued the sequence rather
+	// than repeating it, so two runs of one dataset produced identical
+	// decisions and different fill prices -- which is the hardest kind of
+	// non-determinism to find, because the decisions agree and only the money
+	// differs.
 	rng *rand.Rand
 
 	// faults is a deterministic fault-injection layer, disabled unless a test
@@ -163,6 +171,23 @@ func New(pool *db.Pool, quotes QuoteSource, rates RateSource, market MarketStatu
 		rng:    rand.New(rand.NewSource(seed)),
 		faults: NewFaultInjector(),
 	}
+}
+
+// Reseed restarts the venue's random sequence from a known point.
+//
+// Called when a replay starts. The venue's jitter and rejection draws are
+// in-process state, and a run that inherited a partly-consumed sequence would
+// produce identical DECISIONS and different fill prices from an identical
+// starting database -- which is the hardest kind of non-determinism to find,
+// because everything upstream agrees and only the money differs.
+//
+// Measured before this existed: three runs of one dataset from a byte-identical
+// snapshot agreed exactly on the DECISIONS section of the result digest and
+// disagreed on orders, fills, positions and attribution.
+func (b *Broker) Reseed(seed int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rng = rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic paper venue, never cryptographic
 }
 
 // toAccountCurrency converts a quote-currency amount into the venue account's

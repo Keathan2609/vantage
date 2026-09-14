@@ -372,6 +372,7 @@ func (s *Server) routes() chi.Router {
 			// evidence, and the engine being absent does not unmake it.
 			admin.Get("/replay/runs", s.handleReplayRuns)
 			admin.Get("/replay/interrupted", s.handleReplayInterrupted)
+			admin.Get("/replay/digest/{accountID}", s.handleReplayDigest)
 			admin.Get("/replay/runs/{runID}", s.handleReplayRun)
 			admin.Get("/replay/datasets", s.handleReplayDatasets)
 			admin.Get("/replay", s.handleReplayStatus)

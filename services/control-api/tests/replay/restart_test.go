@@ -183,6 +183,44 @@ func TestScenarioS_ARestartStopsTheReplayAndDuplicatesNothing(t *testing.T) {
 		t.Errorf("%d (strategy, bar) pairs were evaluated more than once across "+
 			"the restart", doubled)
 	}
+
+	// 5. The engine's in-process state is GONE rather than inherited.
+	//
+	// The window, the cursor and the phase counters live in the process that
+	// died. Asserting they were reset means starting a fresh run and checking
+	// that it begins at the beginning: a run that reported itself already past
+	// warm-up would be carrying the dead run's position into a new market.
+	//
+	// A different dataset, so this cannot pass by finding the previous run's
+	// bars still evaluated.
+	h.start("range-bound", "after the restart: proving the engine starts clean")
+	h.step(3)
+	var fresh struct {
+		Run struct {
+			Phase              string `json:"phase"`
+			WarmupInstants     int    `json:"warmup_instants"`
+			EvaluationInstants int    `json:"evaluation_instants"`
+			Steps              int    `json:"steps"`
+		} `json:"run"`
+	}
+	h.do("GET", "/api/v1/replay", nil, &fresh)
+	if fresh.Run.Phase != "warmup" {
+		t.Errorf("a run started three instants after a restart reports phase %q, "+
+			"want \"warmup\": the engine inherited a window from the process "+
+			"that died", fresh.Run.Phase)
+	}
+	if fresh.Run.EvaluationInstants != 0 {
+		t.Errorf("a freshly started run already counts %d evaluation instants, "+
+			"so its counters were not reset", fresh.Run.EvaluationInstants)
+	}
+	if fresh.Run.WarmupInstants != fresh.Run.Steps {
+		t.Errorf("the run played %d instants and attributes %d of them to "+
+			"warm-up: the phase split does not account for every instant",
+			fresh.Run.Steps, fresh.Run.WarmupInstants)
+	}
+	t.Logf("after the restart a fresh run reports phase=%s, warmup=%d, "+
+		"evaluation=%d of %d instants", fresh.Run.Phase,
+		fresh.Run.WarmupInstants, fresh.Run.EvaluationInstants, fresh.Run.Steps)
 }
 
 func TestAnInterruptedRunIsListedWithAResumeVerdict(t *testing.T) {

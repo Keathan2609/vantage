@@ -40,6 +40,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -100,7 +101,33 @@ func requireReplayStack(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("the control plane is not reachable at %s: %v", base, err)
 	}
+	var ready struct {
+		Checks map[string]string `json:"checks"`
+	}
+	derr := json.NewDecoder(resp.Body).Decode(&ready)
 	resp.Body.Close()
+
+	// THE RESEARCH PLANE MUST BE UP, and this is a hard precondition rather
+	// than a nicety.
+	//
+	// Every strategy signal comes from it. With it down, each evaluation fails
+	// with "research service unavailable", the circuit breaker opens, the
+	// replay steps happily to the end of the dataset, and the account is left
+	// exactly as it started. A determinism or speed suite then compares four
+	// runs that all did nothing and reports agreement -- which is true, and
+	// evidence of nothing at all. It happened: a speed-invariance run passed
+	// on four identical digests over an unchanged account.
+	//
+	// Checked here rather than per-scenario so the message names the cause
+	// once, before anything has had a chance to look like a trading failure.
+	if derr == nil && ready.Checks["quant"] != "ok" {
+		t.Fatalf("the research service is %q, not \"ok\". Every strategy "+
+			"evaluation would fail and every run would produce nothing while "+
+			"reporting success. Start it:\n"+
+			"  cd services/quant && ./.venv/Scripts/python.exe -m uvicorn "+
+			"vantage_quant.main:app --host 127.0.0.1 --port 8000",
+			ready.Checks["quant"])
+	}
 	return base
 }
 
@@ -128,7 +155,44 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
+// do issues one authenticated request, waiting out the admin rate limit.
+//
+// # Why a 429 is waited out rather than failed on
+//
+// Every admin route shares one control_change bucket: capacity 10, refilling
+// half a token a second. That is the right budget for a human operating a
+// control surface and the wrong shape for a suite that steps a replay eighty
+// times, so a test that stepped one instant per request failed on its
+// eleventh call with a 429 that said nothing about replay.
+//
+// Waiting is the honest response. The limit is a property of the platform, not
+// an obstacle to the test, and a client that backs off and continues is
+// exactly what the limit is asking for -- so the suite obeys it and pays the
+// wall-clock cost rather than the platform being weakened to suit the suite.
+// Nothing here asserts on a 429, so retrying hides no expected behaviour.
 func (h *harness) do(method, path string, payload any, out any) int {
+	h.t.Helper()
+	return h.doWithKey(method, path, "", payload, out)
+}
+
+// doWithKey is do with an idempotency key, which order submission requires.
+func (h *harness) doWithKey(method, path, idempotencyKey string, payload, out any) int {
+	h.t.Helper()
+	const maxThrottleWaits = 40
+	for attempt := 0; ; attempt++ {
+		code, retryAfter := h.doOnce(method, path, idempotencyKey, payload, out)
+		if code != http.StatusTooManyRequests || attempt >= maxThrottleWaits {
+			return code
+		}
+		if retryAfter <= 0 || retryAfter > 30*time.Second {
+			retryAfter = 2 * time.Second
+		}
+		time.Sleep(retryAfter)
+	}
+}
+
+// doOnce is one attempt, returning the status and any Retry-After it carried.
+func (h *harness) doOnce(method, path, idempotencyKey string, payload, out any) (int, time.Duration) {
 	h.t.Helper()
 	var body *bytes.Reader
 	if payload != nil {
@@ -149,17 +213,31 @@ func (h *harness) do(method, path string, payload any, out any) int {
 	if h.csrf != "" {
 		req.Header.Set("X-Vantage-CSRF", h.csrf)
 	}
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	resp, err := h.http.Do(req)
 	if err != nil {
 		h.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// The body is drained but not decoded: handing a rate-limit error to a
+		// caller expecting a run would overwrite what it already had.
+		var wait time.Duration
+		if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs > 0 {
+			wait = time.Duration(secs) * time.Second
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode, wait
+	}
 	if out != nil {
 		if derr := json.NewDecoder(resp.Body).Decode(out); derr != nil && resp.StatusCode < 300 {
 			h.t.Fatalf("%s %s: decode: %v", method, path, derr)
 		}
 	}
-	return resp.StatusCode
+	return resp.StatusCode, 0
 }
 
 func origin() string {
@@ -218,16 +296,26 @@ func (h *harness) start(dataset, reason string) runView {
 	if !run.Simulated {
 		h.t.Fatal("a replay run did not report itself simulated")
 	}
-	// A preflight warning means the run cannot trade, and every invariant
-	// about trading would then pass for the wrong reason. Autopilot off and an
-	// expired authority are the two that bite.
+	h.assertRunCanTrade(run)
+	return run
+}
+
+// assertRunCanTrade fails on a preflight warning that means nothing will trade.
+//
+// Extracted so EVERY path that starts a run uses it. The determinism and speed
+// suites started theirs through `control` directly and so skipped this check,
+// and on a freshly seeded database -- where Autopilot is correctly OFF by
+// default -- four runs produced nothing, agreed perfectly, and were reported
+// as speed invariance. A preflight warning is the difference between "the
+// platform behaved identically" and "the platform did nothing four times".
+func (h *harness) assertRunCanTrade(run runView) {
+	h.t.Helper()
 	for _, w := range run.Warnings {
 		if strings.Contains(w, "Autopilot") || strings.Contains(w, "authority") {
 			h.t.Fatalf("this run cannot trade, so its invariants would be "+
 				"meaningless: %s", w)
 		}
 	}
-	return run
 }
 
 func (h *harness) stop(reason string) {
@@ -238,8 +326,25 @@ func (h *harness) stop(reason string) {
 // step advances the run, in bounded requests so no single call sits for
 // minutes.
 func (h *harness) step(total int) runView {
+	return h.stepInBatches(total, 20)
+}
+
+// stepInBatches advances the run with an explicit request size.
+//
+// The size MATTERS at any speed other than max. The engine paces each instant
+// by the bar duration divided by the speed, capped at two seconds, and that
+// sleep happens inside the request. The router gives every handler thirty
+// seconds, so twenty paced instants in one call needs forty seconds and the
+// request dies -- surfacing as "context deadline exceeded" from whichever
+// store query the pipeline happened to be running, which reads like a database
+// fault and is arithmetic. A paced caller must therefore ask for fewer
+// instants per request, not a longer deadline: the deadline is protecting
+// every other route.
+func (h *harness) stepInBatches(total, perRequest int) runView {
 	h.t.Helper()
-	const perRequest = 20
+	if perRequest < 1 {
+		perRequest = 1
+	}
 	var run runView
 	for done := 0; done < total; done += perRequest {
 		n := perRequest
@@ -251,6 +356,47 @@ func (h *harness) step(total int) runView {
 			break
 		}
 	}
+	return run
+}
+
+// advanceUntilDone runs the rest of the dataset in the BACKGROUND and polls.
+//
+// # Why a paced run cannot be stepped
+//
+// The engine's pacing sleep happens inside the step request and the router
+// gives every handler thirty seconds. At any finite speed the sleep is capped
+// at two seconds per instant, so eight instants is sixteen seconds of sleeping
+// before the pipeline has done anything -- and once the pipeline is actually
+// producing orders and fills, that lands over the deadline and the request
+// dies with "context deadline exceeded" from whichever query was in flight.
+// Shrinking the batch further just moves the cliff.
+//
+// So a paced run uses `advance`, which is the control an operator uses for
+// exactly this: it returns immediately, runs the dataset in the background at
+// the requested speed, and is polled. No request is ever held across a sleep.
+func (h *harness) advanceUntilDone(timeout time.Duration) runView {
+	h.t.Helper()
+	h.control("advance", nil)
+
+	deadline := time.Now().Add(timeout)
+	var run runView
+	for time.Now().Before(deadline) {
+		var out struct {
+			Run runView `json:"run"`
+		}
+		h.do("GET", "/api/v1/replay", nil, &out)
+		run = out.Run
+		switch run.State {
+		case "done", "failed", "stopped":
+			return run
+		}
+		// Five seconds, not one. Every admin route shares a bucket refilling
+		// half a token a second, so a tight poll spends the budget the run
+		// itself needs and learns nothing extra.
+		time.Sleep(5 * time.Second)
+	}
+	h.t.Fatalf("the replay did not finish within %s: state %q at %d instants",
+		timeout, run.State, run.Steps)
 	return run
 }
 
@@ -281,6 +427,21 @@ func psql(t *testing.T, sql string) string {
 		t.Fatalf("psql failed: %v\n%s\nSQL: %s", err, out, sql)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// shiftPrice moves a price by a fraction, in SQL.
+//
+// In SQL rather than in Go because the value is MONEY: parsing it into a
+// float64 to multiply it would be the one thing this repository does not do
+// with a price, even in a test, and even for a stop that is only ever
+// compared. Postgres numeric does the arithmetic exactly.
+func shiftPrice(t *testing.T, price, fraction string) string {
+	t.Helper()
+	if price == "" {
+		t.Fatal("no price to shift")
+	}
+	return psql(t, fmt.Sprintf(
+		"SELECT round(%s::numeric * (1 + (%s)::numeric), 2)::text", price, fraction))
 }
 
 func psqlInt(t *testing.T, sql string) int {

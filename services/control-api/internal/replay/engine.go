@@ -56,6 +56,16 @@ type Counters struct {
 	Steps         int `json:"steps"`
 	BarsProcessed int `json:"bars_processed"`
 	Errors        int `json:"errors"`
+	// WarmupInstants and EvaluationInstants split Steps by PHASE.
+	//
+	// Without the split, "140 steps" hides that the first sixty of them could
+	// not trade by design, and an operator reading a run that produced nothing
+	// cannot tell a strategy with no opinion from a run that never left
+	// warm-up. Counted in instants, like Steps, because a multi-instrument
+	// dataset has several rows per instant and the phase is a property of the
+	// instant.
+	WarmupInstants     int `json:"warmup_instants"`
+	EvaluationInstants int `json:"evaluation_instants"`
 }
 
 // Engine drives one replay at a time.
@@ -174,6 +184,10 @@ type Run struct {
 	EvaluationStart    time.Time `json:"evaluation_start"`
 	EvaluationEnd      time.Time `json:"evaluation_end"`
 	AllowWarmupTrading bool      `json:"allow_warmup_trading"`
+	// Phase is which half of the window the run is currently in: "warmup",
+	// "evaluation", or "" before it starts. Derived from the clock rather than
+	// stored, so it cannot disagree with the window it describes.
+	Phase string `json:"phase"`
 	// Inputs is everything else the run was declared with -- the account's
 	// starting state and the configurations in force. Gathered by the
 	// application, because the engine has no store and should not grow one.
@@ -566,6 +580,19 @@ func (e *Engine) stepOnceLocked(ctx context.Context) error {
 	//    or every quote is judged against the previous step's time.
 	e.clock.Advance(row.Timestamp.Add(dur))
 
+	// 2b. Announce the phase, and the moment it changes.
+	//
+	// A warm-up that produces no orders and an evaluation that produces no
+	// orders look identical from the outside, and the first is correct while
+	// the second is a finding. Recorded here, at the instant the clock crosses
+	// the boundary, rather than inferred afterwards from timestamps.
+	//
+	// In the LOG rather than in strategy_runs: a phase change is a fact about
+	// the run, not about a strategy's evaluation of a bar, and writing it as a
+	// strategy run would corrupt the per-bar watermark that decides whether a
+	// bar has been evaluated.
+	e.notePhaseLocked()
+
 	// 3. Market data the dataset does not carry.
 	//
 	// FX rates are the case that forced this. The account is ZAR and gold is
@@ -600,6 +627,49 @@ func (e *Engine) stepOnceLocked(ctx context.Context) error {
 
 	e.pace(dur)
 	return nil
+}
+
+// notePhaseLocked records which phase this instant belongs to, and logs the
+// transitions once each.
+//
+// Called with the engine's mutex held, from inside a step.
+func (e *Engine) notePhaseLocked() {
+	// Window() is lock-free by construction (an atomic pointer), so reading it
+	// while holding the mutex is safe -- see the accessor's own comment.
+	window := e.Window()
+	phase := "evaluation"
+	if window.InWarmup(e.clock.Now()) {
+		phase = "warmup"
+	}
+
+	if e.run.Phase == "" {
+		e.log.Info("replay warm-up started",
+			"event", "WARMUP_STARTED", "run", e.run.ID,
+			"dataset", e.run.DatasetID,
+			"warmup_start", e.run.WarmupStart,
+			"evaluation_start", e.run.EvaluationStart,
+			"allow_warmup_trading", e.run.AllowWarmupTrading,
+			"explanation", "indicators, regime and correlation are being built; "+
+				"no executable intent is produced until evaluation begins")
+	} else if e.run.Phase == "warmup" && phase == "evaluation" {
+		e.log.Info("replay warm-up complete",
+			"event", "WARMUP_COMPLETED", "run", e.run.ID,
+			"dataset", e.run.DatasetID,
+			"warmup_instants", e.counters.WarmupInstants)
+		e.log.Info("replay evaluation started",
+			"event", "EVALUATION_STARTED", "run", e.run.ID,
+			"dataset", e.run.DatasetID,
+			"evaluation_start", e.run.EvaluationStart,
+			"evaluation_end", e.run.EvaluationEnd,
+			"explanation", "from this instant a signal may become an order")
+	}
+
+	e.run.Phase = phase
+	if phase == "warmup" {
+		e.counters.WarmupInstants++
+		return
+	}
+	e.counters.EvaluationInstants++
 }
 
 // pace sleeps to approximate the requested speed.

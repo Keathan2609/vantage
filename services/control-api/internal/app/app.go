@@ -416,6 +416,12 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		a.Replay.SetOnStart(func(startCtx context.Context) error {
 			a.OMS.ResetRegimeTrackers()
 			a.OMS.ClearCorrelationMatrix()
+			// The venue's jitter sequence, which is in-process state exactly
+			// like the two above. Seeding it only at construction meant a
+			// SECOND run in one process continued the sequence, so two runs
+			// from a byte-identical snapshot produced the same decisions and
+			// different fill prices.
+			a.MockBroker.Reseed(replayVenueSeed)
 
 			if _, perr := a.Store.Market.PurgeReplayMarketData(startCtx); perr != nil {
 				return perr
