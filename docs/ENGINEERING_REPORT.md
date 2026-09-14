@@ -1723,15 +1723,16 @@ reset and reseeded database. Nothing is carried over from an earlier run.
 | Smoke: trading | **55 pass, 0 fail** |
 | Smoke: research | **35 pass, 0 fail** |
 | Gitleaks | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | 0 findings, 394 rules, 177 files |
+| Semgrep | 0 findings (`--config auto`, whole repository) |
 | govulncheck | 0 reachable (1 unreachable, in a required module) |
 | npm audit | 0 vulnerabilities |
 | Trivy filesystem (vuln) | 0 — `go.mod` and `package-lock.json` |
 | Trivy config | 0 HIGH/CRITICAL across all three Dockerfiles |
 | Trivy image — all three | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
-| Trivy image — unfiltered | control-api 0, web 0, research **54 HIGH/CRITICAL** from the Debian base, every one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
-| ZAP baseline — control plane | **0 FAIL, 0 WARN, 60 PASS**, 4 URLs |
-| ZAP baseline — terminal (production build) | **0 FAIL, 1 WARN, 68 PASS**, 17 URLs including `/operations` — the WARN is the documented `unsafe-inline` acceptance |
+| Trivy image — unfiltered | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
+| Trivy image — the 3 fixable findings, named | `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964, HIGH), `setuptools` 70.3.0 → 78.1.1 (CVE-2025-47273, HIGH) and → 83.0.0 (CVE-2026-59890, MEDIUM). **Verified inside the image rather than accepted on trust:** the importable setuptools is 84.0.0, above both fixes; there is no setuptools 70.3.0 on disk at all — the version Trivy reports comes from `setuptools==70.3.0` in `pip/_vendor/vendor.txt`, a record of what pip vendored rather than installed code; msgpack 1.1.2 exists only as `pip/_vendor/msgpack` |
+| ZAP baseline — control plane | **0 FAIL, 1 WARN, 66 PASS** (`-I -s`, unauthenticated, `127.0.0.1` only). The WARN is Non-Storable Content, informational |
+| ZAP baseline — terminal (production build) | **0 FAIL, 3 WARN, 64 PASS** (`-I -s`, unauthenticated). The substantive WARN is the documented `script-src 'unsafe-inline'` acceptance; the others are Non-Storable Content and Modern Web Application, both informational |
 | actionlint | 0 findings, after fixing the 8 shellcheck issues it reported |
 | Restore drill | PASSED — backup, restore into a scratch database, and financial-integrity verification |
 | OSV-Scanner | **NOT RUN — not installed, and until now not runnable in CI either.** `osv-scanner --version` reports `command not found`. The CI job referenced `google/osv-scanner-action@v1`, a tag that has never existed in that repository, so the step could not have resolved its action; pinning the workflows found it. The reference now points at a real commit (v2.5.1), but CI still has not run, so this remains NOT RUN. No other scanner was substituted and no OSV result is claimed anywhere in this report |
