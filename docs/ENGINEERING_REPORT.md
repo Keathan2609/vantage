@@ -1459,6 +1459,24 @@ cost time to diagnose:
   a database error for what is arithmetic. Paced runs use the background
   `advance` control, which is what an operator would use anyway.
 
+### One test in this repository fails on purpose
+
+`TestConditionScenariosThroughTheRealPipeline/G_conflicting_strategy_signals`
+is expected to FAIL, and the failure is the finding. It asserts that the
+platform must not end one instant holding non-rejected orders on both sides of
+one instrument — an invariant that holds under any aggregation policy — and the
+platform does exactly that, because `orchestrator.Decide` has no production
+caller.
+
+It is left red rather than skipped, softened or deleted. A skip would report
+"not exercised" for something that was exercised and failed; a softer assertion
+would report a pass for a platform that trades its own indecision. Its failure
+message names the cause and says what would make it green: wiring `Decide` into
+the decision path, which is a change that should be asked for in those words.
+
+Anyone running the replay suite should expect exactly this one failure and
+nothing else.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This
