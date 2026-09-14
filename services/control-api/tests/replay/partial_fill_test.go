@@ -277,14 +277,23 @@ func assertFillsReconcile(t *testing.T, orderID string) {
 			"own fills, so it is not a weighted average of them")
 	}
 
-	// Every fill was booked into the ledger exactly once.
+	// Every fill that MOVED MONEY was booked exactly once.
+	//
+	// Not "every fill has a ledger entry" -- that is false. `booking` writes a
+	// transaction only when realised P&L is non-zero or commission is
+	// positive, so an OPENING fill on a zero-commission instrument legitimately
+	// produces none, and TEST_XAU charges nothing per lot. The first leg of a
+	// split entry is exactly that case, which is how this was caught: the
+	// assertion reported the very fill the test exists to prove as a defect.
 	unbooked := psqlInt(t, fmt.Sprintf(`
 		SELECT count(*) FROM fills f
-		WHERE f.order_id = '%s'
-		  AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.fill_id = f.id)`,
+		WHERE f.order_id = '%s' AND f.commission > 0
+		  AND NOT EXISTS (SELECT 1 FROM transactions t
+		                  WHERE t.fill_id = f.id AND t.type = 'commission')`,
 		orderID))
 	if unbooked > 0 {
-		t.Errorf("%d fills have no ledger entry", unbooked)
+		t.Errorf("%d fills carried commission and have no commission ledger "+
+			"entry, so they bypassed booking", unbooked)
 	}
 	doubled := psqlInt(t, fmt.Sprintf(`
 		SELECT count(*) FROM (
