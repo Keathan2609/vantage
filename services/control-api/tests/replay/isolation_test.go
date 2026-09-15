@@ -158,18 +158,33 @@ func TestSeededHistoryCannotReachAReplaysClassification(t *testing.T) {
 			}
 
 			// 1. THE INVARIANT. The dataset's own shape is what was classified.
-			wrong := o.Regimes[c.wrongRegime]
+			//
+			// Scoped to THIS RUN. `observed.Regimes` counts every decision in
+			// the database, so the second case of this table saw the first
+			// case's 77 RANGING decisions and reported them as contamination.
+			// That was an assertion over the wrong population -- the same
+			// mistake this suite has made before -- and it is why the count is
+			// now taken from the run's own window rather than from the total.
+			regimeInRun := func(regime string) int {
+				return psqlInt(t, fmt.Sprintf(`
+					SELECT count(*) FROM decision_snapshots
+					WHERE regime = '%s'
+					  AND created_at >= (SELECT started_at FROM replay_runs WHERE id = '%s')`,
+					regime, runID))
+			}
+			wrong := regimeInRun(c.wrongRegime)
+			right := regimeInRun(c.wantRegime)
 			if wrong > 0 {
-				t.Errorf("%d decisions were classified %s while replaying a %s "+
-					"dataset with %d %s bars planted before the floor.\n"+
-					"The floor at %s did not bound the historical read, so the "+
-					"classification describes data the run does not own.\n%s",
+				t.Errorf("%d decisions IN THIS RUN were classified %s while "+
+					"replaying a %s dataset with %d %s bars planted before the "+
+					"floor.\nThe floor at %s did not bound the historical read, "+
+					"so the classification describes data the run does not own.\n%s",
 					wrong, c.wrongRegime, c.dataset, present, c.plantShape,
 					floor, o.describe())
 			}
-			if o.Regimes[c.wantRegime] == 0 {
-				t.Errorf("no decision was classified %s on a %s dataset; the "+
-					"regimes seen were %v\n%s",
+			if right == 0 {
+				t.Errorf("no decision in this run was classified %s on a %s "+
+					"dataset; the regimes across the whole database were %v\n%s",
 					c.wantRegime, c.dataset, o.Regimes, o.describe())
 			}
 
@@ -193,9 +208,9 @@ func TestSeededHistoryCannotReachAReplaysClassification(t *testing.T) {
 					"run began with almost no replay bars. The %d planted bars "+
 					"reached the 300-bar read.\n%s", present, o.describe())
 			}
-			t.Logf("scenario isolation: %d decisions classified %s, %d classified %s, "+
-				"%d short-window skips prove the read was floored",
-				o.Regimes[c.wantRegime], c.wantRegime, wrong, c.wrongRegime, shortWindows)
+			t.Logf("scenario isolation: in this run %d decisions classified %s, "+
+				"%d classified %s, and %d short-window skips prove the read was floored",
+				right, c.wantRegime, wrong, c.wrongRegime, shortWindows)
 		})
 	}
 }
