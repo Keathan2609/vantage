@@ -131,15 +131,21 @@ test.describe("authorisation", () => {
 
     // The UI is not the control. This drives the API from the authenticated
     // page context, which is exactly what a hostile script would do.
-    const status = await page.evaluate(async () => {
+    // The API base is passed IN rather than hard-coded. It used to be
+    // http://localhost:8080 in both fetches, so on a machine where the API
+    // runs anywhere else -- Hyper-V reserves the 7972-8371 range often enough
+    // to matter -- this failed with "TypeError: Failed to fetch", which reads
+    // as a broken authorisation check and is a broken URL.
+    const apiBase = process.env.VANTAGE_E2E_API_BASE_URL ?? "http://localhost:8080";
+    const status = await page.evaluate(async (base) => {
       const csrf = document.cookie
         .split("; ")
         .find((row) => row.startsWith("vantage_csrf="))
         ?.split("=")[1];
-      const accounts = await fetch("http://localhost:8080/api/v1/accounts", {
+      const accounts = await fetch(`${base}/api/v1/accounts`, {
         credentials: "include",
       }).then((r) => r.json());
-      const res = await fetch("http://localhost:8080/api/v1/orders", {
+      const res = await fetch(`${base}/api/v1/orders`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -158,7 +164,7 @@ test.describe("authorisation", () => {
         }),
       });
       return res.status;
-    });
+    }, apiBase);
 
     expect(status, "a viewer must be refused at the API, not just in the UI").toBe(403);
   });

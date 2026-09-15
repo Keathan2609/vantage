@@ -570,6 +570,9 @@ bracket the window between them — but it is a gap.
   Consequence for the scenarios: D and I now SKIP rather than assert, because
   each measures how an order was refused and no order is placed. Their skip
   messages say so and print the verdicts.
+- **Replay scenarios J and Q do not exist.** The letters in this repository are
+  A B C D E G H I K L M N T. A, D, G, I, M and N have been run against the
+  wired consensus; J and Q were asked for and there is nothing to run.
 - **A decision is recorded, but a no-trade verdict is not attributable to one
   strategy.** The `consensus` column carries every contribution, so the
   individual opinions are recoverable; `strategy_id` on the snapshot is null,

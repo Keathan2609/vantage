@@ -1672,6 +1672,83 @@ SKIP — D and I in the condition matrix, and all three classes in the
 determinism suite — and every one of them says in its own message what was
 shown and what was not.
 
+## 30h. Defects the authorisation milestone found
+
+Six. The milestone itself was authorising two known defects -- the unwired
+consensus policy and the four unenforced authority ceilings -- so these are
+what closing them turned up.
+
+**1. Every authority refusal reported under an account-level code.** FIXED.
+The ceilings bound, but a breach came back as `risk_limit_breached`,
+`exposure_limit_breached` or `daily_loss_limit_reached` -- the account's codes.
+An operator told "exposure_limit_breached" cannot tell whether to widen the
+account's limit or the authority, and those are different controls with
+different owners, different change procedures and different audit trails.
+Research reading the codes could not separate them either. Five codes now, one
+per ceiling, and no generic authority refusal: adding a sixth ceiling means
+adding a sixth code. `MaxLeverage` was split out of its `decimal.Min` fold for
+the same reason; the instrument's own `Spec.MaxLeverage` stays folded with the
+ACCOUNT's, because a venue property and an operator setting belong together
+and neither is a statement about permitted scope.
+
+**2. The one-decision-per-bar invariant was not durable.** FIXED, and this is
+the one that mattered. `command_idempotency` is keyed on
+`(account_id, idempotency_key)`, which is the right guard -- an in-memory flag
+would not survive the restart this platform is built to survive. But the
+consensus key was `strat-<leader>-v<version>-<instrument>-<bar>`, and the
+leader is whichever counted opinion was strongest on the routed side. That can
+differ between two evaluations of one bar: a confidence that moved, an opinion
+the policy discarded the second time, or the reducing rescue attributing to a
+different strategy entirely. Each would mint a different key and let a SECOND
+orchestrated order through for a bar that already had one. The key is now
+`consensus-<instrument>-<bar>` and names no strategy.
+
+**3. Three market-matrix scenarios asserted against evidence the fix stops
+producing.** FIXED -- two at source, one as a skip.
+
+T counted distinct sessions across ORDER-BEARING decisions. Session
+attribution is decision-time information: reading only traded instants
+describes the instants that traded, not the day. The no-trade snapshot now
+carries `market_data_health` in the OMS's own shape and T reads the run.
+
+B asserted only that the regime classifier was "not PINNED to one label". That
+weakening was recorded honestly at the time -- the sample was twelve
+order-bearing decisions, all at instants where a trend strategy fired, all
+TRENDING on a range-bound dataset. The sample is now every evaluated instant
+and the classifier reports RANGING on 77 of 77, so the assertion is
+STRENGTHENED: the dominant label on a range-bound dataset must be RANGING.
+"Not pinned" would now fail on a correct classifier.
+
+M needs `portfolio_correlation`, which lives in `risk_state` and is written by
+the OMS alone. With no order it did not run, which is a fact about the
+consensus rather than about correlation, so it skips saying that.
+
+**4. Reseeding without restarting the control plane fakes non-determinism.**
+DOCUMENTED, not a code defect. `dev-up.ps1 -Reset` drops the database volume,
+and a control plane left running keeps a pool to a database that no longer
+exists plus in-process state the reset cannot reach: the quant circuit breaker,
+the regime trackers, the correlation matrix and the mock venue's RNG.
+`Replay.SetOnStart` resets the last three at the start of every run, which is
+why this mostly looks fine and then does not.
+
+Measured: a determinism suite on a stale process gave `range-bound` a real
+digest on run 1 and the EMPTY-account digest on runs 2 and 3, while
+`trend-clean` and `correlated-pair` produced nothing at all. On a freshly
+started process: three identical digests per class, and run 1 of `range-bound`
+produced the SAME digest as before -- so the code was deterministic throughout
+and the suite was measuring a broken process. In CLAUDE.md now.
+
+**5. A Playwright test hard-coded the API port.** FIXED. `auth.spec.ts` fetched
+`http://localhost:8080` inside `page.evaluate`, so on a machine where the
+control plane runs anywhere else the test failed with "TypeError: Failed to
+fetch" -- which reads as a broken authorisation check and is a broken URL. The
+base is passed in now. Every other spec already read
+`VANTAGE_E2E_API_BASE_URL`.
+
+**6. The brief asked for replay scenarios J and Q, which do not exist.** The
+letters in this repository are A B C D E G H I K L M N T. Reported rather than
+invented; A, D, G, I, M and N were run.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This
@@ -1940,7 +2017,8 @@ trust needs the difference.
 | 53e | Replay speed invariance | COMPLETE | STEP, 1x, 10x and MAX over the same dataset produce one digest. Paced modes run through the background `advance` control, because the pacing sleep happens inside a step request and no batch size stays under the 30s handler deadline |
 | 53f | Restart safety | COMPLETE | A real process kill, not an in-process reset. A replay STOPS and requires an explicit operator resume from a verified durable cursor; nothing financial is created or destroyed; no bar is evaluated twice; a half-filled order is not re-booked. Crash TIMING is covered through the venue's deterministic fault modes plus a real kill: an unknown outcome (`timeout`) must gain no fill and must not become FILLED, and a lost execution (`lost_response`) must be imported exactly once or left as an open issue. Killing inside the OMS transaction itself is still **not** covered — that needs a fault that blocks at a named point |
 | 53g | Partial-fill coverage | COMPLETE — measured `TEST_XAU buy 0.1000 filled=0.0400 PARTIALLY_FILLED`, and `PARTIALLY_FILLED` with 0.0400 filled again after a real process kill | Was impossible: every order the R500 account produces is 0.01 lots, which is XAUUSD.m's minimum AND its step, so 40% of one order is not a representable quantity. A development-only synthetic instrument with a finer step makes 0.10 split into 0.04 and 0.06, within the authority's existing ceiling. Nothing under test was relaxed |
-| 53h | Multi-strategy consensus | **WIRED** | `orchestrator.EvaluateInstrument` is `Decide`'s production caller: the scheduler groups by instrument, evaluates every applicable strategy with `Execute:false`, aggregates, and places at most ONE order. Measured: 38 instants split the strategy set, 0 produced orders on both sides, against 38 of 38 before. The verdict is recorded on the decision snapshot. NOTE: under the default policy nothing clears the 0.55 confidence floor, so the platform places no autonomous orders at all — see 30g finding 12 |
+| 53h | Multi-strategy consensus | **WIRED** | `orchestrator.EvaluateInstrument` is `Decide`'s production caller: the scheduler groups by instrument, evaluates every applicable strategy with `Execute:false`, aggregates, and places at most ONE order, guarded durably by a `consensus-<instrument>-<bar>` idempotency key that names no strategy. Measured: 38 instants split the strategy set, 0 produced orders on both sides, against 38 of 38 before. The verdict, its vetoes, every contribution including the discarded ones, and the attribution policy are recorded on the decision snapshot. NOTE: under the default policy nothing clears the 0.55 confidence floor, so the platform places no autonomous orders at all — see 30g finding 12 |
+| 53i | Trading authority ceilings | **ENFORCED** | All five bind as their own pre-trade checks with their own rejection codes (`authority_max_order_quantity`, `authority_max_order_notional`, `authority_max_position_exposure`, `authority_daily_loss`, `authority_max_leverage`). The tighter of the authority and the account's own limit binds; the authority can only narrow. A strictly reducing order is exempt from all five, an over-closing position flip is not. Boundary-tested below, at and above each ceiling; 66-check smoke suite green |
 | 54 | CI workflows | PARTIAL — **cannot be verified locally** | `actionlint` passes with 0 findings and every command the workflows run has been executed by hand. GitHub Actions itself has never run: this repository has no remote. Nothing here may be read as "CI passed" |
 | 55 | Regulatory and live-trading readiness | **BLOCKED** | Deliberately. No FSP licence, no client-money segregation, no live venue agreement, no independent audit. Recorded in `COMPLIANCE_READINESS.md` and `REGULATORY_BOUNDARY.md` |
 
