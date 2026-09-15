@@ -239,6 +239,29 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
 - **A unique-violation aborts the whole Postgres transaction** (25P02). Use
   `ON CONFLICT DO NOTHING` and check `RowsAffected`; catching the error and
   continuing turns every duplicate into a 500.
+- **Hyper-V can swallow 8000 and 8080 between reboots.** Windows hands
+  Hyper-V/WSL/Docker a block of dynamic TCP ports at boot, and the block moves.
+  On this machine it came back as **7972-8371**, which contains BOTH documented
+  listeners: the research service on 8000 and the control plane on 8080.
+  Neither can bind, and the error names neither Hyper-V nor the range:
+
+  ```
+  [Errno 13] error while attempting to bind on address ('127.0.0.1', 8000):
+  [winerror 10013] an attempt was made to access a socket in a way forbidden
+  by its access permissions
+  ```
+
+  10013 reads as a permissions or antivirus problem and is neither. Confirm
+  with `netsh interface ipv4 show excludedportrange protocol=tcp` before
+  debugging anything else; nothing is listening on the port, so `netstat` shows
+  it free and misleads you. Reclaiming the range needs an ELEVATED shell
+  (`net stop winnat` / `net start winnat`, or a persistent exclusion for the
+  port), so from an unelevated one the only move is to listen somewhere
+  outside it: `VANTAGE_HTTP_ADDR`, `VANTAGE_QUANT_BASE_URL` and uvicorn's
+  `--port`. The replay harness reads `VANTAGE_E2E_BASE_URL_API` and defaults to
+  `http://localhost:8080`, so set it to match or every suite fails at start-up
+  looking like a dead control plane.
+
 - **Windows locks a running `.exe`** — rebuilds silently fail and you test the
   old binary. `Stop-Process -Name control-api -Force` first. Note that
   `go run` produces a process named `control-api`, not `vantage-api`.
