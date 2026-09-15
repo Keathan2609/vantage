@@ -1301,7 +1301,7 @@ either, and says so.
 
 ## 30g. Defects the restart and determinism milestone found
 
-Twelve, of which four would have made a suite report a pass while proving
+Thirteen, of which five would have made a suite report a pass while proving
 nothing. Those are the worst kind, and they are listed first.
 
 Findings 6 and 7 were recorded here as NOT fixed, because each changes the
@@ -1586,6 +1586,34 @@ was refused, and no order is placed. Three scenario guards had to be updated
 because they read evidence the fix deliberately stops producing; none of the
 invariants changed.
 
+**13. The determinism suite's vacuity guard stopped guarding, because of a
+change somewhere else.** FIXED, and it is the same defect as finding 1 arriving
+by a different route.
+
+The guard required `decisions_produced > 0`, and that used to imply the
+financial path had run: a decision snapshot was written only by the OMS, so a
+decision meant an order was attempted. Multi-strategy aggregation (finding 6)
+writes a no-trade snapshot BEFORE the OMS is reached, so the guard became
+satisfiable by a run that moved no money at all -- and five of the digest's
+seven sections then agree because all five are empty.
+
+**Measured before the fix:** three datasets, three runs each, all nine digests
+identical, suite PASSES -- over zero orders. Exactly the shape of finding 1.
+
+Fixed by measuring the thing the proxy stood in for. `orders_produced > 0` is
+now required separately, and its absence is a SKIP naming what was and was not
+shown. **After the fix:** `trend-clean` 77 decisions / 0 orders,
+`range-bound` 77 / 0, `correlated-pair` 58 / 0 -- all three SKIP with
+"evidence of decision determinism and not of financial determinism". The
+digests still agree three times over, which IS decision determinism and is
+logged as such.
+
+The speed suite carried the same proxy and now carries the same skip.
+
+The general lesson, stated once: a vacuity guard must measure the thing it
+stands in for, never a proxy that merely happened to imply it. A proxy holds
+until someone changes the code that made it true, and nothing then fails.
+
 ### The market matrix, isolated on its own seed
 
 Nine scenarios, each stepping its dataset to the end:
@@ -1639,8 +1667,10 @@ sides. Read the qualification in finding 12 before treating that as strong
 evidence — it passes with zero orders placed, and the test says so in its own
 log rather than leaving a reader to assume otherwise.
 
-Anyone running the replay suite should now expect no failures. Two subtests
-SKIP — D and I — and their skip messages say why.
+Anyone running the replay suite should now expect no failures. Several subtests
+SKIP — D and I in the condition matrix, and all three classes in the
+determinism suite — and every one of them says in its own message what was
+shown and what was not.
 
 ## 31. What is NOT verified
 

@@ -216,6 +216,35 @@ func TestDeterminismAcrossScenarioClasses(t *testing.T) {
 					firstCounts["decisions"],
 					describeDigest(firstComponents, firstCounts))
 			}
+
+			// A decision is no longer proof that the financial path ran.
+			//
+			// It used to be. A decision snapshot was written only by the OMS,
+			// so "this run produced decisions" implied an order was attempted,
+			// and the orders, fills, ledger, position and balance sections of
+			// the digest had something in them. Since multi-strategy
+			// aggregation, a verdict that declines writes its own no-trade
+			// snapshot BEFORE the OMS is reached -- so the guard above is
+			// satisfied by a run that moved no money at all, and five of the
+			// digest's seven sections agree because all five are empty.
+			//
+			// That is the same defect the guard above exists to prevent,
+			// reintroduced through the back door by a change somewhere else.
+			// The lesson is the one this suite keeps relearning: a vacuity
+			// guard has to measure the thing it stands in for, never a proxy
+			// that merely happened to imply it.
+			//
+			// Decision determinism IS still demonstrated above, and it is
+			// worth something: three runs produced byte-identical verdicts. It
+			// is not financial determinism, and only the skip can say so.
+			if firstCounts["orders_produced"] <= 0 {
+				t.Skipf("this dataset produced %d decisions of its own and NO "+
+					"orders, so the digests agree on identical verdicts and on "+
+					"five empty sections. That is evidence of decision "+
+					"determinism and not of financial determinism\n%s",
+					firstCounts["decisions_produced"],
+					describeDigest(firstComponents, firstCounts))
+			}
 		})
 	}
 }
@@ -320,6 +349,30 @@ func TestSpeedDoesNotAlterFinancialOutput(t *testing.T) {
 				"snapshot rather than a replay and proves nothing about speed",
 				r.mode, r.counts["orders_produced"], r.counts["fills_produced"])
 		}
+	}
+
+	// And the financial half, which a decision count stopped standing in for
+	// once a declining verdict began writing its own snapshot. See the longer
+	// note on the same guard in TestDeterminismAcrossScenarioClasses.
+	//
+	// A SKIP and not a failure: four modes that each evaluated the dataset and
+	// each declined to trade have demonstrated that SPEED did not change the
+	// decision, which is real. They have not demonstrated anything about fill
+	// prices, commission or the ledger, because none exist -- and reporting
+	// that as speed invariance is the exact claim this suite was once caught
+	// making.
+	traded := false
+	for _, r := range results {
+		if r.counts["orders_produced"] > 0 {
+			traded = true
+			break
+		}
+	}
+	if !traded {
+		t.Skipf("no mode produced an order, so the digests agree on four sets " +
+			"of identical verdicts and on empty orders, fills, ledger, " +
+			"positions and balance. Speed did not change the DECISION, which " +
+			"is what this run shows; it shows nothing about financial output")
 	}
 
 	// What the wall clock actually showed, reported rather than asserted.
