@@ -456,7 +456,20 @@ func (s *Service) recordNoTrade(ctx context.Context, req InstrumentRunRequest, f
 		// every query written against the other kind -- and a query that
 		// silently matches nothing is how a scenario passes while proving
 		// nothing.
-		EventContext:     marshalJSON(eventContextOf(lead)),
+		EventContext: marshalJSON(eventContextOf(lead)),
+		// The SAME shape the OMS writes, for the same reason: a query written
+		// against one kind of decision must not silently match nothing on the
+		// other. `session` is what attribution groups by, and recording it
+		// only on traded instants would describe the instants that traded
+		// rather than the day.
+		MarketDataHealth: marshalJSON(map[string]any{
+			"state":         lead.routing.health.State,
+			"issues":        lead.routing.health.Issues,
+			"quote_age_ms":  lead.routing.health.QuoteAge.Milliseconds(),
+			"market_status": string(domain.MarketOpen),
+			"session":       domain.PrimarySession(lead.routing.sessions),
+			"sessions":      lead.routing.sessions,
+		}),
 		PortfolioContext: marshalJSON(portfolio),
 		// No order was placed, so no strategy executes and none owns P&L.
 		Consensus:     marshalVerdict(v, regime, fresh, ""),

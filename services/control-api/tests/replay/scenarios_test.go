@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/vantage/control-api/internal/domain"
 )
 
 // The scenario matrix, driven through the real pipeline.
@@ -107,20 +109,39 @@ func datasetScenarios() []scenario {
 				// isolation gives ADX 11.2, efficiency 0.143 and RANGING. The
 				// dataset is range-bound; the window it was judged in was not.
 				//
-				// So this asserts only that the classifier is not PINNED --
-				// that something other than one label appears -- and the
-				// contamination is recorded as a finding rather than hidden by
-				// a weaker threshold that looks like a real check.
-				distinct := 0
-				for _, n := range o.Regimes {
-					if n > 0 {
-						distinct++
+				// That was measured when only ORDER-BEARING instants recorded a
+				// decision: twelve of them, all taken at instants where a trend
+				// strategy happened to fire, all labelled TRENDING. The
+				// assertion was weakened to "not pinned to one label" because
+				// asserting the right label would have failed on contaminated
+				// evidence.
+				//
+				// Since aggregation, EVERY evaluated instant records a decision
+				// whether or not it trades, so the sample is the whole run
+				// rather than the subset that traded -- and the classifier now
+				// reports RANGING across it. The assertion is therefore
+				// STRENGTHENED rather than relaxed: on a range-bound dataset
+				// the dominant label must be RANGING. "Not pinned" would now
+				// FAIL on a correct classifier, which is the wrong direction
+				// entirely.
+				dominant, count := "", 0
+				for regime, n := range o.Regimes {
+					if n > count {
+						dominant, count = regime, n
 					}
 				}
-				if distinct < 2 {
-					t.Errorf("every decision recorded the same regime (%v): the "+
-						"classifier is not responding to the market at all\n%s",
-						o.Regimes, o.describe())
+				if count == 0 {
+					t.Errorf("no decision recorded any regime at all\n%s", o.describe())
+				} else if dominant != string(domain.RegimeRanging) {
+					t.Errorf("a range-bound dataset was classified mostly %s "+
+						"(%v). The window a decision is judged in mixes seeded "+
+						"history with replay bars early in a run, and this is "+
+						"what that contamination looks like.\n%s",
+						dominant, o.Regimes, o.describe())
+				} else {
+					t.Logf("scenario B: the classifier reported %s on %d of %d "+
+						"decisions across a range-bound dataset",
+						dominant, count, o.Decisions)
 				}
 			},
 		},
@@ -229,6 +250,22 @@ func datasetScenarios() []scenario {
 				// rather than that it fired.
 				// Scoped to the most recent run's orders, so this asserts the
 				// check ran HERE rather than in some earlier scenario.
+				// `risk_state` is written by the OMS and by nothing else, so
+				// the correlation check can only appear on a decision that
+				// reached the risk engine. Since aggregation, a verdict that
+				// declines writes its own snapshot and places no order, so a
+				// run can hold many decisions and offer the risk engine none.
+				//
+				// With no order the check did not run, which is a fact about
+				// the consensus rather than about correlation. A skip says so;
+				// asserting anyway would report "correlation is not reaching
+				// the risk engine" for a run in which nothing reached it.
+				placed := psqlInt(t, `SELECT count(*) FROM orders WHERE replay_run_id = (
+					SELECT id FROM replay_runs ORDER BY started_at DESC LIMIT 1)`)
+				if placed == 0 {
+					t.Skipf("no order reached the risk engine in this run, so the "+
+						"correlation check had nothing to run on\n%s", o.describe())
+				}
 				withCheck := psqlInt(t, `SELECT count(*) FROM decision_snapshots d
 					WHERE d.risk_state::text LIKE '%portfolio_correlation%'
 					  AND d.id IN (
@@ -250,13 +287,20 @@ func datasetScenarios() []scenario {
 				// Crossing a session boundary must be visible in the recorded
 				// sessions, or session attribution is measuring one session and
 				// reporting it as several.
+				// Scoped to the RUN rather than to its orders.
+				//
+				// Session attribution is decision-time information and every
+				// evaluated instant now records it, traded or not. Reading
+				// only order-bearing decisions would describe the instants
+				// that traded rather than the day the dataset spans -- and on
+				// a run that places nothing it would describe nothing at all
+				// while looking like a broken session clock.
 				sessions := psqlInt(t, `SELECT count(DISTINCT
 					d.market_data_health->>'session') FROM decision_snapshots d
 					WHERE d.market_data_health ? 'session'
-					  AND d.id IN (
-						SELECT o.decision_id FROM orders o
-						WHERE o.replay_run_id = (
-							SELECT id FROM replay_runs ORDER BY started_at DESC LIMIT 1))`)
+					  AND d.created_at >= (
+						SELECT started_at FROM replay_runs
+						ORDER BY started_at DESC LIMIT 1)`)
 				if sessions < 2 {
 					t.Errorf("a dataset spanning a day boundary recorded %d distinct "+
 						"sessions\n%s", sessions, o.describe())

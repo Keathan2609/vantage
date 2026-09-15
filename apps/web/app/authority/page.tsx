@@ -245,6 +245,29 @@ export default function AuthorityPage() {
                     <dt>Max daily loss</dt>
                     <dd>{money(current.max_daily_loss, currency)}</dd>
                   </dl>
+                  {/*
+                    Says what these ceilings DO, because for a long time four of
+                    the five did nothing: they were stored, returned by the API
+                    and shown on this page, and no code compared an order
+                    against them. A field an operator narrows and is not
+                    protected by is worse than an absent one, so the screen now
+                    states the enforcement rather than implying it by being a
+                    form.
+                  */}
+                  <p className="muted" style={{ margin: "6px 0 0" }}>
+                    All five are enforced before an order reaches the venue, each
+                    as its own pre-trade check, and the tighter of the authority
+                    and the account&rsquo;s own risk limit binds. A refusal names
+                    which one:{" "}
+                    <span className="mono">authority_max_order_quantity</span>,{" "}
+                    <span className="mono">authority_max_order_notional</span>,{" "}
+                    <span className="mono">authority_max_position_exposure</span>,{" "}
+                    <span className="mono">authority_daily_loss</span> or{" "}
+                    <span className="mono">authority_max_leverage</span>. An order
+                    that strictly reduces an open position is exempt, so
+                    narrowing a ceiling can never trap you in exposure you
+                    already hold.
+                  </p>
                 </div>
 
                 <div className="panel-title" style={{ margin: "12px 0 5px" }}>

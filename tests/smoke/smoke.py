@@ -120,6 +120,11 @@ class Client:
     ) -> tuple[int, dict[str, Any]]:
         return self.request("POST", path, body, key)
 
+    def patch(
+        self, path: str, body: dict[str, Any] | None = None
+    ) -> tuple[int, dict[str, Any]]:
+        return self.request("PATCH", path, body)
+
     def login(self, email: str, password: str) -> dict[str, Any]:
         status, payload = self.post("/auth/login", {"email": email, "password": password})
         if status != 200:
@@ -599,6 +604,119 @@ def main() -> int:
         "an admin cannot place orders (separation of duties)",
         status == 403,
         str(payload)[:200],
+    )
+
+    section("Trading authority: privilege and partial updates")
+    # The authority carries five numeric ceilings, and for a long time four of
+    # them were stored, served and enforced by nothing. They bind now, which
+    # makes HOW they can be changed a security question rather than a form
+    # question: a partial update that silently reset one would widen a control
+    # the operator believed they had narrowed.
+
+    status, payload = trader.get(f"/authority/{account_id}")
+    granted = payload.get("authority") or {}
+    authority_id = granted.get("id")
+    check("the account's authority is readable", status == 200 and bool(authority_id))
+
+    # Every numeric ceiling is surfaced. A field that vanished from the
+    # response would be invisible to an operator reviewing what is in force.
+    ceilings = [
+        "max_order_quantity",
+        "max_order_notional",
+        "max_position_exposure",
+        "max_leverage",
+        "max_daily_loss",
+    ]
+    missing = [c for c in ceilings if granted.get(c) in (None, "")]
+    check(
+        "all five numeric ceilings are surfaced",
+        not missing,
+        f"missing: {missing}",
+    )
+    before = {c: granted.get(c) for c in ceilings}
+    scope_before = sorted(granted.get("allowed_instruments") or [])
+
+    # --- privilege ------------------------------------------------------
+    status, payload = viewer.patch(f"/authority/{authority_id}", {"automation_enabled": False})
+    check(
+        "a viewer cannot modify a trading authority",
+        status == 403,
+        f"{status} {str(payload)[:160]}",
+    )
+    status, payload = viewer.post("/authority", {"account_id": account_id})
+    check("a viewer cannot grant a trading authority", status == 403, str(payload)[:160])
+    status, payload = viewer.post(f"/authority/{authority_id}/revoke", {"reason": "smoke probe"})
+    check("a viewer cannot revoke a trading authority", status == 403, str(payload)[:160])
+
+    status, payload = anon.patch(f"/authority/{authority_id}", {"automation_enabled": False})
+    check(
+        "an unauthenticated caller cannot modify an authority",
+        status == 401,
+        f"{status} {str(payload)[:160]}",
+    )
+
+    # --- mass assignment ------------------------------------------------
+    # The ceilings are settable at GRANT time only. Accepting them here would
+    # mean an absent field had to mean something, and "unchanged" versus
+    # "zero" is exactly the ambiguity that disabled three protections once
+    # before. The decoder refuses unknown fields outright.
+    status, payload = trader.patch(
+        f"/authority/{authority_id}",
+        {"automation_enabled": True, "max_order_quantity": "99999"},
+    )
+    check(
+        "a ceiling cannot be smuggled through the partial-update endpoint",
+        status in (400, 422),
+        f"{status} {str(payload)[:200]}",
+    )
+
+    # --- partial update leaves everything else alone --------------------
+    status, payload = trader.patch(f"/authority/{authority_id}", {"automation_enabled": True})
+    check("a trader may update the authority they hold", status == 200, str(payload)[:200])
+
+    status, payload = trader.get(f"/authority/{account_id}")
+    after = payload.get("authority") or {}
+    unchanged = [c for c in ceilings if after.get(c) != before.get(c)]
+    check(
+        "a partial update does not disturb any numeric ceiling",
+        not unchanged,
+        f"changed: {[(c, before.get(c), after.get(c)) for c in unchanged]}",
+    )
+    check(
+        "a partial update does not clear the instrument scope",
+        sorted(after.get("allowed_instruments") or []) == scope_before,
+        f"{scope_before} -> {sorted(after.get('allowed_instruments') or [])}",
+    )
+    check(
+        "an omitted boolean is not read as false",
+        after.get("automation_enabled") is True,
+        str(after.get("automation_enabled")),
+    )
+
+    # Omitting the boolean entirely must leave it as it is, rather than
+    # defaulting to false and quietly switching automation off.
+    status, _ = trader.patch(
+        f"/authority/{authority_id}", {"allowed_instruments": scope_before}
+    )
+    status, payload = trader.get(f"/authority/{account_id}")
+    check(
+        "omitting automation_enabled leaves it unchanged",
+        status == 200
+        and (payload.get("authority") or {}).get("automation_enabled") is True,
+        str((payload.get("authority") or {}).get("automation_enabled")),
+    )
+
+    # --- cross-account --------------------------------------------------
+    # An authority is looked up through its OWNER, so an id belonging to
+    # someone else is not found rather than forbidden: the two answers must be
+    # indistinguishable or the endpoint becomes an existence oracle.
+    status, payload = trader.patch(
+        "/authority/00000000-0000-0000-0000-000000000000", {"automation_enabled": True}
+    )
+    check(
+        "an authority that is not yours cannot be modified",
+        status in (403, 404),
+        f"{status} {str(payload)[:160]}",
     )
 
     status, payload = trader.get(f"/activity/{account_id}")

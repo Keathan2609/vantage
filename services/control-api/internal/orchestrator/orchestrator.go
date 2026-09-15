@@ -154,6 +154,12 @@ type routingContext struct {
 	eventRisk     string
 	eventName     string
 	eventAt       time.Time
+	// sessions is the venue sessions active at the decision instant. Carried
+	// so a no-trade snapshot records the same market context an order's
+	// snapshot does; session attribution that only covered traded instants
+	// would describe the instants that traded, not the day.
+	sessions []domain.SessionName
+	health   domain.MarketDataHealth
 }
 
 // EvaluateAndRoute runs one strategy and optionally routes its signal.
@@ -417,6 +423,8 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 			eventRisk:     eventRisk,
 			eventName:     eventName,
 			eventAt:       eventAt,
+			sessions:      sessions,
+			health:        health,
 		},
 	}
 
