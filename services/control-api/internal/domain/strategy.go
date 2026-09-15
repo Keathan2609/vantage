@@ -243,14 +243,22 @@ type DecisionSnapshot struct {
 	RegimeReasons    json.RawMessage
 	AuthorityState   json.RawMessage
 	MarketDataHealth json.RawMessage
-	SignalAction     SignalAction
-	Confidence       decimal.Decimal
-	RequestedQty     decimal.Decimal
-	ApprovedQty      decimal.Decimal
-	Outcome          string // accepted | rejected | no_trade
-	OutcomeCode      string
-	OutcomeReason    string
-	CreatedAt        time.Time
+	// Consensus is the multi-strategy verdict this decision came out of:
+	// the action, the confidence, the vetoes, the rationale and every
+	// contribution including the DISCARDED ones.
+	//
+	// Empty for a manual order and for a decision taken before aggregation
+	// existed, which is honest -- no verdict was reached, as opposed to a
+	// verdict of no_trade, which is a decision and has one.
+	Consensus     json.RawMessage
+	SignalAction  SignalAction
+	Confidence    decimal.Decimal
+	RequestedQty  decimal.Decimal
+	ApprovedQty   decimal.Decimal
+	Outcome       string // accepted | rejected | no_trade
+	OutcomeCode   string
+	OutcomeReason string
+	CreatedAt     time.Time
 }
 
 // StrategyAllocation caps how much of an account's risk budget one strategy may

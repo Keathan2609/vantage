@@ -389,16 +389,17 @@ func (s *ResearchStore) CreateDecisionTx(ctx context.Context, tx pgx.Tx, d domai
 			model_version, instrument_id, bar_time, quote, indicators, features, event_context,
 			portfolio_context, risk_state, authority_state, market_data_health, signal_action,
 			confidence, requested_quantity, approved_quantity, outcome, outcome_code, outcome_reason,
-			regime, regime_policy_version, regime_reasons)
+			regime, regime_policy_version, regime_reasons, consensus)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-			$23,$24,$25)
+			$23,$24,$25,$26)
 		RETURNING id`,
 		d.AccountID, d.StrategyID, d.StrategyVersion, d.ModelID, d.ModelVersion,
 		d.InstrumentID, d.BarTime, orEmpty(d.Quote), orEmpty(d.Indicators), orEmpty(d.Features),
 		orEmpty(d.EventContext), orEmpty(d.PortfolioContext), orEmpty(d.RiskState),
 		orEmpty(d.AuthorityState), orEmpty(d.MarketDataHealth), string(d.SignalAction),
 		d.Confidence, d.RequestedQty, d.ApprovedQty, d.Outcome, d.OutcomeCode, d.OutcomeReason,
-		regimeOrUnknown(d.Regime), d.RegimePolicyVersion, orEmptyList(d.RegimeReasons)).
+		regimeOrUnknown(d.Regime), d.RegimePolicyVersion, orEmptyList(d.RegimeReasons),
+		orEmpty(d.Consensus)).
 		Scan(&id)
 	return id, mapError(err)
 }
@@ -506,13 +507,13 @@ func (s *ResearchStore) Decision(ctx context.Context, accountID, id uuid.UUID) (
 		       instrument_id, bar_time, quote, indicators, features, event_context,
 		       portfolio_context, risk_state, authority_state, market_data_health,
 		       signal_action, confidence, requested_quantity, approved_quantity,
-		       outcome, outcome_code, outcome_reason, created_at
+		       outcome, outcome_code, outcome_reason, consensus, created_at
 		FROM decision_snapshots WHERE id = $1 AND account_id = $2`, id, accountID).
 		Scan(&d.ID, &d.AccountID, &d.StrategyID, &d.StrategyVersion, &d.ModelID, &d.ModelVersion,
 			&d.InstrumentID, &d.BarTime, &d.Quote, &d.Indicators, &d.Features, &d.EventContext,
 			&d.PortfolioContext, &d.RiskState, &d.AuthorityState, &d.MarketDataHealth,
 			&d.SignalAction, &d.Confidence, &d.RequestedQty, &d.ApprovedQty,
-			&d.Outcome, &d.OutcomeCode, &d.OutcomeReason, &d.CreatedAt)
+			&d.Outcome, &d.OutcomeCode, &d.OutcomeReason, &d.Consensus, &d.CreatedAt)
 	return d, mapError(err)
 }
 

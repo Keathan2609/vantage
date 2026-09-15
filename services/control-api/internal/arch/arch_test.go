@@ -660,3 +660,88 @@ func readFile(t *testing.T, rel string) string {
 	}
 	return string(raw)
 }
+
+// TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict guards the fix for the
+// defect that made the platform hedge itself.
+//
+// The scheduler used to call EvaluateAndRoute once per (strategy, instrument)
+// with Execute:true, and each call routed its own signal into the OMS. Two
+// strategies disagreeing on one bar therefore produced two opposing orders and
+// both filled -- 38 of 38 splits on the conflicting-signals replay fixture.
+// Every individual control was working; each order on its own was reasonable,
+// which is why nothing downstream could see it.
+//
+// The rule this pins: the autonomous path evaluates through
+// EvaluateInstrument, which aggregates with orchestrator.Decide and places at
+// most one order. A single strategy may still route its OWN signal, but only
+// from the operator-facing endpoint where exactly one strategy was named and
+// there is nothing to aggregate.
+func TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict(t *testing.T) {
+	scheduler := readFile(t, "internal/scheduler/scheduler.go")
+
+	if strings.Contains(scheduler, "EvaluateAndRoute(") {
+		t.Error("the scheduler calls EvaluateAndRoute directly.\n" +
+			"That routes one strategy's signal on its own, so two strategies " +
+			"disagreeing on a bar place two opposing orders. The autonomous " +
+			"path must go through EvaluateInstrument, which aggregates first.")
+	}
+	if !strings.Contains(scheduler, "EvaluateInstrument(") {
+		t.Fatal("the scheduler no longer calls EvaluateInstrument: the autonomous " +
+			"path has stopped aggregating multi-strategy disagreement")
+	}
+
+	// The aggregate itself must evaluate with Execute FALSE. A single true
+	// there would restore the old behaviour exactly, one strategy at a time,
+	// while every other part of this file still looked correct.
+	aggregate := readFile(t, "internal/orchestrator/aggregate.go")
+	if !strings.Contains(aggregate, "Execute: false") {
+		t.Error("orchestrator.EvaluateInstrument does not evaluate its strategies " +
+			"with Execute:false. Each evaluation would route its own signal and " +
+			"the aggregation would place a further order on top.")
+	}
+
+	// And the verdict must come from the policy rather than from a local
+	// re-implementation of it.
+	if !strings.Contains(aggregate, "Decide(") {
+		t.Fatal("orchestrator.EvaluateInstrument does not call Decide: the " +
+			"aggregation policy has been bypassed or duplicated")
+	}
+
+	// EvaluateAndRoute keeps exactly one production caller outside the
+	// aggregate: the operator endpoint that names one strategy.
+	root := repoRoot(t)
+	call := regexp.MustCompile(`\.EvaluateAndRoute\(`)
+	callers := map[string]int{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		body, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		if n := len(call.FindAll(body, -1)); n > 0 {
+			rel, _ := filepath.Rel(root, path)
+			callers[filepath.ToSlash(rel)] = n
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	expected := map[string]bool{
+		// An operator running one named strategy, with DryRun choosing
+		// whether it routes. One opinion is not a disagreement.
+		"internal/httpapi/handlers_research.go": true,
+		// The aggregate, which always passes Execute:false.
+		"internal/orchestrator/aggregate.go": true,
+	}
+	for file := range callers {
+		if !expected[file] {
+			t.Errorf("%s calls EvaluateAndRoute and is not a known caller.\n"+
+				"New callers are fine, but a caller that passes Execute:true is a "+
+				"second automated order path that does not aggregate.", file)
+		}
+	}
+}

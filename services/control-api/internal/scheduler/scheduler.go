@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -309,6 +310,23 @@ func (s *Scheduler) runStrategiesUnleased(ctx context.Context) error {
 				continue
 			}
 
+			// Grouped BY INSTRUMENT, not by strategy, and that inversion is
+			// the point.
+			//
+			// The loop used to be strategy-then-instrument, routing each
+			// signal as it was produced. Two strategies disagreeing on one bar
+			// therefore placed two opposing orders and both filled -- measured
+			// at 38 of 38 splits on the conflicting-signals replay fixture.
+			// Every individual control was working; the account was hedging
+			// itself one permitted order at a time, and nothing downstream is
+			// positioned to see that, because each order on its own is
+			// reasonable.
+			//
+			// Collecting the applicable strategies per instrument first is
+			// what lets orchestrator.Decide aggregate them into ONE verdict
+			// before anything reaches the OMS.
+			byInstrument := map[string][]orchestrator.StrategyRef{}
+			var instrumentOrder []string
 			for _, strategy := range strategies {
 				if !strategy.Enabled || strategy.HighRisk {
 					continue
@@ -324,23 +342,41 @@ func (s *Scheduler) runStrategiesUnleased(ctx context.Context) error {
 					if !authority.PermitsInstrument(instrumentID) {
 						continue
 					}
-					outcome, err := s.deps.Orchestrator.EvaluateAndRoute(ctx, orchestrator.RunRequest{
-						Account: account, StrategyID: strategy.ID, InstrumentID: instrumentID,
-						Version: version.Version, Execute: true,
+					if _, seen := byInstrument[instrumentID]; !seen {
+						instrumentOrder = append(instrumentOrder, instrumentID)
+					}
+					byInstrument[instrumentID] = append(byInstrument[instrumentID],
+						orchestrator.StrategyRef{ID: strategy.ID, Version: version.Version})
+				}
+			}
+			// Sorted so the order of evaluation does not depend on map
+			// iteration. The verdict is order-independent by construction, but
+			// a replay that visits instruments in a different order writes its
+			// rows in a different order, and the result digest is taken over
+			// them.
+			sort.Strings(instrumentOrder)
+
+			for _, instrumentID := range instrumentOrder {
+				outcome, err := s.deps.Orchestrator.EvaluateInstrument(ctx,
+					orchestrator.InstrumentRunRequest{
+						Account: account, InstrumentID: instrumentID,
+						Strategies: byInstrument[instrumentID], Execute: true,
 						ActorUserID: owner.ID, ActorRole: owner.Role,
 						RequestID: "scheduler",
 					})
-					if err != nil {
-						log.Error("strategy evaluation failed",
-							"strategy", strategy.Key, "instrument", instrumentID,
-							"error", err.Error())
-						continue
-					}
-					if outcome.Executed {
-						log.Info("strategy order placed",
-							"strategy", strategy.Key, "instrument", instrumentID,
-							"action", string(outcome.Action))
-					}
+				if err != nil {
+					log.Error("instrument evaluation failed",
+						"instrument", instrumentID, "strategies", len(byInstrument[instrumentID]),
+						"error", err.Error())
+					continue
+				}
+				if outcome.Executed {
+					log.Info("consensus order placed",
+						"instrument", instrumentID,
+						"action", string(outcome.Verdict.Action),
+						"confidence", outcome.Verdict.Confidence.String(),
+						"strategies", len(byInstrument[instrumentID]),
+						"reducing", outcome.Reducing)
 				}
 			}
 		}

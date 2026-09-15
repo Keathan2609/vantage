@@ -111,6 +111,47 @@ type Outcome struct {
 	Indicators  map[string]string
 	SignalID    *uuid.UUID
 	RunID       uuid.UUID
+
+	// alreadyEvaluated reports that this bar had a run row before this call,
+	// so the strategy's opinion for it exists but was recorded elsewhere.
+	//
+	// Distinct from an ordinary skip. A strategy that declined has no opinion
+	// and the aggregate can proceed without it; a strategy whose opinion is
+	// INVISIBLE makes the aggregate a decision over a partial set, which is
+	// not the decision the policy describes.
+	alreadyEvaluated bool
+
+	// routing is everything an order would need, kept so that a caller which
+	// evaluated SEVERAL strategies can aggregate first and place once.
+	//
+	// Unexported deliberately. It is for EvaluateInstrument, in this package;
+	// the HTTP layer builds its response field by field and must never start
+	// serialising this by accident.
+	routing routingContext
+}
+
+// routingContext is the decision's inputs, carried past the evaluation so an
+// order can be placed from an AGGREGATE of several evaluations rather than
+// from whichever one happened to run.
+//
+// `valid` is false whenever no fresh opinion was produced -- a skip, a failed
+// evaluation, or a bar this strategy had already been evaluated on. That
+// distinction matters: an aggregate built from a partial set of opinions is
+// not the decision the policy describes, and the caller refuses rather than
+// deciding on whoever answered.
+type routingContext struct {
+	valid bool
+
+	strategy      domain.Strategy
+	version       int
+	validRegimes  []string
+	instrument    domain.Instrument
+	quote         domain.Quote
+	limits        domain.RiskLimits
+	signal        quant.SignalResponse
+	barTime       time.Time
+	barsAvailable int
+	eventRisk     string
 }
 
 // EvaluateAndRoute runs one strategy and optionally routes its signal.
@@ -339,8 +380,9 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 			"strategy", strategy.Key, "instrument", req.InstrumentID,
 			"bar_time", barTime.Format(time.RFC3339))
 		return Outcome{
-			Status: domain.RunSkipped,
-			Action: domain.SignalNoTrade,
+			Status:           domain.RunSkipped,
+			Action:           domain.SignalNoTrade,
+			alreadyEvaluated: true,
 			SkipReason: fmt.Sprintf(
 				"this bar (%s) has already been evaluated for %s; a strategy is "+
 					"evaluated once per completed bar",
@@ -352,6 +394,22 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	outcome := Outcome{
 		Status: runStatus, Action: action, Confidence: signal.Confidence,
 		Explanation: signal.Explanation, Indicators: signal.Indicators, RunID: runID,
+		// Everything an order would need, whether or not this evaluation
+		// routes one itself. A fresh opinion exists at this point: the run row
+		// was written for THIS bar, so the per-bar guard let it through.
+		routing: routingContext{
+			valid:         true,
+			strategy:      strategy,
+			version:       version,
+			validRegimes:  strategyVersion.ValidRegimes,
+			instrument:    instrument,
+			quote:         quote,
+			limits:        limits,
+			signal:        signal,
+			barTime:       barTime,
+			barsAvailable: len(bars),
+			eventRisk:     eventRisk,
+		},
 	}
 
 	// Record the signal even when it is not actionable: "the strategy looked
@@ -389,13 +447,23 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		return outcome, nil
 	}
 
-	// ---- Size against the account's OWN budget ----------------------------
 	side, _ := action.Side()
-	sized, rejection, err := s.size(ctx, req.Account, instrument, quote, limits, side, signal)
+	order, rejection, executed, err := s.place(ctx, placement{
+		Account:       req.Account,
+		StrategyID:    req.StrategyID,
+		ActorUserID:   req.ActorUserID,
+		ActorRole:     req.ActorRole,
+		RequestID:     req.RequestID,
+		CorrelationID: runID.String(),
+		rc:            outcome.routing,
+		side:          side,
+		regime:        signal.MarketRegime(),
+	})
 	if err != nil {
 		return outcome, err
 	}
-	if rejection != nil {
+	if rejection != nil && order == nil {
+		// Not sizeable. A refusal before the pipeline, recorded the same way.
 		outcome.Rejection = rejection
 		outcome.Status = domain.RunNoSignal
 		log.Info("signal not sizeable",
@@ -403,41 +471,116 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		return outcome, nil
 	}
 
+	outcome.Order = order
+	outcome.Rejection = rejection
+	outcome.Executed = executed
+	return outcome, nil
+}
+
+// placement is one order to place, derived either from a single strategy's
+// signal or from an aggregate verdict over several.
+type placement struct {
+	Account       domain.Account
+	StrategyID    uuid.UUID
+	ActorUserID   uuid.UUID
+	ActorRole     domain.Role
+	RequestID     string
+	CorrelationID string
+
+	// rc is the decision's inputs, from the evaluation that produced the
+	// leading opinion. Its signal supplies the stop and target.
+	rc     routingContext
+	side   domain.OrderSide
+	regime domain.Regime
+
+	// maxQuantity caps the sized quantity. Zero means uncapped, and it only
+	// ever LOWERS the size -- risk may only reduce, so an aggregate cannot
+	// ask for more than the account's own budget allows.
+	//
+	// Set when the order is permitted only because it reduces an open
+	// position: capping at the position's size is what keeps it strictly
+	// reducing rather than a side flip that opens fresh exposure.
+	maxQuantity decimal.Decimal
+
+	// consensus is the serialised aggregate verdict, or nil when one strategy
+	// routed its own signal.
+	consensus json.RawMessage
+	// keyPrefix distinguishes the idempotency key of an aggregated order from
+	// a single strategy's on the same bar. Empty uses the single-strategy
+	// form, which is the key existing rows were written under.
+	keyPrefix string
+}
+
+// place sizes an intent against the account's budget and hands it to the OMS.
+//
+// Returns (nil, rejection, false, nil) when the intent could not be sized at
+// all, which for a small account is the common and correct outcome.
+func (s *Service) place(ctx context.Context, p placement) (*domain.Order, *domain.Rejection, bool, error) {
+	// ---- Size against the account's OWN budget ----------------------------
+	sized, rejection, err := s.size(ctx, p.Account, p.rc.instrument, p.rc.quote,
+		p.rc.limits, p.side, p.rc.signal)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if rejection != nil {
+		return nil, rejection, false, nil
+	}
+
+	// The cap, applied after sizing and never before it. Sizing answers "what
+	// can this account afford to risk"; the cap answers "how much of that is
+	// this order permitted to be". Taking the smaller of the two can only
+	// shrink the order, which is the only direction risk may move.
+	if p.maxQuantity.IsPositive() && sized.Quantity.GreaterThan(p.maxQuantity) {
+		sized.Quantity = p.rc.instrument.Spec.NormaliseQuantity(p.maxQuantity)
+	}
+	if !sized.Quantity.IsPositive() {
+		rej := domain.NewRejection(domain.RejectQuantityInvalid,
+			"No quantity survives the account's risk budget and this order's cap.")
+		return nil, &rej, false, nil
+	}
+
 	// ---- Hand to the order pipeline ---------------------------------------
 	// The idempotency key is derived from the strategy, version, instrument and
 	// BAR TIME. Re-running the same bar therefore produces the same key and is
 	// suppressed as a duplicate, which is what stops a scheduler restart from
 	// double-trading a signal.
-	idempotencyKey := fmt.Sprintf("strat-%s-v%d-%s-%s",
-		req.StrategyID.String()[:8], version, req.InstrumentID, barTime.UTC().Format("20060102T150405Z"))
+	prefix := p.keyPrefix
+	if prefix == "" {
+		prefix = "strat"
+	}
+	version := p.rc.version
+	idempotencyKey := fmt.Sprintf("%s-%s-v%d-%s-%s", prefix,
+		p.StrategyID.String()[:8], version, p.rc.instrument.ID,
+		p.rc.barTime.UTC().Format("20060102T150405Z"))
 
+	barTime := p.rc.barTime
 	result, err := s.oms.PlaceOrder(ctx, oms.PlaceOrderRequest{
 		IdempotencyKey:  idempotencyKey,
-		ActorUserID:     req.ActorUserID,
-		ActorRole:       req.ActorRole,
-		AccountID:       req.Account.ID,
-		InstrumentID:    req.InstrumentID,
-		Side:            side,
+		ActorUserID:     p.ActorUserID,
+		ActorRole:       p.ActorRole,
+		AccountID:       p.Account.ID,
+		InstrumentID:    p.rc.instrument.ID,
+		Side:            p.side,
 		Type:            domain.OrderTypeMarket,
 		Quantity:        sized.Quantity,
 		StopLoss:        sized.StopLoss,
 		TakeProfit:      sized.TakeProfit,
 		TimeInForce:     domain.TIFGoodTilCancelled,
 		Source:          domain.SourceStrategy,
-		StrategyID:      &req.StrategyID,
+		StrategyID:      &p.StrategyID,
 		StrategyVersion: &version,
-		RequestHash: oms.HashRequest(req.Account.ID, req.InstrumentID, side,
+		RequestHash: oms.HashRequest(p.Account.ID, p.rc.instrument.ID, p.side,
 			domain.OrderTypeMarket, sized.Quantity, nil, nil, sized.StopLoss, sized.TakeProfit,
 			domain.TIFGoodTilCancelled),
-		RequestID:     req.RequestID,
-		CorrelationID: runID.String(),
+		RequestID:     p.RequestID,
+		CorrelationID: p.CorrelationID,
 
 		// The research plane classified the market's shape from these very
 		// bars. Passing it on is what lets the decision record the regime it
 		// was taken in; without it the OMS can only infer RISK_OFF and
 		// EVENT_RISK from its own evidence and every ordinary decision is
 		// UNKNOWN.
-		ReportedRegime: signal.MarketRegime(),
+		ReportedRegime: p.regime,
 		// The bar this decision was taken on, so the decision and the signal
 		// that produced it join on it. Without this the decision snapshot's
 		// bar_time column stayed NULL for every row ever written.
@@ -445,21 +588,20 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		// How much history that classification rested on. The OMS refuses to
 		// characterise a market below domain.MinBarsForRegime and cannot count
 		// bars itself without a query per decision.
-		BarsAvailable: len(bars),
+		BarsAvailable: p.rc.barsAvailable,
+		// The aggregate this order came out of, recorded on the snapshot and
+		// never consulted by the OMS.
+		Consensus: p.consensus,
 	})
 	if err != nil {
 		// An identical bar already produced this order: the idempotency key
 		// caught a re-run. That is the guard working, not a failure.
 		if errors.Is(err, oms.ErrCommandInFlight) {
-			return outcome, nil
+			return nil, nil, false, nil
 		}
-		return outcome, fmt.Errorf("orchestrator: place order: %w", err)
+		return nil, nil, false, fmt.Errorf("orchestrator: place order: %w", err)
 	}
-
-	outcome.Order = result.Order
-	outcome.Rejection = result.Rejection
-	outcome.Executed = result.Accepted()
-	return outcome, nil
+	return result.Order, result.Rejection, result.Accepted(), nil
 }
 
 // sizedOrder is a signal converted into an order the account can afford.

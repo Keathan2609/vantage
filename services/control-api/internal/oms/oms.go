@@ -233,6 +233,15 @@ type PlaceOrderRequest struct {
 	// domain.MinBarsForRegime the verdict is UNKNOWN rather than a guess, and
 	// the OMS cannot count bars itself without a query per decision.
 	BarsAvailable int
+	// Consensus is the multi-strategy verdict this order came out of, already
+	// serialised by the orchestrator.
+	//
+	// Opaque to the OMS on purpose. The aggregation policy lives in
+	// `orchestrator`, and an OMS that could read the verdict would eventually
+	// be asked to act on it -- which would put a second decision-maker inside
+	// the order transaction. It is carried, recorded, and never consulted.
+	// Empty for a manual order, which has no consensus behind it.
+	Consensus json.RawMessage
 }
 
 // Result is the outcome of a placement attempt.
@@ -1587,6 +1596,11 @@ func (s *Service) buildDecisionSnapshot(req PlaceOrderRequest, account domain.Ac
 		// Recorded rather than recomputed later: moved thresholds would
 		// otherwise reattribute historical P&L to regimes the platform never
 		// acted in.
+		// The multi-strategy verdict, carried through verbatim. Recorded on
+		// the ACCEPTED and the REJECTED snapshot alike: an order the risk
+		// engine refused still had a reason for existing, and the aggregate
+		// that produced it is part of that reason.
+		Consensus:           req.Consensus,
 		Regime:              g.regime.Regime,
 		RegimePolicyVersion: g.regime.PolicyVersion,
 		RegimeReasons:       marshal(g.regime.Reasons),
