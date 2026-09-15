@@ -239,6 +239,24 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
 - **A unique-violation aborts the whole Postgres transaction** (25P02). Use
   `ON CONFLICT DO NOTHING` and check `RowsAffected`; catching the error and
   continuing turns every duplicate into a 500.
+- **Reseeding WITHOUT restarting the control plane makes a replay
+  non-deterministic.** `dev-up.ps1 -Reset` drops the database volume, and a
+  control plane left running keeps a connection pool to a database that no
+  longer exists plus in-process state the reset cannot reach: the quant
+  circuit breaker, the regime trackers, the correlation matrix and the mock
+  venue's RNG. `Replay.SetOnStart` resets the last three at the start of every
+  run, which is why this mostly looks fine -- and then does not.
+
+  Measured: a determinism suite on a stale process gave `range-bound` a real
+  digest on run 1 and the EMPTY-account digest on runs 2 and 3, while
+  `trend-clean` and `correlated-pair` produced nothing at all. That reads as a
+  non-deterministic platform. The same suite on a freshly started process gave
+  three identical digests per class, and run 1 of `range-bound` produced the
+  same digest as before — so the code was deterministic the whole time.
+
+  Order matters: stop the control plane, THEN reseed, THEN start it, THEN
+  re-enable Autopilot. Every one of those steps, every time.
+
 - **Hyper-V can swallow 8000 and 8080 between reboots.** Windows hands
   Hyper-V/WSL/Docker a block of dynamic TCP ports at boot, and the block moves.
   On this machine it came back as **7972-8371**, which contains BOTH documented
