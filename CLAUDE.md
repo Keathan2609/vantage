@@ -338,11 +338,13 @@ services/control-api
                         scheduler jobs. Development only.
   internal/orchestrator consensus.go is the multi-strategy aggregation policy:
                         a PURE function, versioned, vetoes before votes, and
-                        never a majority vote -- but NOTHING CALLS IT YET.
-                        The scheduler calls EvaluateAndRoute once per
-                        (strategy, instrument) and each call routes its own
-                        signal, so disagreement is not aggregated. Wiring it in
-                        is a change to the decision path and needs saying so.
+                        never a majority vote. aggregate.go is its ONLY
+                        production caller: the scheduler groups by instrument
+                        and calls EvaluateInstrument, which evaluates every
+                        applicable strategy with Execute:false, aggregates, and
+                        places at most ONE order. EvaluateAndRoute still routes
+                        a single signal, but only from the operator endpoint
+                        that named one strategy -- an arch test pins that.
                         scenario_test.go is the ten deterministic market
                         scenarios, at the decision layer.
   internal/broker       Adapter interface; broker/mock is the paper venue,

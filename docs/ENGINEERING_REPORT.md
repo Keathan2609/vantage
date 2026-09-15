@@ -1301,8 +1301,14 @@ either, and says so.
 
 ## 30g. Defects the restart and determinism milestone found
 
-Eleven, of which four would have made a suite report a pass while proving
+Twelve, of which four would have made a suite report a pass while proving
 nothing. Those are the worst kind, and they are listed first.
+
+Findings 6 and 7 were recorded here as NOT fixed, because each changes the
+trading path and needed asking for in those words. Both have since been asked
+for and both are fixed; their entries are rewritten in place rather than moved,
+so the measurement that found them stays next to the measurement that closed
+them. Finding 12 is what fixing 6 revealed, and it is open.
 
 **1. Four speed modes agreed on four empty accounts.** The research service was
 not running. Every strategy evaluation failed with "research service
@@ -1347,52 +1353,120 @@ therefore untested. Fixed with a development-only synthetic instrument whose
 finer step makes 0.10 split into 0.04 and 0.06, inside the authority's existing
 0.10-lot ceiling. Nothing under test was relaxed.
 
-**6. The consensus policy has no production caller, and the platform
-demonstrably trades both sides of one instrument at one instant.**
-`orchestrator.Decide` is implemented, versioned, documented as the
-multi-strategy aggregation and unit-tested by ten decision-layer scenarios.
-Nothing calls it. The scheduler calls `EvaluateAndRoute` once per (strategy,
-instrument) and each call routes its own signal into the OMS independently.
+**6. The consensus policy had no production caller, and the platform
+demonstrably traded both sides of one instrument at one instant.** FIXED.
 
-This is not only structural. **Measured on one run of the condition matrix:**
+`orchestrator.Decide` was implemented, versioned, documented as the
+multi-strategy aggregation and unit-tested by ten decision-layer scenarios, and
+nothing called it. The scheduler called `EvaluateAndRoute` once per (strategy,
+instrument) and each call routed its own signal into the OMS independently.
+
+This was not only structural. **Measured on one run of the condition matrix:**
 the strategy set produced opposing actions on the same bar at 38 instants per
 dataset, and on two of those datasets the platform FILLED both a buy and a sell
 on XAUUSD.m at the same bar — 19 instants on one, 31 on the other. Sample:
-`2027-07-27 08:00`, `buy:FILLED, sell:FILLED`.
+`2027-07-27 08:00`, `buy:FILLED, sell:FILLED`. On the fixture built to provoke
+disagreement it was 38 of 38.
 
-In this fixture that happened to net +7.34 ZAR across 32 ledger entries,
-because commission on the seeded instrument is zero and the trend was rising.
-That is luck, not design: on any venue charging commission, opening and closing
-the same instrument at one instant is a guaranteed cost, and it is precisely
-what `consensus.go`'s own comment says must not happen — "netting opposing
-signals into whichever side has more weight is how a system ends up trading its
-own indecision". Here it does not even net; it takes both sides.
+In that fixture it happened to net +7.34 ZAR across 32 ledger entries, because
+commission on the seeded instrument is zero and the trend was rising. That is
+luck, not design: on any venue charging commission, opening and closing the
+same instrument at one instant is a guaranteed cost, and it is precisely what
+`consensus.go`'s own comment says must not happen — "netting opposing signals
+into whichever side has more weight is how a system ends up trading its own
+indecision". It did not even net; it took both sides.
 
-Found by scenario G, which asserts the invariant that holds under any
-aggregation policy rather than one that does not run, and whose failure message
-names this cause so the next reader does not have to rediscover it. NOT fixed:
-wiring `Decide` in is a change to the decision path and needs asking for in
-those words.
+**The fix.** The scheduler's loop is inverted to instrument-then-strategy and
+calls `orchestrator.EvaluateInstrument`, which evaluates every applicable
+strategy with `Execute:false`, aggregates them with `Decide`, and places at
+most ONE order. **Re-measured on a freshly seeded stack in replay mode: the
+same 38 instants split the set, and 0 produced orders on both sides.**
 
-**7. Four of the trading authority's five numeric ceilings do not bind.** A
-trading authority is described throughout this repository as a technical
+Four properties were designed in rather than discovered afterwards:
+
+- Aggregation never increases a size. The verdict chooses a direction; sizing
+  is still against the account's own budget, and a cap can only lower it.
+- Aggregation never traps a position. A no-trade verdict still lets through a
+  COUNTED opinion that opposes an open position, capped at that position's size
+  so it is strictly reducing. Without this, the change meant to stop the
+  account hedging itself would have stopped it UNWINDING — the same inversion
+  rule 8 has already had to be applied to three separate checks. A veto is no
+  exception: a release inside the blackout window is an argument for being able
+  to close.
+- It abstains rather than deciding over a partial set. If one strategy's
+  opinion for a bar was recorded elsewhere, the missing opinion may be the one
+  that would have produced the disagreement.
+- It down-weights a crowded family. Two trend strategies are one read of the
+  market counted twice.
+
+The verdict is recorded on the decision snapshot — a new `consensus` column,
+migration 0018 — with the action, confidence, policy version, vetoes, rationale
+and every contribution INCLUDING the discarded ones. A no-trade verdict now
+writes its own snapshot; the table has always permitted `outcome='no_trade'`
+with null strategy columns, because a verdict is not attributable to one
+strategy. `internal/arch` pins that the scheduler cannot go back to routing a
+single signal.
+
+**What the fix revealed, and what is NOT fixed.** See finding 12.
+
+**7. Four of the trading authority's five numeric ceilings did not bind.**
+FIXED.
+
+A trading authority is described throughout this repository as a technical
 control, and it carries `MaxOrderQuantity`, `MaxOrderNotional`,
-`MaxPositionExposure`, `MaxLeverage` and `MaxDailyLoss`. Only `MaxLeverage` is
+`MaxPositionExposure`, `MaxLeverage` and `MaxDailyLoss`. Only `MaxLeverage` was
 compared against anything — `risk.Evaluate` takes `decimal.Min` of it and the
-account's limit. The other four are stored, returned by the API, and written
-into every decision snapshot's `authority_state`, and are never read by the
-risk engine, the OMS or the orchestrator. An operator who narrows
-`MaxOrderQuantity` to 0.10 sees it accepted, sees it echoed back, sees it
-recorded on every decision, and is not protected by it.
+account's limit. The other four were stored, returned by the API, and written
+into every decision snapshot's `authority_state`, and were never read by the
+risk engine, the OMS or the orchestrator. An operator who narrowed
+`MaxOrderQuantity` to 0.10 saw it accepted, saw it echoed back, saw it recorded
+on every decision, and was not protected by it. That is worse than not having
+the field, because it creates confidence that nothing supports.
 
-That is worse than not having the field, because it creates confidence that
-nothing supports. Found while checking whether a 0.10-lot test order would be
-refused, which it is not — by the authority. NOT fixed in this milestone:
-making a control start refusing orders is a change to the trading path and
-should be asked for deliberately. `TestTheAuthoritysNumericCeilingsAreDocument-
-edAsEnforcedOrNot` pins the current shape so that adding another unenforced
-ceiling is a deliberate act, and the fix is to compare each one the way
-`MaxLeverage` already is: the more restrictive of the two, never the looser.
+**The fix.** Each now reports its OWN named risk check —
+`authority_max_order_quantity`, `authority_max_order_notional`,
+`authority_max_position_exposure`, `authority_max_daily_loss` — rather than
+being folded into the account's with a `min()`. Two checks that must both pass
+are arithmetically the same bound and they say which one was hit, which a fold
+cannot: "Order quantity 0.50 against a limit of 0.10" does not tell an operator
+whether to widen the account limit or the authority, and those have different
+fixes and different audit trails.
+
+All four carry the reducing exemption. For notional, position exposure and
+daily loss that mirrors the account-level check beside them. For order quantity
+it does NOT — **the account's own `max_order_quantity` check has no reducing
+exemption** — and the difference is deliberate: a per-order size cap limits
+exposure, so rule 8 applies, and without it narrowing the authority would make
+a position opened while it was wider impossible to close in one order. That is
+the flatten trap the notional cap, the event blackout and the daily-loss limit
+each had to be rescued from, and adding a fifth place for it to appear is not
+an acceptable price for enforcement.
+
+An unset ceiling REFUSES. It cannot reach the engine from the database — every
+column is `NOT NULL` with a `> 0` CHECK and the create handler rejects a
+non-positive value — so a zero means the authority was not loaded, and "no
+bound" is the most permissive reading available.
+
+The decision snapshot now records all five rather than one, because a refusal
+has to be reconstructible from the snapshot alone: the authority is versioned
+and may have been narrowed since the decision was taken.
+
+`TestTheAuthoritysNumericCeilingsAreDocumentedAsEnforcedOrNot` was UPDATED, not
+deleted. Its purpose was never to describe the gap — it is there so that adding
+a sixth ceiling without enforcing it is a deliberate act with a failing test in
+front of it, and a record thrown away once it reads "all enforced" protects
+nothing.
+
+**Measured on the dev fixture: no change in outcome, as predicted.** The seeded
+authority is `MaxOrderQuantity` 0.10, `MaxOrderNotional` 2500 ZAR,
+`MaxPositionExposure` 2500 ZAR, `MaxDailyLoss` 15 ZAR, and the seeded
+strategies place 0.01-lot orders. 23 Go packages pass, `-race` clean.
+
+**Left open, recorded rather than fixed in passing:** the ACCOUNT-level
+`max_order_quantity` check still has no reducing exemption. It is a
+pre-existing gap on a limit that is looser than the authority's here, so it is
+not reachable through this change, but it is a fourth place rule 8 would apply
+and closing it changes a bound that was not in scope.
 
 **8. The seed refused to complete, correctly.** Adding the synthetic instrument
 broke `control-api seed`: it generates historical bars for every enabled
@@ -1469,6 +1543,49 @@ cost time to diagnose:
   a database error for what is arithmetic. Paced runs use the background
   `advance` control, which is what an operator would use anyway.
 
+**12. Nothing autonomous trades under the default consensus policy.** NOT
+fixed, deliberately, and it is the most important thing this milestone found.
+
+Wiring `Decide` in (finding 6) applied two gates for the first time: a 0.55
+confidence floor, and the strategy's own declared regime validity.
+`StrategyVersion.ValidRegimes` had exactly the same shape as the authority
+ceilings — stored, served, and read by nothing. Verified by grep: before this
+change the only non-plumbing reader of `ValidRegimes` did not exist.
+
+**Measured on a freshly seeded stack, across every fixture played:**
+
+| strategy | actionable signals | confidence | outcome |
+| --- | --- | --- | --- |
+| `rsi_mean_reversion` | sells | 0.66-0.73 | discarded: declares RANGING/LOW_VOLATILITY, regime is TRENDING |
+| `macd_momentum` | buys | 0.51-0.54 | discarded: below the 0.55 floor |
+| `donchian_breakout` | buys | 0.31-0.44 | discarded: below the 0.55 floor |
+| `ma_trend_crossover` | none | — | produced no actionable signal |
+| `bollinger_zscore_reversion` | none | — | produced no actionable signal |
+
+Every verdict is therefore "no strategy offered an actionable opinion that
+survived the policy". On `trend-clean`, which placed 33 orders before the
+wiring, the result is 77 no-trade verdicts and **0 orders**.
+
+The thresholds are NOT tuned to fix this, and that is a decision rather than an
+omission. `DefaultConsensusPolicy`'s own comment says they are "a starting
+posture for a platform that has never traded unattended, chosen so that the
+common outcome is NO TRADE", and that loosening them "should be made against
+paper-forward evidence, not to make a demo trade". Loosening them so a fixture
+trades is precisely what it forbids.
+
+The open question is whether the research plane's confidence is calibrated to
+the scale the policy was written against, or whether the seeded strategies are
+genuinely this unconvinced. That is a research question and needs evidence, not
+a constant.
+
+**Consequence for the scenarios, stated plainly:** scenario G PASSES — 38
+instants split the strategy set, 0 produced orders on both sides — but it
+passes with ZERO orders, which is weaker evidence than passing with orders, and
+the test logs that in those words. D and I now SKIP: each measures how an order
+was refused, and no order is placed. Three scenario guards had to be updated
+because they read evidence the fix deliberately stops producing; none of the
+invariants changed.
+
 ### The market matrix, isolated on its own seed
 
 Nine scenarios, each stepping its dataset to the end:
@@ -1507,23 +1624,23 @@ A real `Stop-Process` and a real restart, not an in-process reset. Four cases:
 | Lost execution (`lost_response`) | PASS. The venue held 13 executions against 12 local fills; after the restart exactly **1** was imported, none twice, no reconciliation issue left open, and the balance reconciled at 497.95 against the ledger-derived total |
 | Interrupted runs are discoverable | PASS. Three abandoned runs listed with a resume verdict each, naming the cursor, the total, and the fact that the cursor is persisted at most every two seconds so a resume may re-play a few instants the per-bar guard will produce nothing for |
 
-### One test in this repository fails on purpose
+### No test in this repository fails on purpose any more
 
 `TestConditionScenariosThroughTheRealPipeline/G_conflicting_strategy_signals`
-is expected to FAIL, and the failure is the finding. It asserts that the
-platform must not end one instant holding non-rejected orders on both sides of
-one instrument — an invariant that holds under any aggregation policy — and the
-platform does exactly that, because `orchestrator.Decide` has no production
-caller.
+was left red for a whole milestone, and the failure was the finding: the
+platform ended single instants holding non-rejected orders on both sides of one
+instrument, because `orchestrator.Decide` had no production caller. It was kept
+red rather than skipped, softened or deleted — a skip would have reported "not
+exercised" for something that was exercised and failed, and a softer assertion
+would have reported a pass for a platform trading its own indecision.
 
-It is left red rather than skipped, softened or deleted. A skip would report
-"not exercised" for something that was exercised and failed; a softer assertion
-would report a pass for a platform that trades its own indecision. Its failure
-message names the cause and says what would make it green: wiring `Decide` into
-the decision path, which is a change that should be asked for in those words.
+It PASSES now: 38 instants split the strategy set and 0 produced orders on both
+sides. Read the qualification in finding 12 before treating that as strong
+evidence — it passes with zero orders placed, and the test says so in its own
+log rather than leaving a reader to assume otherwise.
 
-Anyone running the replay suite should expect exactly this one failure and
-nothing else.
+Anyone running the replay suite should now expect no failures. Two subtests
+SKIP — D and I — and their skip messages say why.
 
 ## 31. What is NOT verified
 
@@ -1793,7 +1910,7 @@ trust needs the difference.
 | 53e | Replay speed invariance | COMPLETE | STEP, 1x, 10x and MAX over the same dataset produce one digest. Paced modes run through the background `advance` control, because the pacing sleep happens inside a step request and no batch size stays under the 30s handler deadline |
 | 53f | Restart safety | COMPLETE | A real process kill, not an in-process reset. A replay STOPS and requires an explicit operator resume from a verified durable cursor; nothing financial is created or destroyed; no bar is evaluated twice; a half-filled order is not re-booked. Crash TIMING is covered through the venue's deterministic fault modes plus a real kill: an unknown outcome (`timeout`) must gain no fill and must not become FILLED, and a lost execution (`lost_response`) must be imported exactly once or left as an open issue. Killing inside the OMS transaction itself is still **not** covered — that needs a fault that blocks at a named point |
 | 53g | Partial-fill coverage | COMPLETE — measured `TEST_XAU buy 0.1000 filled=0.0400 PARTIALLY_FILLED`, and `PARTIALLY_FILLED` with 0.0400 filled again after a real process kill | Was impossible: every order the R500 account produces is 0.01 lots, which is XAUUSD.m's minimum AND its step, so 40% of one order is not a representable quantity. A development-only synthetic instrument with a finer step makes 0.10 split into 0.04 and 0.06, within the authority's existing ceiling. Nothing under test was relaxed |
-| 53h | Multi-strategy consensus | **IMPLEMENTED BUT NOT WIRED** | `orchestrator.Decide` is a pure, versioned, unit-tested aggregation policy with **no production caller**. The scheduler routes each strategy's signal independently, so disagreement is not aggregated |
+| 53h | Multi-strategy consensus | **WIRED** | `orchestrator.EvaluateInstrument` is `Decide`'s production caller: the scheduler groups by instrument, evaluates every applicable strategy with `Execute:false`, aggregates, and places at most ONE order. Measured: 38 instants split the strategy set, 0 produced orders on both sides, against 38 of 38 before. The verdict is recorded on the decision snapshot. NOTE: under the default policy nothing clears the 0.55 confidence floor, so the platform places no autonomous orders at all — see 30g finding 12 |
 | 54 | CI workflows | PARTIAL — **cannot be verified locally** | `actionlint` passes with 0 findings and every command the workflows run has been executed by hand. GitHub Actions itself has never run: this repository has no remote. Nothing here may be read as "CI passed" |
 | 55 | Regulatory and live-trading readiness | **BLOCKED** | Deliberately. No FSP licence, no client-money segregation, no live venue agreement, no independent audit. Recorded in `COMPLIANCE_READINESS.md` and `REGULATORY_BOUNDARY.md` |
 

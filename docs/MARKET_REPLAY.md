@@ -546,29 +546,35 @@ bracket the window between them — but it is a gap.
 
 ## Not yet done
 
-- **The consensus policy is not on the execution path.**
-  `orchestrator.Decide` — the multi-strategy aggregation this repository
-  documents as "vetoes before votes, never a majority vote" — is implemented,
-  unit-tested and **has no production caller**. The scheduler calls
-  `EvaluateAndRoute` once per (strategy, instrument) and each call routes its
-  own signal independently, so two strategies disagreeing at one instant are
-  not aggregated at all. **Measured:** on one run of the condition matrix the
-  platform filled both a buy and a sell on XAUUSD.m at the same bar, at 19
-  instants on one dataset and 31 on another. On the fixture built to provoke
-  disagreement, the set split 38 times and **all 38** produced filled orders on
-  both sides. Scenario G measures what actually happens rather than assuming
-  the policy runs, and is left FAILING because the failure is the finding.
+- **Nothing autonomous trades under the default consensus policy.** This is
+  the consequence of wiring `orchestrator.Decide` in, and it is a finding, not
+  a defect. `DefaultConsensusPolicy` discards an opinion below 0.55 confidence
+  and one whose strategy declares itself invalid in the prevailing regime.
+  **Measured on a freshly seeded stack, every fixture:** the only actionable
+  opinions the five PAPER strategies produce are `macd_momentum` buys at
+  0.51-0.54, `donchian_breakout` buys at 0.31-0.44 — all below the floor — and
+  `rsi_mean_reversion` sells at 0.66-0.73, which clear the floor and are
+  discarded because the strategy declares RANGING/LOW_VOLATILITY and the regime
+  is TRENDING. `ma_trend_crossover` and `bollinger_zscore_reversion` produced no
+  actionable signal at all. On `trend-clean`, which placed 33 orders before the
+  wiring, the result is 77 no-trade verdicts and **0 orders**.
 
-  The useful contrast is with scenario I: on `capacity-exhausted` the set also
-  split 38 times and produced **zero** both-sided fills, because the tightened
-  exposure ceilings refused the opening leg. The controls that exist do bind.
-- **Four of the trading authority's five numeric ceilings do not bind.**
-  `MaxOrderQuantity`, `MaxOrderNotional`, `MaxPositionExposure` and
-  `MaxDailyLoss` are stored, served and written into every decision snapshot's
-  `authority_state`, and are compared against nothing. Only `MaxLeverage` binds,
-  through `decimal.Min` with the account's limit in `risk.Evaluate`. Not a
-  replay property, found during replay work, and recorded here because a
-  replay's results are only as meaningful as the controls that shaped them.
+  The thresholds are NOT tuned to fix this. Their own comment says they are "a
+  starting posture for a platform that has never traded unattended, chosen so
+  that the common outcome is NO TRADE", and that loosening them "should be made
+  against paper-forward evidence, not to make a demo trade". Changing them to
+  make a fixture trade is exactly that. The open question is whether the
+  strategies' confidence is calibrated to a scale the policy was written
+  against, and it is a research question rather than a wiring one.
+
+  Consequence for the scenarios: D and I now SKIP rather than assert, because
+  each measures how an order was refused and no order is placed. Their skip
+  messages say so and print the verdicts.
+- **A decision is recorded, but a no-trade verdict is not attributable to one
+  strategy.** The `consensus` column carries every contribution, so the
+  individual opinions are recoverable; `strategy_id` on the snapshot is null,
+  because the verdict belongs to the set. Any query that groups decisions by
+  strategy therefore sees order-bearing decisions only.
 - **The model is still not attributed.** A decision now records the market
   regime, the regime policy version and the evidence behind it, along with the
   replay run; the model that informed it is still not recorded, so P&L cannot
