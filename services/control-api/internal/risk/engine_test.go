@@ -524,6 +524,7 @@ func TestEveryDocumentedCheckIsEvaluated(t *testing.T) {
 		domain.CheckAuthorityOrderNotional,
 		domain.CheckAuthorityPositionExposure,
 		domain.CheckAuthorityDailyLoss,
+		domain.CheckAuthorityLeverage,
 	}
 	for _, name := range expected {
 		check(t, d, name) // fails the test if absent

@@ -141,7 +141,23 @@ const (
 	CheckAuthorityOrderNotional    RiskCheckName = "authority_max_order_notional"
 	CheckAuthorityPositionExposure RiskCheckName = "authority_max_position_exposure"
 	CheckAuthorityDailyLoss        RiskCheckName = "authority_max_daily_loss"
+	CheckAuthorityLeverage         RiskCheckName = "authority_max_leverage"
 )
+
+// AuthorityCeilingChecks is every check that enforces a trading authority's
+// numeric ceiling, in the order the engine evaluates them.
+//
+// Exported so a test can assert the set is complete rather than restating it,
+// and so an operator-facing surface can say which authority fields bind
+// without hard-coding a list that drifts. A ceiling added to
+// TradingAuthority without an entry here has no enforcement.
+var AuthorityCeilingChecks = []RiskCheckName{
+	CheckAuthorityDailyLoss,
+	CheckAuthorityOrderQuantity,
+	CheckAuthorityOrderNotional,
+	CheckAuthorityPositionExposure,
+	CheckAuthorityLeverage,
+}
 
 // RiskCheckResult records one check's verdict. Every check reports its limit
 // and the observed value so a rejection is explainable without re-running it.

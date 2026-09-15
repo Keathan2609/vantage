@@ -36,9 +36,7 @@ import (
 func TestTheAuthoritysNumericCeilingsAreDocumentedAsEnforcedOrNot(t *testing.T) {
 	// where each ceiling is compared, or "" when it is compared nowhere.
 	enforcedAt := map[string]string{
-		// Folded into the account's own leverage check with decimal.Min,
-		// alongside the instrument's Spec.MaxLeverage.
-		"MaxLeverage": "risk.Evaluate, check max_leverage",
+		"MaxLeverage": "risk.Evaluate, check authority_max_leverage",
 
 		// Each reports its own named check, so a refusal says which bound was
 		// hit and what it was. Both the account's check and the authority's
@@ -92,11 +90,10 @@ func TestTheAuthoritysNumericCeilingsAreDocumentedAsEnforcedOrNot(t *testing.T) 
 // without updating the record would leave the record describing a check name
 // that no longer exists.
 func TestEachAuthorityCeilingHasItsOwnCheckName(t *testing.T) {
-	names := []RiskCheckName{
-		CheckAuthorityOrderQuantity,
-		CheckAuthorityOrderNotional,
-		CheckAuthorityPositionExposure,
-		CheckAuthorityDailyLoss,
+	names := AuthorityCeilingChecks
+	if len(names) != 5 {
+		t.Fatalf("AuthorityCeilingChecks lists %d checks; the authority carries "+
+			"5 numeric ceilings and each needs one", len(names))
 	}
 	seen := map[RiskCheckName]bool{}
 	for _, n := range names {
@@ -116,7 +113,8 @@ func TestEachAuthorityCeilingHasItsOwnCheckName(t *testing.T) {
 
 	// And they must not collide with the account-level names they sit beside.
 	for _, account := range []RiskCheckName{
-		CheckOrderQuantity, CheckOrderNotional, CheckInstrumentExposure, CheckDailyLoss,
+		CheckOrderQuantity, CheckOrderNotional, CheckInstrumentExposure,
+		CheckDailyLoss, CheckLeverage,
 	} {
 		if seen[account] {
 			t.Errorf("authority check name collides with the account-level %q", account)

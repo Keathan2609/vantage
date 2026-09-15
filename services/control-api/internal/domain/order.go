@@ -419,6 +419,23 @@ const (
 	// an internal error: nothing went wrong locally, and the order genuinely
 	// did not happen.
 	RejectReconciledAbsent RejectCode = "reconciled_absent_at_venue"
+
+	// The trading authority's five numeric ceilings, one code each.
+	//
+	// SEPARATE from the account-level codes they sit beside, and separate from
+	// each other. A trading authority and a risk limit are different controls
+	// with different owners, different change procedures and different audit
+	// trails: an operator told only "exposure_limit_breached" cannot tell
+	// whether to widen the account's limit or the authority, and collapsing
+	// every authority refusal into one code would lose which ceiling bound.
+	//
+	// These are the codes research and audit read. Adding a sixth ceiling
+	// means adding a sixth code; there is no generic authority refusal.
+	RejectAuthorityOrderQuantity    RejectCode = "authority_max_order_quantity"
+	RejectAuthorityOrderNotional    RejectCode = "authority_max_order_notional"
+	RejectAuthorityPositionExposure RejectCode = "authority_max_position_exposure"
+	RejectAuthorityDailyLoss        RejectCode = "authority_daily_loss"
+	RejectAuthorityLeverage         RejectCode = "authority_max_leverage"
 	// RejectReconciliationRequired refuses an AUTOMATED order because
 	// reconciliation has unresolved divergence on the account.
 	//

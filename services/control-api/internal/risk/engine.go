@@ -254,7 +254,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Observed: dayPnL.String(),
 		Message: fmt.Sprintf("Daily loss %s against the trading authority's limit of %s.",
 			dayPnL.Abs().String(), in.Authority.MaxDailyLoss.String()),
-		Code: domain.RejectDailyLoss,
+		Code: domain.RejectAuthorityDailyLoss,
 	})
 
 	dd := in.Snapshot.State.DrawdownFraction()
@@ -331,7 +331,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Observed: in.Intent.Quantity.String(),
 		Message: fmt.Sprintf("Order quantity %s against the trading authority's limit of %s.",
 			in.Intent.Quantity, in.Authority.MaxOrderQuantity),
-		Code: domain.RejectRiskLimit,
+		Code: domain.RejectAuthorityOrderQuantity,
 	})
 
 	execPrice := referencePrice(in)
@@ -372,7 +372,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Observed: notionalAcct.String(),
 		Message: fmt.Sprintf("Order notional %s against the trading authority's limit of %s.",
 			notionalAcct.String(), in.Authority.MaxOrderNotional.String()),
-		Code: domain.RejectExposureLimit,
+		Code: domain.RejectAuthorityOrderNotional,
 	})
 
 	// --- Margin ------------------------------------------------------------
@@ -454,7 +454,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Observed: projectedInst.String(),
 		Message: fmt.Sprintf("Exposure to %s would be %s against the trading authority's limit of %s.",
 			in.Instrument.Symbol, projectedInst.String(), in.Authority.MaxPositionExposure.String()),
-		Code: domain.RejectExposureLimit,
+		Code: domain.RejectAuthorityPositionExposure,
 	})
 
 	// Concentration: how much of total exposure sits in this one instrument.
@@ -544,14 +544,16 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	if in.Snapshot.State.Equity.IsPositive() {
 		leverage = projectedGross.Decimal().Div(in.Snapshot.State.Equity.Decimal())
 	}
-	// Leverage folds the authority's ceiling into one check with decimal.Min
-	// rather than reporting its own, which is the older of the two styles in
-	// this file. It is left as it is because the instrument's own
-	// Spec.MaxLeverage is a third bound on the same quantity and three checks
-	// reporting the same number would be noise; the message below prints the
-	// effective figure. The other four authority ceilings report separately --
-	// see the note on CheckAuthorityOrderQuantity for why.
-	effectiveMaxLeverage := decimal.Min(in.Limits.MaxLeverage, in.Authority.MaxLeverage)
+	// The ACCOUNT's leverage ceiling, folded with the instrument's own.
+	//
+	// Those two belong together: Spec.MaxLeverage is a venue property and the
+	// account limit is an operator setting, and neither is a statement about
+	// the scope the platform is permitted to use. The authority's ceiling is,
+	// so it reports separately below -- as the other four already do, and for
+	// the same reason: an operator told only "leverage_limit_breached" cannot
+	// tell whether to widen the account limit or the authority, and those have
+	// different owners and different audit trails.
+	effectiveMaxLeverage := in.Limits.MaxLeverage
 	if in.Instrument.Spec.MaxLeverage.IsPositive() {
 		effectiveMaxLeverage = decimal.Min(effectiveMaxLeverage, in.Instrument.Spec.MaxLeverage)
 	}
@@ -563,6 +565,19 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Message: fmt.Sprintf("Effective leverage would be %sx against a limit of %sx.",
 			leverage.StringFixed(2), effectiveMaxLeverage.StringFixed(2)),
 		Code: domain.RejectLeverageLimit,
+	})
+
+	// The AUTHORITY's leverage ceiling. Both checks must pass, which is the
+	// same bound decimal.Min produced before this was split, and it now says
+	// which of the two was hit.
+	add(domain.RiskCheckResult{
+		Name:     domain.CheckAuthorityLeverage,
+		Passed:   reducing || leverage.LessThanOrEqual(in.Authority.MaxLeverage),
+		Limit:    in.Authority.MaxLeverage.StringFixed(2) + "x",
+		Observed: leverage.StringFixed(2) + "x",
+		Message: fmt.Sprintf("Effective leverage would be %sx against the trading authority's limit of %sx.",
+			leverage.StringFixed(2), in.Authority.MaxLeverage.StringFixed(2)),
+		Code: domain.RejectAuthorityLeverage,
 	})
 
 	// --- Stop loss and per-trade risk --------------------------------------
