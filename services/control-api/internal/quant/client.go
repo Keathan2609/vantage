@@ -186,8 +186,26 @@ type SignalRequest struct {
 
 // SignalResponse is a strategy's opinion.
 type SignalResponse struct {
-	Action          string            `json:"action"`
-	Confidence      decimal.Decimal   `json:"confidence"`
+	Action     string          `json:"action"`
+	Confidence decimal.Decimal `json:"confidence"`
+	// ConfidenceKind says what Confidence IS, and the distinction is not
+	// pedantry.
+	//
+	// Every strategy signal this platform receives is a RAW SCORE: the
+	// research plane averages hand-chosen 0-1 components, and three strategies
+	// average a real component with a hard-coded constant. The value is
+	// bounded in [0, 1], is not a probability of anything, is not comparable
+	// between strategies, and has never been calibrated against outcomes.
+	//
+	// It was nonetheless consumed as though it were a probability. The
+	// consensus policy discards an opinion below 0.55 and requires 0.60 net --
+	// thresholds that read as confidence levels -- and `donchian_breakout`,
+	// which averages its penetration with a constant 0.5, reports 0.31-0.44
+	// and so could never clear the floor whatever the market did.
+	//
+	// Empty means the research plane did not say, which is how an older build
+	// answers. Treated as a raw score, because that is the weaker claim.
+	ConfidenceKind  string            `json:"confidence_kind"`
 	SuggestedStop   *decimal.Decimal  `json:"suggested_stop,omitempty"`
 	SuggestedTarget *decimal.Decimal  `json:"suggested_target,omitempty"`
 	Explanation     string            `json:"explanation"`
@@ -247,6 +265,31 @@ func (r SignalResponse) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ScoreKind is what a signal's Confidence may be.
+const (
+	// ScoreRaw is an uncalibrated ranking input. Comparing it to a threshold
+	// expressed as a probability is a category error.
+	ScoreRaw = "raw_score"
+	// ScoreCalibrated is a probability that has been fitted against realised
+	// outcomes and may be read as one.
+	ScoreCalibrated = "calibrated_probability"
+)
+
+// Calibrated reports whether Confidence may be read as a probability.
+//
+// False for an empty kind as well as for an explicit raw score: an unstated
+// kind is an older research build, and assuming calibration would be assuming
+// the stronger claim from silence.
+func (r SignalResponse) Calibrated() bool { return r.ConfidenceKind == ScoreCalibrated }
+
+// ScoreKind is the kind, defaulting to the weaker claim.
+func (r SignalResponse) ScoreKind() string {
+	if r.ConfidenceKind == "" {
+		return ScoreRaw
+	}
+	return r.ConfidenceKind
 }
 
 // MarketRegime is the reported regime, normalised, or UNKNOWN when the

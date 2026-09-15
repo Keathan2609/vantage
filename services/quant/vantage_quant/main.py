@@ -124,6 +124,26 @@ class SignalRequest(BaseModel):
 class SignalResponse(BaseModel):
     action: Literal["buy", "sell", "hold", "close", "no_trade"]
     confidence: float
+    # What `confidence` actually IS, stated rather than assumed.
+    #
+    # For every strategy in this service it is a RAW SCORE: `_confidence`
+    # averages hand-chosen 0-1 components, and three strategies average a real
+    # component with a hard-coded constant (0.5, 0.45, 0.6). The result is
+    # bounded in [0, 1] and is NOT a probability of anything, is not
+    # comparable between strategies, and is not calibrated against outcomes.
+    #
+    # It was consumed as though it were a probability: the control plane's
+    # consensus policy discards an opinion below 0.55 and requires 0.60 net,
+    # thresholds that read as confidence levels. Measured against the seeded
+    # strategies, `donchian_breakout` averages its penetration with a constant
+    # 0.5 and reports 0.31-0.44, so it could never clear the floor whatever
+    # the market did -- not because the breakout was weak but because the
+    # scale is arbitrary.
+    #
+    # Naming the kind is the fix that can be made honestly today. Calibrating
+    # the score against realised outcomes is research, needs evidence, and
+    # must not be faked by moving a threshold.
+    confidence_kind: Literal["raw_score", "calibrated_probability"] = "raw_score"
     suggested_stop: float | None = None
     suggested_target: float | None = None
     explanation: str
@@ -327,6 +347,10 @@ async def generate_signal(request: SignalRequest) -> SignalResponse:
     return SignalResponse(
         action=signal.action,
         confidence=round(signal.confidence, 6),
+        # Every strategy signal in this service is a raw score. A model that
+        # produced a calibrated probability would say so here, and the control
+        # plane would then be entitled to read it as one.
+        confidence_kind="raw_score",
         suggested_stop=signal.suggested_stop,
         suggested_target=signal.suggested_target,
         explanation=signal.explanation,

@@ -70,6 +70,29 @@ type ConsensusPolicy struct {
 	MaxOpposingWeightFraction decimal.Decimal
 }
 
+// # What these thresholds are compared AGAINST
+//
+// A raw score, not a probability, and the difference has consequences.
+//
+// Every strategy signal this platform receives carries `confidence_kind:
+// raw_score`. The research plane averages hand-chosen 0-1 components, and
+// three strategies average a real component with a hard-coded constant (0.5,
+// 0.45, 0.6). The result is bounded in [0, 1], is not comparable BETWEEN
+// strategies, and has never been fitted against realised outcomes.
+//
+// MinConfidence and MinNetConfidence read as confidence levels and are applied
+// uniformly to those scores. Measured on the seeded set: `donchian_breakout`
+// averages its breakout penetration with a constant 0.5 and reports 0.31-0.44,
+// so it cannot clear a 0.55 floor whatever the market does -- not because the
+// breakout was weak, but because half its score is a constant.
+//
+// The thresholds are NOT adjusted to compensate. Moving a number until trades
+// appear is how a platform talks itself into a result, and the fix is
+// calibration against outcomes, which is research and needs evidence. What has
+// been done is to stop the category error being invisible: every decision now
+// records the score kind it was taken against, so a reader can tell a decision
+// weighed against a probability from one weighed against a ranking input.
+//
 // DefaultConsensusPolicy is deliberately strict.
 //
 // These are not tuned numbers and must not be presented as such. They are a

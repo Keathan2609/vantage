@@ -160,6 +160,10 @@ type routingContext struct {
 	// would describe the instants that traded, not the day.
 	sessions []domain.SessionName
 	health   domain.MarketDataHealth
+	// scoreKind is what this strategy's confidence value IS -- a raw score or
+	// a calibrated probability. Carried so the verdict can record which kind
+	// the policy's thresholds were compared against.
+	scoreKind string
 }
 
 // EvaluateAndRoute runs one strategy and optionally routes its signal.
@@ -425,6 +429,7 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 			eventAt:       eventAt,
 			sessions:      sessions,
 			health:        health,
+			scoreKind:     signal.ScoreKind(),
 		},
 	}
 

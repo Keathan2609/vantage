@@ -13,6 +13,7 @@ import (
 
 	"github.com/vantage/control-api/internal/domain"
 	"github.com/vantage/control-api/internal/logging"
+	"github.com/vantage/control-api/internal/quant"
 )
 
 // Aggregation: several strategies, one instrument, ONE verdict.
@@ -507,9 +508,15 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome,
 	// the key would be uninterpretable after a promotion.
 	versions := map[string]int{}
 	bars := map[string]string{}
+	kinds := map[string]string{}
+	calibrated := len(fresh) > 0
 	for _, e := range fresh {
 		versions[e.routing.strategy.Key] = e.routing.version
 		bars[e.routing.strategy.Key] = e.routing.barTime.UTC().Format(time.RFC3339)
+		kinds[e.routing.strategy.Key] = e.routing.scoreKind
+		if e.routing.scoreKind != quant.ScoreCalibrated {
+			calibrated = false
+		}
 	}
 
 	contributions := make([]map[string]any, 0, len(v.Contributions))
@@ -522,6 +529,7 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome,
 			"confidence": c.Confidence.String(),
 			"weight":     c.Weight.String(),
 			"counted":    c.Counted,
+			"score_kind": kinds[c.StrategyKey],
 			"role":       attributionRole(c, executing),
 			"note":       c.Note,
 			"bar_time":   bars[c.StrategyKey],
@@ -539,6 +547,16 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome,
 		"contributions":  contributions,
 		"buy_weight":     v.BuyWeight.String(),
 		"sell_weight":    v.SellWeight.String(),
+
+		// WHAT THE THRESHOLDS WERE COMPARED AGAINST.
+		//
+		// The policy's MinConfidence and MinNetConfidence read as confidence
+		// levels, and every strategy signal this platform receives is an
+		// UNCALIBRATED raw score. Recording the kind means a later reader can
+		// tell a decision taken against a probability from one taken against a
+		// ranking input, instead of assuming the stronger of the two.
+		"confidence_kind":       scoreKindOf(kinds),
+		"confidence_calibrated": calibrated,
 
 		// --- attribution ------------------------------------------------
 		//
@@ -565,6 +583,31 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome,
 			"contributing":       contributorKeys(v, executing),
 		},
 	})
+}
+
+// scoreKindOf reduces the contributors' score kinds to one label.
+//
+// "mixed" when they disagree, which is a real state the moment one model is
+// calibrated and the rest are not -- and a decision taken over a mixture is
+// exactly the one nobody should read as a probability.
+func scoreKindOf(kinds map[string]string) string {
+	seen := ""
+	for _, k := range kinds {
+		if k == "" {
+			k = quant.ScoreRaw
+		}
+		if seen == "" {
+			seen = k
+			continue
+		}
+		if seen != k {
+			return "mixed"
+		}
+	}
+	if seen == "" {
+		return quant.ScoreRaw
+	}
+	return seen
 }
 
 // AttributionPolicy names the rule by which one order's P&L is assigned.
