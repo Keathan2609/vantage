@@ -239,6 +239,24 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Code: domain.RejectDailyLoss,
 	})
 
+	// The same ceiling as the authority states it. Whichever is tighter binds,
+	// because both must pass; the authority can only ever narrow.
+	//
+	// Reducing is exempt for exactly the reason the account's limit is, one
+	// check above: a loss limit that refuses a close deepens the loss it
+	// measures.
+	authDailyLossBreached := dayPnL.IsNegative() &&
+		dayPnL.Abs().Decimal().GreaterThanOrEqual(in.Authority.MaxDailyLoss.Decimal())
+	add(domain.RiskCheckResult{
+		Name:     domain.CheckAuthorityDailyLoss,
+		Passed:   reducing || !authDailyLossBreached,
+		Limit:    in.Authority.MaxDailyLoss.String(),
+		Observed: dayPnL.String(),
+		Message: fmt.Sprintf("Daily loss %s against the trading authority's limit of %s.",
+			dayPnL.Abs().String(), in.Authority.MaxDailyLoss.String()),
+		Code: domain.RejectDailyLoss,
+	})
+
 	dd := in.Snapshot.State.DrawdownFraction()
 	ddBreached := dd.GreaterThanOrEqual(in.Limits.MaxDrawdownFraction)
 	add(domain.RiskCheckResult{
@@ -288,6 +306,34 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Code: domain.RejectRiskLimit,
 	})
 
+	// The authority's per-order size ceiling.
+	//
+	// This one carries a REDUCING exemption that the account-level check above
+	// does NOT have, and the difference is deliberate.
+	//
+	// A per-order quantity cap limits exposure, so rule 8 applies to it: an
+	// order that strictly reduces a position must never be refused by it.
+	// Without the exemption, narrowing the authority to 0.10 would make a
+	// position of 0.50 -- opened while the authority was wider, or grown by
+	// several individually-permitted orders -- impossible to close in one
+	// order. That is the flatten trap the notional cap, the event blackout and
+	// the daily-loss limit each had to be rescued from, and adding a fifth
+	// place for it to appear is not an acceptable price for enforcement.
+	//
+	// The account-level check having no such exemption is a real gap, but it
+	// is a PRE-EXISTING one on a limit that is looser here than the
+	// authority's, and closing it changes a bound that was not in scope. It is
+	// recorded in docs/ENGINEERING_REPORT.md rather than fixed in passing.
+	add(domain.RiskCheckResult{
+		Name:     domain.CheckAuthorityOrderQuantity,
+		Passed:   reducing || in.Intent.Quantity.LessThanOrEqual(in.Authority.MaxOrderQuantity),
+		Limit:    in.Authority.MaxOrderQuantity.String(),
+		Observed: in.Intent.Quantity.String(),
+		Message: fmt.Sprintf("Order quantity %s against the trading authority's limit of %s.",
+			in.Intent.Quantity, in.Authority.MaxOrderQuantity),
+		Code: domain.RejectRiskLimit,
+	})
+
 	execPrice := referencePrice(in)
 	notionalQuote := in.Instrument.Notional(in.Intent.Quantity, execPrice)
 	notionalAcct, convErr := e.toAccount(ctx, notionalQuote, in.Account.Currency)
@@ -313,6 +359,19 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Observed: notionalAcct.String(),
 		Message: fmt.Sprintf("Order notional %s against a limit of %s.",
 			notionalAcct.String(), in.Limits.MaxOrderNotional.String()),
+		Code: domain.RejectExposureLimit,
+	})
+
+	// The authority's per-order notional ceiling, with the same reducing
+	// exemption its account-level counterpart carries.
+	add(domain.RiskCheckResult{
+		Name: domain.CheckAuthorityOrderNotional,
+		Passed: reducing ||
+			notionalAcct.Decimal().LessThanOrEqual(in.Authority.MaxOrderNotional.Decimal()),
+		Limit:    in.Authority.MaxOrderNotional.String(),
+		Observed: notionalAcct.String(),
+		Message: fmt.Sprintf("Order notional %s against the trading authority's limit of %s.",
+			notionalAcct.String(), in.Authority.MaxOrderNotional.String()),
 		Code: domain.RejectExposureLimit,
 	})
 
@@ -377,6 +436,24 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Observed: projectedInst.String(),
 		Message: fmt.Sprintf("Exposure to %s would be %s against a limit of %s.",
 			in.Instrument.Symbol, projectedInst.String(), in.Limits.MaxPerInstrumentExposure.String()),
+		Code: domain.RejectExposureLimit,
+	})
+
+	// The authority's MaxPositionExposure, measured against the same quantity
+	// the account's per-instrument ceiling uses: the exposure this instrument
+	// would carry once the order fills. A position is held per instrument, so
+	// that is the figure the authority's wording describes.
+	//
+	// Reducing is exempt, as it is for the account's counterpart directly
+	// above: an exposure ceiling must never refuse the order that lowers it.
+	add(domain.RiskCheckResult{
+		Name: domain.CheckAuthorityPositionExposure,
+		Passed: reducing ||
+			projectedInst.Decimal().LessThanOrEqual(in.Authority.MaxPositionExposure.Decimal()),
+		Limit:    in.Authority.MaxPositionExposure.String(),
+		Observed: projectedInst.String(),
+		Message: fmt.Sprintf("Exposure to %s would be %s against the trading authority's limit of %s.",
+			in.Instrument.Symbol, projectedInst.String(), in.Authority.MaxPositionExposure.String()),
 		Code: domain.RejectExposureLimit,
 	})
 
@@ -467,6 +544,13 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	if in.Snapshot.State.Equity.IsPositive() {
 		leverage = projectedGross.Decimal().Div(in.Snapshot.State.Equity.Decimal())
 	}
+	// Leverage folds the authority's ceiling into one check with decimal.Min
+	// rather than reporting its own, which is the older of the two styles in
+	// this file. It is left as it is because the instrument's own
+	// Spec.MaxLeverage is a third bound on the same quantity and three checks
+	// reporting the same number would be noise; the message below prints the
+	// effective figure. The other four authority ceilings report separately --
+	// see the note on CheckAuthorityOrderQuantity for why.
 	effectiveMaxLeverage := decimal.Min(in.Limits.MaxLeverage, in.Authority.MaxLeverage)
 	if in.Instrument.Spec.MaxLeverage.IsPositive() {
 		effectiveMaxLeverage = decimal.Min(effectiveMaxLeverage, in.Instrument.Spec.MaxLeverage)

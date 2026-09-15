@@ -517,6 +517,13 @@ func TestEveryDocumentedCheckIsEvaluated(t *testing.T) {
 		domain.CheckConcentration,
 		domain.CheckLeverage,
 		domain.CheckMargin,
+
+		// The trading authority's own ceilings, which report separately from
+		// the account limits they sit beside so a refusal names the bound.
+		domain.CheckAuthorityOrderQuantity,
+		domain.CheckAuthorityOrderNotional,
+		domain.CheckAuthorityPositionExposure,
+		domain.CheckAuthorityDailyLoss,
 	}
 	for _, name := range expected {
 		check(t, d, name) // fails the test if absent

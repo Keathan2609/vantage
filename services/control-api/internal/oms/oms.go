@@ -1519,13 +1519,24 @@ func (s *Service) buildDecisionSnapshot(req PlaceOrderRequest, account domain.Ac
 
 	// Authority is recorded as its SCOPE, never as anything sensitive: what
 	// was permitted at decision time, not who holds which credential.
+	// All five numeric ceilings, not just the one. Each of them now BINDS --
+	// the four that are not leverage report their own named risk check -- so a
+	// refusal has to be reconstructible from the snapshot alone. Recording one
+	// of five left "why was this refused?" answerable only by looking up the
+	// authority row as it stands today, which is the wrong row: the authority
+	// is versioned and may have been narrowed since.
 	authorityState := map[string]any{
-		"authority_id":        g.authority.ID,
-		"active":              g.authority.Active,
-		"automation_enabled":  g.authority.AutomationEnabled,
-		"allowed_instruments": g.authority.AllowedInstruments,
-		"max_order_quantity":  g.authority.MaxOrderQuantity.String(),
-		"valid_until":         g.authority.ValidUntil,
+		"authority_id":          g.authority.ID,
+		"authority_version":     g.authority.Version,
+		"active":                g.authority.Active,
+		"automation_enabled":    g.authority.AutomationEnabled,
+		"allowed_instruments":   g.authority.AllowedInstruments,
+		"max_order_quantity":    g.authority.MaxOrderQuantity.String(),
+		"max_order_notional":    g.authority.MaxOrderNotional.String(),
+		"max_position_exposure": g.authority.MaxPositionExposure.String(),
+		"max_leverage":          g.authority.MaxLeverage.String(),
+		"max_daily_loss":        g.authority.MaxDailyLoss.String(),
+		"valid_until":           g.authority.ValidUntil,
 	}
 
 	portfolioState := map[string]any{

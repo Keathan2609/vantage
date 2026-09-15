@@ -123,6 +123,24 @@ const (
 	CheckEventRisk            RiskCheckName = "event_risk"
 	CheckAccountTrading       RiskCheckName = "account_trading_enabled"
 	CheckInstrumentEnabled    RiskCheckName = "instrument_enabled"
+
+	// The trading authority's own numeric ceilings.
+	//
+	// They are SEPARATE checks rather than a decimal.Min folded into the
+	// account's, which is how MaxLeverage was done. Folding hides which bound
+	// was hit: an operator who narrowed the authority to 0.10 and then saw
+	// "Order quantity 0.50 against a limit of 0.10" could not tell whether
+	// the account's limit or the authority's produced it, and those have
+	// different fixes and different audit trails. Two checks that must both
+	// pass are arithmetically the same as one min(), and they say which.
+	//
+	// The authority may only ever be MORE restrictive: it never raises a
+	// bound, because a check that could loosen the account's own limits would
+	// be a way to grant risk rather than to withhold it.
+	CheckAuthorityOrderQuantity    RiskCheckName = "authority_max_order_quantity"
+	CheckAuthorityOrderNotional    RiskCheckName = "authority_max_order_notional"
+	CheckAuthorityPositionExposure RiskCheckName = "authority_max_position_exposure"
+	CheckAuthorityDailyLoss        RiskCheckName = "authority_max_daily_loss"
 )
 
 // RiskCheckResult records one check's verdict. Every check reports its limit
