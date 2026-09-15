@@ -433,7 +433,12 @@ func (s *Service) recordNoTrade(ctx context.Context, req InstrumentRunRequest, f
 			"ingested_at": lead.routing.quote.IngestedAt,
 			"provider":    lead.routing.quote.Provider,
 		}),
-		EventContext:     marshalJSON(map[string]any{"event_risk": lead.routing.eventRisk}),
+		// The SAME shape the OMS writes on an order's snapshot. A no-trade
+		// snapshot that named the event differently would be invisible to
+		// every query written against the other kind -- and a query that
+		// silently matches nothing is how a scenario passes while proving
+		// nothing.
+		EventContext:     marshalJSON(eventContextOf(lead)),
 		PortfolioContext: marshalJSON(portfolio),
 		Consensus:        marshalVerdict(v, regime, fresh),
 		Regime:           regime,
@@ -492,6 +497,18 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome) json.RawMe
 		"sell_weight":    v.SellWeight.String(),
 		"bar_times":      bars,
 	})
+}
+
+// eventContextOf mirrors the OMS's event_context so both kinds of decision
+// snapshot answer the same query.
+func eventContextOf(lead Outcome) map[string]any {
+	blackout := lead.routing.eventRisk == "high"
+	ctx := map[string]any{"blackout": blackout, "event_risk": lead.routing.eventRisk}
+	if blackout {
+		ctx["event"] = lead.routing.eventName
+		ctx["scheduled_at"] = lead.routing.eventAt
+	}
+	return ctx
 }
 
 // openPosition reports the account's open position in one instrument, or nil.

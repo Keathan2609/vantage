@@ -152,6 +152,8 @@ type routingContext struct {
 	barTime       time.Time
 	barsAvailable int
 	eventRisk     string
+	eventName     string
+	eventAt       time.Time
 }
 
 // EvaluateAndRoute runs one strategy and optionally routes its signal.
@@ -324,8 +326,12 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	if err != nil {
 		return Outcome{}, fmt.Errorf("orchestrator: event risk: %w", err)
 	}
+	eventName := ""
+	var eventAt time.Time
 	if len(events) > 0 {
 		eventRisk = "high"
+		eventName = events[0].EventName
+		eventAt = events[0].ScheduledAt
 	}
 
 	barInputs := make([]quant.BarInput, 0, len(bars))
@@ -409,6 +415,8 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 			barTime:       barTime,
 			barsAvailable: len(bars),
 			eventRisk:     eventRisk,
+			eventName:     eventName,
+			eventAt:       eventAt,
 		},
 	}
 

@@ -269,12 +269,27 @@ func conditionScenarios() []scenario {
 				clear := psqlInt(t, decisionsInRun(runID,
 					`d.event_context->>'blackout' = 'false'`))
 
-				// 1. The arming must have reached a decision. Otherwise every
-				//    assertion below holds over an empty set.
+				// 1. The arming must have reached a decision that produced an
+				//    ORDER. Otherwise every assertion below holds over an empty
+				//    set.
+				//
+				// decisionsInRun scopes through orders, because a blackout can
+				// only be shown to REFUSE something that was offered to the risk
+				// engine. Since aggregation, a verdict that declines writes a
+				// no-trade snapshot and places nothing, so a run can hold many
+				// decisions and still offer the blackout nothing to act on. The
+				// skip says which of those two happened rather than reporting
+				// "no decision was taken", which would be false.
 				if blacked == 0 {
-					t.Skipf("no decision was taken inside a blackout window, so the "+
-						"release was never in front of the platform; %d decisions "+
-						"were taken clear of one\n%s", clear, o.describe())
+					total := psqlInt(t, fmt.Sprintf(`
+						SELECT count(*) FROM decision_snapshots
+						WHERE created_at >= (SELECT started_at FROM replay_runs WHERE id = '%s')`,
+						runID))
+					t.Skipf("no order-bearing decision was taken inside a blackout "+
+						"window, so the release was never in front of the risk "+
+						"engine: %d decisions clear of one, %d decisions in the run "+
+						"overall. What the verdicts recorded:\n%s\n%s",
+						clear, total, verdictReasons(t, runID), o.describe())
 				}
 
 				// 2. THE INVARIANT, and it has an exemption that is NOT a
@@ -364,21 +379,44 @@ func conditionScenarios() []scenario {
 				// this scenario exists to test, and a fixture cannot guarantee
 				// it -- so it is measured, and its absence is a skip rather than
 				// a pass.
-				// `bar_time IS NOT NULL` is not defensive noise. The column went
-				// unpopulated for the whole life of the schema, and grouping by
-				// NULL put every decision into ONE bucket -- so this query
-				// returned a single meaningless group and the scenario skipped
-				// while looking correct.
+				//
+				// # Why this reads the consensus and not only the orders
+				//
+				// It used to count (bar, instrument) pairs among the decisions
+				// that ORDERS point to. That was the only evidence a split left
+				// behind while every strategy routed its own signal: two opposing
+				// orders, two decisions. Aggregation deliberately stops producing
+				// that evidence -- one verdict per instant, at most one order --
+				// so a guard that reads only it can never fire again, and this
+				// scenario would skip for ever while looking correct.
+				//
+				// The split now lives in the verdict's own contributions, which
+				// record every opinion INCLUDING the ones the policy discarded.
+				// Both sources are counted: a split is a split whether the
+				// platform acted on it or not.
 				conflicts := psqlInt(t, fmt.Sprintf(`
-					SELECT count(*) FROM (
-						SELECT d.bar_time, d.instrument_id
-						FROM decision_snapshots d
-						WHERE d.id IN (SELECT o.decision_id FROM orders o
-						               WHERE o.replay_run_id = '%s')
-						  AND d.bar_time IS NOT NULL
-						  AND d.signal_action IN ('buy','sell')
-						GROUP BY 1,2
-						HAVING count(DISTINCT d.signal_action) > 1) c`, runID))
+					SELECT (
+						SELECT count(*) FROM (
+							SELECT d.bar_time, d.instrument_id
+							FROM decision_snapshots d,
+							     LATERAL jsonb_array_elements(
+							         coalesce(d.consensus->'contributions', '[]'::jsonb)) c
+							WHERE d.created_at >= (SELECT started_at FROM replay_runs WHERE id = '%s')
+							  AND d.bar_time IS NOT NULL
+							  AND c->>'action' IN ('buy','sell')
+							GROUP BY 1, 2
+							HAVING count(DISTINCT c->>'action') > 1) a
+					) + (
+						SELECT count(*) FROM (
+							SELECT d.bar_time, d.instrument_id
+							FROM decision_snapshots d
+							WHERE d.id IN (SELECT o.decision_id FROM orders o
+							               WHERE o.replay_run_id = '%s')
+							  AND d.bar_time IS NOT NULL
+							  AND d.signal_action IN ('buy','sell')
+							GROUP BY 1, 2
+							HAVING count(DISTINCT d.signal_action) > 1) b
+					)`, runID, runID))
 				if conflicts == 0 {
 					t.Skipf("no instant produced opposing signals from different "+
 						"strategies, so this dataset did not split the strategy "+
@@ -404,21 +442,31 @@ func conditionScenarios() []scenario {
 					t.Errorf("%d (instant, instrument) pairs carry orders on BOTH "+
 						"sides that were not rejected, across %d instants where "+
 						"strategies disagreed.\n\n"+
-						"THE CAUSE IS KNOWN AND IS NOT IN THIS TEST. "+
-						"orchestrator.Decide -- the aggregation policy whose own "+
-						"comment says netting opposing signals is 'how a system "+
-						"ends up trading its own indecision' -- has NO PRODUCTION "+
-						"CALLER. The scheduler calls EvaluateAndRoute once per "+
-						"(strategy, instrument) and each call routes its own "+
-						"signal into the OMS, so two strategies disagreeing at "+
-						"one instant produce two opposing orders and both fill. "+
-						"Wiring Decide in is a change to the decision path and "+
-						"needs asking for in those words; until then THIS TEST IS "+
-						"EXPECTED TO FAIL and the failure is the finding.\n%s",
+						"orchestrator.Decide IS wired in now: the scheduler groups "+
+						"by instrument and calls EvaluateInstrument, which "+
+						"aggregates every strategy's opinion into ONE verdict and "+
+						"places at most one order. Two opposing orders at one "+
+						"instant therefore means something bypasses it -- check "+
+						"that nothing calls EvaluateAndRoute with Execute:true "+
+						"outside the operator endpoint. internal/arch guards "+
+						"exactly that.\n%s",
 						opposing, conflicts, o.describe())
 				}
+
+				// How the platform ACTED on the disagreement, measured rather
+				// than assumed. Zero orders satisfies the invariant above and is
+				// NOT by itself evidence that the platform can still trade, so
+				// the verdicts' own reasons are printed when that is the case.
+				orders := psqlInt(t, fmt.Sprintf(
+					`SELECT count(*) FROM orders WHERE replay_run_id = '%s'`, runID))
 				t.Logf("scenario G: %d instants split the strategy set, %d produced "+
-					"orders on both sides", conflicts, opposing)
+					"orders on both sides, %d orders in total", conflicts, opposing, orders)
+				if orders == 0 {
+					t.Logf("scenario G: the invariant holds with NO orders placed, "+
+						"which is a weaker demonstration than one with orders. "+
+						"What the verdicts themselves recorded:\n%s",
+						verdictReasons(t, runID))
+				}
 			},
 		},
 		{
@@ -432,6 +480,27 @@ func conditionScenarios() []scenario {
 				if o.Decisions == 0 {
 					t.Skipf("no decision was taken, so no signal met the tightened "+
 						"ceilings\n%s", o.describe())
+				}
+
+				// An exposure ceiling can only refuse an order that was SIZED and
+				// offered to the risk engine. A verdict that declines before the
+				// OMS never reaches one, so with no order in this run the
+				// tightening was not exercised and anything asserted below would
+				// be measuring the consensus rather than the ceiling.
+				//
+				// This guard is new for the same reason scenario G's is: the
+				// evidence it reads -- a refusal code on an order -- stops being
+				// produced once aggregation decides before the pipeline. Without
+				// it the scenario FAILS with "no order was refused for an exposure
+				// ceiling", which is true and is not this scenario's finding.
+				placed := psqlInt(t, fmt.Sprintf(
+					`SELECT count(*) FROM orders WHERE replay_run_id = '%s'`, runID))
+				if placed == 0 {
+					t.Skipf("no order reached the risk engine in this run, so the "+
+						"tightened ceilings refused nothing and this scenario "+
+						"measured the consensus rather than the ceiling. What the "+
+						"verdicts recorded:\n%s\n%s",
+						verdictReasons(t, runID), o.describe())
 				}
 
 				// 2. THE INVARIANT, stated as what "no capacity" actually
@@ -559,4 +628,51 @@ func decisionsInRun(runID, predicate string) string {
 		WHERE d.id IN (SELECT o.decision_id FROM orders o
 		               WHERE o.replay_run_id = '%s')
 		  AND %s`, runID, predicate)
+}
+
+// verdictReasons summarises why each consensus verdict declined to trade.
+//
+// The point of recording the verdict on the decision snapshot is that "why did
+// it not trade?" has an answer in stored evidence rather than in a log that may
+// have rotated. This reads that evidence back, so a run which placed nothing
+// says WHY instead of leaving a reader to guess between "the policy refused"
+// and "the pipeline never ran" -- the two that look identical from outside, and
+// the confusion that made four earlier suites pass while proving nothing.
+func verdictReasons(t *testing.T, runID string) string {
+	t.Helper()
+	reasons := psql(t, fmt.Sprintf(`
+		SELECT coalesce(string_agg(line, chr(10)), '') FROM (
+			SELECT '          ' || count(*) || ' x ' || left(outcome_reason, 96) AS line
+			FROM decision_snapshots
+			WHERE created_at >= (SELECT started_at FROM replay_runs WHERE id = '%s')
+			  AND outcome = 'no_trade'
+			GROUP BY left(outcome_reason, 96)
+			ORDER BY count(*) DESC
+			LIMIT 6) r`, runID))
+
+	// Every ACTIONABLE opinion the policy discarded, and the reason it gave.
+	// This is the half an operator actually needs: a verdict listing only its
+	// survivors cannot be argued with.
+	discards := psql(t, fmt.Sprintf(`
+		SELECT coalesce(string_agg(line, chr(10)), '') FROM (
+			SELECT '          ' || count(*) || ' x ' || strategy || ' ' || action ||
+			       ' at ' || confidence || ' -- ' || note AS line
+			FROM (
+				SELECT c->>'strategy' AS strategy, c->>'action' AS action,
+				       c->>'confidence' AS confidence, left(c->>'note', 72) AS note
+				FROM decision_snapshots d,
+				     LATERAL jsonb_array_elements(
+				         coalesce(d.consensus->'contributions', '[]'::jsonb)) c
+				WHERE d.created_at >= (SELECT started_at FROM replay_runs WHERE id = '%s')
+				  AND c->>'action' IN ('buy','sell')
+				  AND c->>'counted' = 'false') x
+			GROUP BY strategy, action, confidence, note
+			ORDER BY count(*) DESC
+			LIMIT 8) r`, runID))
+
+	out := "        verdicts:\n" + reasons
+	if discards != "" {
+		out += "\n        actionable opinions the policy discarded:\n" + discards
+	}
+	return out
 }
