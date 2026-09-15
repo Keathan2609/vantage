@@ -151,18 +151,7 @@ func (s *Service) EvaluateInstrument(ctx context.Context, req InstrumentRunReque
 	regime, regimeAgreed := resolveRegime(fresh)
 	lead := fresh[0]
 
-	in := ConsensusInput{
-		Policy:    DefaultConsensusPolicy(),
-		Opinions:  opinions,
-		Regime:    string(regime),
-		EventRisk: lead.routing.eventRisk,
-		// No model participates in this path. A ModelOpinion with Available
-		// false would add "model X was unavailable" to every rationale and
-		// imply a model that was consulted and could not answer; nil says
-		// truthfully that the decision is not model-gated.
-		Model: nil,
-	}
-	verdict := Decide(in)
+	verdict := Decide(ConsensusInputFor(opinions, regime, lead.routing.eventRisk, nil))
 	if !regimeAgreed {
 		verdict.Rationale = append(verdict.Rationale,
 			"the strategies reported different regimes for the same bars, so the "+
@@ -210,7 +199,7 @@ func (s *Service) EvaluateInstrument(ctx context.Context, req InstrumentRunReque
 		return out, nil
 	}
 
-	consensus := marshalVerdict(verdict, regime, fresh)
+	consensus := marshalVerdict(verdict, regime, fresh, leader.routing.strategy.Key)
 	out.Reducing = reducing
 
 	order, rejection, executed, err := s.place(ctx, placement{
@@ -227,7 +216,10 @@ func (s *Service) EvaluateInstrument(ctx context.Context, req InstrumentRunReque
 		regime:        regime,
 		maxQuantity:   quantityCap,
 		consensus:     consensus,
-		keyPrefix:     "consensus",
+		// One key per (account, instrument, bar), naming no strategy, so the
+		// database refuses a second orchestrated order for this bar whichever
+		// strategy ends up leading.
+		idempotencyKey: consensusIdempotencyKey(req.InstrumentID, leader.routing.barTime),
 	})
 	if err != nil {
 		return out, err
@@ -240,6 +232,32 @@ func (s *Service) EvaluateInstrument(ctx context.Context, req InstrumentRunReque
 			"instrument", req.InstrumentID, "reason", rejection.Message)
 	}
 	return out, nil
+}
+
+// ConsensusInputFor builds the policy's input from the production pipeline's
+// own values.
+//
+// Exported so an integration test drives the REAL mapping rather than a copy
+// of it. A test that assembled its own ConsensusInput would prove the policy
+// works and say nothing about whether the orchestrator hands it the right
+// things -- which is precisely the gap that let Decide sit unwired and
+// fully unit-tested for a whole milestone.
+func ConsensusInputFor(opinions []StrategyOpinion, regime domain.Regime,
+	eventRisk string, model *ModelOpinion) ConsensusInput {
+
+	return ConsensusInput{
+		Policy:    DefaultConsensusPolicy(),
+		Opinions:  opinions,
+		Regime:    string(regime),
+		EventRisk: eventRisk,
+		// No model participates in this path TODAY, and nil says so
+		// truthfully: a ModelOpinion with Available false would add "model X
+		// was unavailable" to every rationale and imply a model that was
+		// consulted and could not answer. The parameter exists so that wiring
+		// one in later is a change at the call site rather than a change to
+		// the shape of the decision.
+		Model: model,
+	}
 }
 
 // opinionsFrom turns fresh evaluations into the policy's inputs.
@@ -440,12 +458,13 @@ func (s *Service) recordNoTrade(ctx context.Context, req InstrumentRunRequest, f
 		// nothing.
 		EventContext:     marshalJSON(eventContextOf(lead)),
 		PortfolioContext: marshalJSON(portfolio),
-		Consensus:        marshalVerdict(v, regime, fresh),
-		Regime:           regime,
-		SignalAction:     domain.SignalNoTrade,
-		Confidence:       v.Confidence,
-		Outcome:          "no_trade",
-		OutcomeReason:    v.Reason,
+		// No order was placed, so no strategy executes and none owns P&L.
+		Consensus:     marshalVerdict(v, regime, fresh, ""),
+		Regime:        regime,
+		SignalAction:  domain.SignalNoTrade,
+		Confidence:    v.Confidence,
+		Outcome:       "no_trade",
+		OutcomeReason: v.Reason,
 	}
 
 	var id uuid.UUID
@@ -467,23 +486,35 @@ func (s *Service) recordNoTrade(ctx context.Context, req InstrumentRunRequest, f
 // valid in RANGING and the regime is TRENDING" is the answer to the question
 // an operator is actually asking; a record of only the survivors makes the
 // verdict unarguable.
-func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome) json.RawMessage {
+func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome,
+	executing string) json.RawMessage {
+
+	// Strategy VERSION per contributor, not just the key. Two versions of one
+	// strategy are two different opinions, and a decision that recorded only
+	// the key would be uninterpretable after a promotion.
+	versions := map[string]int{}
+	bars := map[string]string{}
+	for _, e := range fresh {
+		versions[e.routing.strategy.Key] = e.routing.version
+		bars[e.routing.strategy.Key] = e.routing.barTime.UTC().Format(time.RFC3339)
+	}
+
 	contributions := make([]map[string]any, 0, len(v.Contributions))
 	for _, c := range v.Contributions {
 		contributions = append(contributions, map[string]any{
 			"strategy":   c.StrategyKey,
+			"version":    versions[c.StrategyKey],
 			"family":     c.Family,
 			"action":     string(c.Action),
 			"confidence": c.Confidence.String(),
 			"weight":     c.Weight.String(),
 			"counted":    c.Counted,
+			"role":       attributionRole(c, executing),
 			"note":       c.Note,
+			"bar_time":   bars[c.StrategyKey],
 		})
 	}
-	bars := map[string]string{}
-	for _, e := range fresh {
-		bars[e.routing.strategy.Key] = e.routing.barTime.UTC().Format(time.RFC3339)
-	}
+
 	return marshalJSON(map[string]any{
 		"policy_version": v.PolicyVersion,
 		"action":         string(v.Action),
@@ -495,8 +526,68 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome) json.RawMe
 		"contributions":  contributions,
 		"buy_weight":     v.BuyWeight.String(),
 		"sell_weight":    v.SellWeight.String(),
-		"bar_times":      bars,
+
+		// --- attribution ------------------------------------------------
+		//
+		// ONE strategy owns the order's P&L: the executing one, which is also
+		// the strategy the order row carries and whose suggested stop the
+		// order uses. The others are recorded as contributors and own none of
+		// it.
+		//
+		// The alternative -- crediting each contributing strategy with the
+		// full result -- would make the sum of per-strategy P&L exceed the
+		// account's actual P&L, and every ranking built on it would be
+		// arithmetic about money that never existed. Splitting it by weight
+		// was the other option and was rejected: a share of a trade is not a
+		// trade, the shares would move when the policy's weights changed, and
+		// no share corresponds to anything the account did.
+		//
+		// What contributors ARE useful for is the question this record exists
+		// to answer -- which strategies agreed, which dissented, which the
+		// policy discarded and why -- and that needs no P&L to be answerable.
+		"attribution": map[string]any{
+			"policy":             AttributionPolicy,
+			"executing_strategy": executing,
+			"executing_version":  versions[executing],
+			"contributing":       contributorKeys(v, executing),
+		},
 	})
+}
+
+// AttributionPolicy names the rule by which one order's P&L is assigned.
+//
+// Versioned like the consensus policy itself: if the rule changes, decisions
+// taken under the old one stay interpretable against the rule that actually
+// ran rather than against today's.
+const AttributionPolicy = "executing-strategy-owns-pnl/v1"
+
+// attributionRole says what one opinion did to the order.
+//
+//	primary      -- the order is attributed to it and carries its stop
+//	contributing -- counted by the policy, owns no P&L
+//	discarded    -- the policy excluded it; the note says why
+//	abstained    -- it declined to express a direction
+func attributionRole(c Contribution, executing string) string {
+	switch {
+	case c.StrategyKey == executing:
+		return "primary"
+	case c.Counted:
+		return "contributing"
+	case c.Action.Actionable():
+		return "discarded"
+	default:
+		return "abstained"
+	}
+}
+
+func contributorKeys(v Verdict, executing string) []string {
+	keys := []string{}
+	for _, c := range v.Contributions {
+		if c.Counted && c.StrategyKey != executing {
+			keys = append(keys, c.StrategyKey)
+		}
+	}
+	return keys
 }
 
 // eventContextOf mirrors the OMS's event_context so both kinds of decision

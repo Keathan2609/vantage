@@ -513,10 +513,34 @@ type placement struct {
 	// consensus is the serialised aggregate verdict, or nil when one strategy
 	// routed its own signal.
 	consensus json.RawMessage
-	// keyPrefix distinguishes the idempotency key of an aggregated order from
-	// a single strategy's on the same bar. Empty uses the single-strategy
-	// form, which is the key existing rows were written under.
-	keyPrefix string
+	// idempotencyKey overrides the single-strategy form. Empty uses that form,
+	// which is the key existing rows were written under.
+	//
+	// The aggregated path MUST supply one, and it must not name a strategy --
+	// see consensusIdempotencyKey.
+	idempotencyKey string
+}
+
+// consensusIdempotencyKey is the durable one-decision-per-bar guard.
+//
+// `command_idempotency` is keyed on (account_id, idempotency_key), so a key
+// that is identical for one (account, instrument, bar) makes a second
+// orchestrated order for that bar a duplicate the database refuses. That is
+// the protection; an in-memory flag would not survive the restart this
+// platform is built to survive.
+//
+// It deliberately does NOT name a strategy, and that is the whole point. The
+// single-strategy key is `strat-<strategy>-v<version>-<instrument>-<bar>`,
+// which is correct when one strategy routes its own signal and WRONG for an
+// aggregate: the strategy an order is attributed to is the strongest counted
+// opinion on the routed side, and that can differ between two evaluations of
+// the same bar -- a confidence that moved, an opinion the policy discarded the
+// second time, or the reducing rescue firing and attributing to a different
+// strategy entirely. Each of those would mint a different key and let a second
+// order through for a bar that already has one.
+func consensusIdempotencyKey(instrumentID string, barTime time.Time) string {
+	return fmt.Sprintf("consensus-%s-%s", instrumentID,
+		barTime.UTC().Format("20060102T150405Z"))
 }
 
 // place sizes an intent against the account's budget and hands it to the OMS.
@@ -552,14 +576,13 @@ func (s *Service) place(ctx context.Context, p placement) (*domain.Order, *domai
 	// BAR TIME. Re-running the same bar therefore produces the same key and is
 	// suppressed as a duplicate, which is what stops a scheduler restart from
 	// double-trading a signal.
-	prefix := p.keyPrefix
-	if prefix == "" {
-		prefix = "strat"
-	}
 	version := p.rc.version
-	idempotencyKey := fmt.Sprintf("%s-%s-v%d-%s-%s", prefix,
-		p.StrategyID.String()[:8], version, p.rc.instrument.ID,
-		p.rc.barTime.UTC().Format("20060102T150405Z"))
+	idempotencyKey := p.idempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = fmt.Sprintf("strat-%s-v%d-%s-%s",
+			p.StrategyID.String()[:8], version, p.rc.instrument.ID,
+			p.rc.barTime.UTC().Format("20060102T150405Z"))
+	}
 
 	barTime := p.rc.barTime
 	result, err := s.oms.PlaceOrder(ctx, oms.PlaceOrderRequest{
