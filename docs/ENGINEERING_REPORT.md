@@ -1749,6 +1749,129 @@ base is passed in now. Every other spec already read
 letters in this repository are A B C D E G H I K L M N T. Reported rather than
 invented; A, D, G, I, M and N were run.
 
+## 30i. Replay isolation, the scenario matrix, and the score that is not a probability
+
+This milestone was asked for nine priorities in order, with the instruction not
+to jump ahead while a more fundamental invariant is still broken. Priorities 1
+to 3 were reached. One fundamental invariant turned out to be broken, is
+diagnosed below, and is the reason the rest was not started.
+
+### Replay isolation: FIXED and PROVED
+
+The standing finding was that "the regime is classified over a window that
+mixes seeded history with dataset bars". The control existed --
+`ReplayWindow.Floor()` bounds every historical read at the run's declared
+`warmup_start`, and the store expresses it as `open_time >= $4` -- and nothing
+demonstrated that it bound.
+
+The test plants 400 bars of the OPPOSITE market shape immediately before the
+floor, under their own provider and AFTER the run has started, so
+`PurgeReplayMarketData` cannot remove them. That is the seeded-history case
+exactly: data the replay does not own and cannot delete. 400 is more than the
+300-bar window a strategy reads, so a floor that leaked at all would fill the
+window entirely with contamination.
+
+| planted before the floor | dataset | classified |
+| --- | --- | --- |
+| 400 trending bars | `range-bound` | 77 RANGING, **0** TRENDING |
+| 400 ranging bars | `trend-clean` | 77 TRENDING, **0** RANGING |
+
+With 235 short-window skips per run as an independent second witness: early in
+a run the window holds only the few replay bars produced so far, so strategies
+skip for insufficient history and say how many bars they could see. Had the
+planted bars leaked, the window would have been full from the first instant.
+That witness is a statement about what the QUERY returned, so it cannot be
+satisfied by a classifier that happens to be right.
+
+The warm-up / evaluation model the brief asks for already existed:
+`ReplayWindow{WarmupStart, EvaluationStart, EvaluationEnd, AllowWarmupTrading}`,
+with warm-up suppressing executable intents unless explicitly configured, and
+`replay_runs` recording dataset id and hash, code SHA, config hash, seed, all
+three window timestamps, starting balance and currency, risk/authority config
+hashes, correlation and regime policy, and strategy versions. A test now
+asserts that record is complete.
+
+One gap is recorded rather than tested around: `starting_positions` is
+`NOT NULL DEFAULT 0`, so a run whose input gathering FAILED is
+indistinguishable from a run on a flat account. The gatherer is deliberately
+non-fatal, so the honest fix is a separate "inputs gathered" flag.
+
+### The scenario matrix, A-T
+
+Every letter exists and is driven through the real pipeline. The brief listed
+D F G I J N O P Q R S as "not yet driven through the complete application
+pipeline"; that list was out of date -- all of them were built in earlier
+milestones, and this milestone ran them.
+
+| | scenario | status | result |
+| --- | --- | --- | --- |
+| A | clean trend | FULL_E2E | PASS |
+| B | range | FULL_E2E | PASS -- RANGING on 77 of 77 |
+| C | volatility shock | FULL_E2E | PASS |
+| D | high-impact event | FULL_E2E | SKIP: no order-bearing decision. 58 event-risk vetoes recorded through the consensus path |
+| E | spread spike | FULL_E2E | PASS |
+| F | market-data outage | FULL_E2E | PASS -- 480 runs before, 95 during with 0 orders, 95 after recovery |
+| G | conflicting strategies | FULL_E2E | PASS -- 38 splits, 0 both-sided |
+| H | drawdown sequence | FULL_E2E | PASS |
+| I | no risk capacity | FULL_E2E | SKIP: no order reached the risk engine |
+| J | kill switch | FULL_E2E | PASS, PARTIAL: 0 orders existed before activation, so "orders before activation behave normally" is undemonstrated |
+| K | trend reversal | FULL_E2E | PASS |
+| L | false breakout | FULL_E2E | PASS |
+| M | correlated opportunities | FULL_E2E | SKIP: `portfolio_correlation` is written by the OMS alone and no order reached it |
+| N | news + agreement | FULL_E2E | PASS |
+| O | stale provider recovery | FULL_E2E | PASS -- 0 orders, 0 stale refusals through the stale phase |
+| P | partial fill | FULL_E2E (manual) | PASS via a manual order; the AUTONOMOUS path skips for want of an order |
+| Q | lost response | FULL_E2E (manual) | PASS via a manual order; the AUTONOMOUS path skips for want of an order |
+| R | duplicate tick | FULL_E2E | PASS |
+| S | application restart | FULL_E2E | PASS (measured in the restart milestone; not re-run here) |
+| T | day and session boundary | FULL_E2E | PASS |
+
+Five of the twenty skip, and every one of them skips for the SAME reason.
+
+### The fundamental invariant that is broken: a raw score is not a probability
+
+`_confidence` in `services/quant` averages hand-chosen 0-1 components, and its
+own docstring says the result "is a ranking input, never a probability of
+profit". Three strategies average a REAL component with a hard-coded constant:
+`donchian_breakout` with 0.5, `rsi_mean_reversion` with 0.45, and one more with
+0.6. The value is bounded in [0, 1], is not comparable BETWEEN strategies, and
+has never been fitted against realised outcomes.
+
+It was consumed as though it were a probability. `DefaultConsensusPolicy`
+discards an opinion below 0.55 and requires 0.60 net -- thresholds that read as
+confidence levels -- applied uniformly to those scores. Half of
+`donchian_breakout`'s score is a constant, so it reports 0.31-0.44 whatever the
+market does and can never clear the floor; not because the breakout was weak,
+but because the scale is arbitrary.
+
+That is a category error, and it was invisible. It is now named: signals carry
+`confidence_kind` (`raw_score` or `calibrated_probability`) end to end, and
+every consensus verdict records the kind it was compared against -- per
+contribution, and as one label for the decision including "mixed" for the
+moment one model is calibrated and the rest are not. An empty kind reads as
+raw, because assuming calibration from silence assumes the stronger claim.
+
+**The thresholds were NOT adjusted.** Moving a number until trades appear is
+how a platform talks itself into a result. The fix is calibration against
+realised outcomes, which is research, needs evidence, and is the next
+milestone's work rather than this one's.
+
+### What this blocked
+
+Priorities 4 to 9 -- determinism re-proof after the isolation changes, speed
+invariance, walk-forward persistence/API/UI, parameter and cost sensitivity,
+Monte Carlo, backtest-versus-PAPER_FORWARD comparison, strategy and model
+promotion gates, the remaining ML metrics, baselines, the explainability view,
+NO TRADE analytics, attribution reconciliation, and correlation/RISK_OFF replay
+validation -- were NOT started.
+
+That is not a scheduling accident. Walk-forward results, a backtest-versus-
+forward comparison and an evidence-based promotion gate all need a platform
+that produces trades, and the only autonomous trades available today would come
+from moving a threshold against an uncalibrated score. Building those
+measurements on that foundation would produce numbers that look like evidence
+and are not.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This

@@ -546,6 +546,17 @@ bracket the window between them — but it is a gap.
 
 ## Not yet done
 
+- **Seeded history reaching a replay's classification: FIXED and PROVED.** The
+  floor is demonstrated by planting 400 bars of the opposite market shape
+  immediately before it, under a provider the replay cannot purge: the
+  `range-bound` dataset still classified RANGING 77/77 with 400 trending bars
+  planted, and `trend-clean` still classified TRENDING 77/77 with 400 ranging
+  bars planted. See `tests/replay/isolation_test.go`.
+- **A replay run cannot tell "input gathering failed" from "the account was
+  flat".** `starting_positions` is `NOT NULL DEFAULT 0` and the input gatherer
+  is deliberately non-fatal, so both record 0. The honest fix is a separate
+  flag saying whether the inputs were gathered at all.
+
 - **Nothing autonomous trades under the default consensus policy.** This is
   the consequence of wiring `orchestrator.Decide` in, and it is a finding, not
   a defect. `DefaultConsensusPolicy` discards an opinion below 0.55 confidence
