@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from vantage_quant import strategies
-from vantage_quant.research import datasets, expansion, historical
+from vantage_quant.research import datasets, expansion, historical, verdict
 
 # --- generation -------------------------------------------------------------
 
@@ -221,16 +221,16 @@ def test_every_registered_strategy_has_a_research_role() -> None:
 
 
 def test_a_risk_filter_is_not_asked_a_directional_question() -> None:
-    verdict, reason = expansion.readiness(
+    decided, reason = expansion.classify(
         role=expansion.StrategyRole.RISK_FILTER,
-        evidence=expansion.EvidenceClass.CALIBRATION_CANDIDATE,
         score_span_used=0.9,
         monotonicity="MONOTONIC_POSITIVE",
         mean_net_return=0.05,
         spearman_interval=expansion.Interval(0.5, 0.3, 0.7, 500),
         raw_n=500,
+        effective_n=500,
     )
-    assert verdict is expansion.CalibrationReadiness.NOT_APPLICABLE
+    assert decided is verdict.CalibrationVerdict.NOT_APPLICABLE
     assert "veto" in reason
 
 
@@ -240,43 +240,47 @@ def test_a_constant_score_is_non_informative_however_large_n_is() -> None:
     A large count of an unchanging value ranks nothing. The span check runs
     BEFORE the count check so that N can never rescue it.
     """
-    verdict, reason = expansion.readiness(
+    decided, reason = expansion.classify(
         role=expansion.StrategyRole.ALPHA_MOMENTUM,
-        evidence=expansion.EvidenceClass.CALIBRATION_CANDIDATE,
         score_span_used=0.0,
         monotonicity="MONOTONIC_POSITIVE",
         mean_net_return=0.05,
         spearman_interval=expansion.Interval(0.5, 0.3, 0.7, 500),
         raw_n=500,
+        effective_n=500,
     )
-    assert verdict is expansion.CalibrationReadiness.NON_INFORMATIVE_SCORE
+    assert decided is verdict.CalibrationVerdict.NON_INFORMATIVE_SCORE
     assert "ordering information" in reason
 
 
 def test_an_interval_including_zero_is_not_ready() -> None:
-    verdict, _ = expansion.readiness(
+    decided, reason = expansion.classify(
         role=expansion.StrategyRole.ALPHA_MOMENTUM,
-        evidence=expansion.EvidenceClass.CALIBRATION_CANDIDATE,
         score_span_used=0.6,
         monotonicity="WEAK_POSITIVE",
         mean_net_return=0.01,
         spearman_interval=expansion.Interval(0.05, -0.10, 0.20, 500),
         raw_n=500,
+        effective_n=500,
     )
-    assert verdict is expansion.CalibrationReadiness.MORE_DATA_REQUIRED
+    # Measured and unresolvable, NOT short of data -- the distinction this
+    # taxonomy exists to make.
+    assert decided is verdict.CalibrationVerdict.ORDERING_NOT_ESTABLISHED
+    assert decided not in verdict.NEEDS_MORE_DATA
+    assert "includes zero" in reason
 
 
 def test_a_positive_ordering_that_loses_money_is_cost_negative() -> None:
-    verdict, _ = expansion.readiness(
+    decided, _ = expansion.classify(
         role=expansion.StrategyRole.ALPHA_MOMENTUM,
-        evidence=expansion.EvidenceClass.CALIBRATION_CANDIDATE,
         score_span_used=0.6,
         monotonicity="MONOTONIC_POSITIVE",
         mean_net_return=-0.001,
         spearman_interval=expansion.Interval(0.3, 0.1, 0.5, 500),
         raw_n=500,
+        effective_n=500,
     )
-    assert verdict is expansion.CalibrationReadiness.COST_NEGATIVE
+    assert decided is verdict.CalibrationVerdict.COST_NEGATIVE
 
 
 def test_required_bars_follows_the_measured_rate() -> None:
@@ -362,16 +366,16 @@ def test_a_veto_that_never_signals_is_not_short_of_data() -> None:
     MORE_DATA_REQUIRED tells the reader that collecting more bars would help,
     and no quantity of bars will ever make a veto express a direction.
     """
-    verdict, _ = expansion.readiness(
+    decided, _ = expansion.classify(
         role=expansion.StrategyRole.RISK_FILTER,
-        evidence=expansion.EvidenceClass.INSUFFICIENT,
         score_span_used=0.0,
         monotonicity="INSUFFICIENT_EVIDENCE",
         mean_net_return=0.0,
         spearman_interval=None,
         raw_n=0,
+        effective_n=0,
     )
-    assert verdict is expansion.CalibrationReadiness.NOT_APPLICABLE
+    assert decided is verdict.CalibrationVerdict.NOT_APPLICABLE
 
 
 def test_an_unobserved_score_is_not_called_non_informative() -> None:
@@ -380,16 +384,16 @@ def test_an_unobserved_score_is_not_called_non_informative() -> None:
     The span check would otherwise fire on the default 0.0 and publish a claim
     about a distribution nobody sampled.
     """
-    verdict, reason = expansion.readiness(
+    decided, reason = expansion.classify(
         role=expansion.StrategyRole.ALPHA_DIRECTIONAL,
-        evidence=expansion.EvidenceClass.INSUFFICIENT,
         score_span_used=0.0,
         monotonicity="INSUFFICIENT_EVIDENCE",
         mean_net_return=0.0,
         spearman_interval=None,
         raw_n=0,
+        effective_n=0,
     )
-    assert verdict is expansion.CalibrationReadiness.MORE_DATA_REQUIRED
+    assert decided is verdict.CalibrationVerdict.INSUFFICIENT_DATA
     assert "never observed" in reason
 
 
@@ -405,31 +409,31 @@ def test_unestablished_monotonicity_is_not_treated_as_monotonic() -> None:
     passed as "we established one". A monotone calibration needs a monotone
     ordering to exist.
     """
-    verdict, reason = expansion.readiness(
+    decided, reason = expansion.classify(
         role=expansion.StrategyRole.ALPHA_BREAKOUT,
-        evidence=expansion.EvidenceClass.MODERATE_EVIDENCE,
         score_span_used=0.99,
         monotonicity="INSUFFICIENT_EVIDENCE",
         mean_net_return=0.0025,
         spearman_interval=expansion.Interval(0.10, 0.046, 0.150, 500),
         raw_n=1214,
+        effective_n=404,
     )
-    assert verdict is not expansion.CalibrationReadiness.READY_FOR_CALIBRATION
-    assert verdict is expansion.CalibrationReadiness.MORE_DATA_REQUIRED
+    assert decided is not verdict.CalibrationVerdict.READY_FOR_CALIBRATION
+    assert decided is verdict.CalibrationVerdict.ORDERING_NOT_ESTABLISHED
     assert "quantile bins" in reason
 
 
 def test_a_flat_ordering_is_not_ready_either() -> None:
-    verdict, _ = expansion.readiness(
+    decided, _ = expansion.classify(
         role=expansion.StrategyRole.ALPHA_BREAKOUT,
-        evidence=expansion.EvidenceClass.CALIBRATION_CANDIDATE,
         score_span_used=0.99,
         monotonicity="FLAT",
         mean_net_return=0.0025,
         spearman_interval=expansion.Interval(0.10, 0.046, 0.150, 500),
         raw_n=900,
+        effective_n=700,
     )
-    assert verdict is expansion.CalibrationReadiness.NON_MONOTONIC
+    assert decided is verdict.CalibrationVerdict.NON_MONOTONIC_SCORE
 
 
 def test_episode_labels_agree_with_the_episode_count() -> None:

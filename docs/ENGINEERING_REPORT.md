@@ -1960,10 +1960,126 @@ partly measured that agreement. None of this is evidence of predictive value,
 calibration or edge, and none of it may be quoted as if it were.
 `REAL_MARKET_VALIDATION_PENDING` stands.
 
+## 30k. Real historical data: the apparatus, and why it has nothing to chew on
+
+The synthetic experiment answered a narrower question than it appeared to. A
+trend strategy scoring well on a generated trend has demonstrated that it
+agrees with the generator about what a trend is. Only real bars separate that
+agreement from an edge, so this milestone built the path for real bars and
+asked what the local machine actually has.
+
+**It has none.** `research-data/` is empty, `Downloads`, `Desktop` and
+`Documents` contain no market file, and the only CSVs in the repository are the
+fourteen generated replay fixtures. Nothing was downloaded, scraped or fetched:
+CLAUDE.md rule 3 forbids it and the brief forbade it twice. The status is
+`WAITING_FOR_HISTORICAL_DATA`, and the specification of what would unblock the
+next run is printed by `python -m vantage_quant.research datasets`.
+
+### The evidence taxonomy was fixed first, deliberately
+
+Milestone E shipped a verdict called `MORE_DATA_REQUIRED` that meant two
+incompatible things: too little evidence to say anything, and enough evidence
+to say there is no usable relationship. Those call for opposite actions.
+`donchian_breakout` carried that label with 409 independent episodes behind it,
+`atr_volatility_regime` with 20.
+
+Importing real market results into an ambiguous category would have baked the
+ambiguity into the one comparison that matters most, so the split came first.
+Ten verdicts now name one cause each, and two frozen sets -- `NEEDS_MORE_DATA`
+and `SCORE_IS_THE_PROBLEM` -- make the distinction machine-readable rather than
+a matter of reading prose. `ORDERING_NOT_ESTABLISHED` is the new one that
+carries the weight: measured, adequate sample, and still not resolvable from
+zero, which points at the score's distribution rather than its quantity.
+
+A separate flag records whether the SCORE or the SIGNAL RULE is the thing to
+revisit, because a bad score is not a bad trading hypothesis and Milestone E
+found exactly that split in `donchian_breakout`.
+
+Prior runs are NOT rewritten. `verdict.map_legacy` translates old labels for
+display, and where an old label is genuinely ambiguous and no counts accompany
+it, it returns nothing and says why -- a migration that guesses is
+indistinguishable from one that knows.
+
+### What was built
+
+- **`quality.py`** -- a data-quality report rather than a boolean. Duplicate
+  timestamps, out-of-order rows, non-finite or non-positive prices, impossible
+  OHLC and crossed quotes are ERRORS that reject a dataset. Assumed timezone,
+  absent spread, irregular spacing, large gaps, abnormal ranges and spreads,
+  suspected flatlining, Saturday bars and low coverage are WARNINGS that travel
+  with it. Nothing is repaired: a validator that silently fixes its input
+  destroys the evidence that the input was broken.
+- **A market clock** modelled on `fx_metals_24x5`, so a closed venue is not
+  counted as missing data. Counting the weekend as missing makes a complete
+  dataset look broken and hides the one that is.
+- **`historical.py`** -- RAW, NORMALIZED and RESEARCH as distinct layers, so
+  "was that in the file, or did we do it?" stays answerable. Both SHA-256
+  hashes travel into every record.
+- **`historical_run.py`** -- imports, partitions chronologically BEFORE any
+  outcome is examined, seals TEST, and evaluates TRAIN through the SAME
+  `observe_frame` and `build_report` the synthetic run uses.
+- **`compare.py`** -- synthetic against historical, never averaged, with
+  disagreements classified. It refuses two runs whose analysis versions differ.
+- **`requirements.py`** -- the exact specification of the missing data, derived
+  from the longest registered warm-up plus the episode floor rather than picked.
+
+### One analysis, two data sources
+
+There is no `HistoricalResearchV2`. Both paths call the same observer and the
+same report builder, so a difference between the two results comes from the
+market rather than from two implementations that drifted. The methodology is
+versioned as a whole (`signal-research-analysis/v1`) carrying horizon registry,
+cost model, clustering rule, bootstrap, classification, generator, partition and
+normalization versions, and a comparison across mismatched versions is refused
+rather than produced with a caveat.
+
+### Costs are an assumption unless the source says otherwise
+
+A dataset without bid/ask gets `cost_basis = ESTIMATED_COSTS`, and that label
+belongs on every result derived from it. Bid/ask are never synthesised, and a
+`spread` column of zeroes does not count as observed -- a backtest reporting
+costs it never paid is worse than one that admits it is estimating.
+
+### Timezone is never inferred from this machine
+
+Gold and FX histories are commonly exported in broker server time, and a silent
+offset moves every session boundary in the analysis. A declared timezone is
+converted and recorded; an undeclared one is taken as UTC, recorded as
+`UNDECLARED`, and raises a `TIMEZONE_ASSUMED` warning. Daylight saving is handled
+by converting through the named zone, tested across the March 2024 transition in
+both directions.
+
+### The file is untrusted input
+
+Bounded in size before it is opened. Addressed by NAME inside an allowlisted
+directory -- never a path, because an arbitrary path parameter is a file-read
+primitive pointed at the host -- with separators, `..`, drive letters and
+leading dots refused and the resolved path then checked with `is_relative_to`,
+since a string prefix would accept `research-data-elsewhere`. Duplicate columns
+are refused before pandas can silently disambiguate them and let one win.
+A column name a spreadsheet would execute as a formula is refused. Unparseable
+timestamps are an error rather than a `NaT` flowing onward.
+
+### What this milestone did NOT produce
+
+No historical results, because there is no historical data. No calibration was
+fitted, no strategy formula changed, no threshold moved, `consensus-policy/v1`
+is untouched, and both sealed TEST partitions -- synthetic and historical --
+were never read. The synthetic baseline from Milestone E is preserved as its
+own run; the re-run under the corrected taxonomy carries a new run id rather
+than overwriting it.
+
 ## 31. What is NOT verified
 
-Stated plainly, because a report that lists only successes is not useful. This
-list is shorter than it was — six items from the previous revision have since
+Stated plainly, because a report that lists only successes is not useful.
+
+- **No strategy has been validated against real market data.** Every measured
+  result in this repository rests on `SYNTHETIC_CONTROLLED` bars, where the
+  generator and the strategies share a model of what a trend is. The ingestion
+  path, quality validation, partitioning and comparison are built and tested;
+  the data is absent. Status: `WAITING_FOR_HISTORICAL_DATA`.
+
+This list is shorter than it was — six items from the previous revision have since
 been executed and moved into the tally — and what remains is what remains.
 
 - **The CI workflows have never run.** There is no remote. `actionlint` passes
@@ -2284,13 +2400,13 @@ need real time.
 | Go unit | this milestone | **664 pass, 0 fail, 36 skip** across 25 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack. No Go code changed this milestone |
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | **carried — not re-run** | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
-| Python unit | this milestone | **269 pass, 0 fail**; `ruff` clean; `mypy` clean on 21 source files. 40 of them are this milestone's `test_research_expansion.py` |
+| Python unit | this milestone | **334 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files. 65 of them are this milestone's `test_research_historical.py`, covering ingestion security, timezone handling, quality gating, partitioning and the seal |
 | Web static | this milestone | `tsc --noEmit` clean; `eslint` clean. **`npm run build` was NOT re-run** — no web code changed this milestone, and the previous revision's clean build is not re-asserted here |
 | Playwright | **carried — not re-run** | **51 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 21 are the new reconciliation and operations tests |
 | Smoke: trading | **carried — not re-run** | **55 pass, 0 fail** |
 | Smoke: research | **carried — not re-run** | **35 pass, 0 fail** |
 | Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | this milestone | 0 findings across 231 tracked files with 371 rules, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
+| Semgrep | this milestone | 0 findings across 238 tracked files with 394 rules, plus a separate 0-finding pass over the 52 research files (510 rules) because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
 | govulncheck | this milestone | 0 reachable. "Your code is affected by 0 vulnerabilities"; 1 vulnerability in a required module that nothing calls |
 | npm audit | this milestone | 0 vulnerabilities |
 | Trivy filesystem (vuln) | this milestone | 0 across `go.mod` and `package-lock.json`, CI's settings (`CRITICAL,HIGH`, `--ignore-unfixed`), exit 0. `.venv`, `node_modules` and `.next` skipped, as they do not exist in CI's fresh checkout — scanning them made Trivy die with a FATAL walk error that `--exit-code 0` reported as success |

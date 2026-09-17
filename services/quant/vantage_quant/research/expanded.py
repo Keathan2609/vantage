@@ -22,7 +22,16 @@ import pandas as pd
 from vantage_quant import strategies
 from vantage_quant.score_inventory import INVENTORY
 
-from . import analyse, datasets, expansion, generate, horizons, outcome, partition
+from . import (
+    analyse,
+    datasets,
+    expansion,
+    generate,
+    horizons,
+    outcome,
+    partition,
+    verdict,
+)
 
 
 @dataclass
@@ -62,8 +71,12 @@ class ExpandedStrategyReport:
     regime_evidence: dict[str, float | None] = field(default_factory=dict)
     component_evidence: dict[str, float | None] = field(default_factory=dict)
     evidence: str = expansion.EvidenceClass.INSUFFICIENT.value
-    readiness: str = expansion.CalibrationReadiness.MORE_DATA_REQUIRED.value
+    readiness: str = verdict.CalibrationVerdict.INSUFFICIENT_DATA.value
     readiness_reason: str = ""
+    #: Whether the SCORE or the SIGNAL RULE is the thing to revisit. Separate
+    #: from the verdict because a bad score is not a bad trading hypothesis.
+    redesign: str = verdict.RedesignFlag.NONE.value
+    redesign_reason: str = ""
     note: str = ""
 
 
@@ -71,6 +84,10 @@ class ExpandedStrategyReport:
 class ExpandedRun:
     run_id: str
     code_sha: str
+    #: Every versioned input to a verdict, carried with the verdict. A
+    #: historical result and a synthetic result compared across different
+    #: horizon registries would differ for reasons unrelated to the market.
+    analysis_versions: verdict.AnalysisVersions
     generator_version: int
     horizon_config_version: int
     cost_policy_version: int
@@ -137,8 +154,23 @@ def _observe_one(
     """
     key, spec, digest, sha = payload
     built = datasets.generate(spec)
+    return observe_frame(
+        key, frame=built.frame, dataset_id=spec.dataset_id, digest=digest, sha=sha
+    )
+
+
+def observe_frame(
+    key: str, *, frame: pd.DataFrame, dataset_id: str, digest: str, sha: str
+) -> tuple[str, int, list[Any]]:
+    """Evaluate ONE strategy over ONE frame of bars, whatever produced them.
+
+    The single place a strategy meets data in this package. Historical and
+    synthetic runs both call it, so a difference between their results is a
+    difference in the market rather than in two analysis paths that drifted
+    apart -- which is the whole point of comparing them.
+    """
     bars = generate.DatasetBars(
-        dataset_id=spec.dataset_id, dataset_hash=digest, frame=built.frame
+        dataset_id=dataset_id, dataset_hash=digest, frame=frame
     )
     produced = generate.observe_dataset(strategies.REGISTRY[key], bars, sha=sha)
     analysable = [s for s in produced if s.observation.is_analysable()]
@@ -149,19 +181,19 @@ def _observe_one(
     # denominator produces a required-data estimate that is wrong by the same
     # factor.
     floor = max(strategies.REGISTRY[key].required_bars, generate.WARMUP_BARS)
-    eligible = max(0, len(built.frame) - floor - 1)
+    eligible = max(0, len(frame) - floor - 1)
 
     costs = outcome.research_cost_model()
     spec_obj = strategies.REGISTRY[key]
     scored: list[Any] = []
     for horizon in horizons.horizons_for(spec_obj.family):
         for sig in analysable:
-            idx = int(built.frame.index.get_indexer(pd.Index([sig.observation.bar_time]))[0])
+            idx = int(frame.index.get_indexer(pd.Index([sig.observation.bar_time]))[0])
             if idx < 0:
                 continue
             result = outcome.compute_outcome(
                 sig.observation,
-                future_bars=built.frame.iloc[idx + 1 :],
+                future_bars=frame.iloc[idx + 1 :],
                 horizon_id=horizon.horizon_id,
                 horizon_bars=horizon.bars,
                 suggested_stop=sig.suggested_stop,
@@ -204,7 +236,7 @@ def run(
             eligible_bars[key] += eligible
 
     reports = [
-        _report(strategies.REGISTRY[key], collected[key], eligible_bars[key])
+        build_report(strategies.REGISTRY[key], collected[key], eligible_bars[key])
         for key in sorted(strategies.REGISTRY)
     ]
 
@@ -213,6 +245,7 @@ def run(
     return ExpandedRun(
         run_id=run_id,
         code_sha=sha,
+        analysis_versions=verdict.AnalysisVersions(),
         generator_version=datasets.GENERATOR_VERSION,
         horizon_config_version=horizons.HORIZON_CONFIG_VERSION,
         cost_policy_version=outcome.COST_POLICY_VERSION,
@@ -228,9 +261,15 @@ def run(
     )
 
 
-def _report(
+def build_report(
     spec: strategies.StrategySpec, rows: list[Any], eligible_bars: int
 ) -> ExpandedStrategyReport:
+    """Turn observations into a verdict. SOURCE-AGNOSTIC, deliberately.
+
+    Shared by the synthetic and historical runs so that the statistics,
+    clustering, intervals and classification are identical by construction
+    rather than by inspection.
+    """
     observations = [o for o, r in rows if r is None]
     scored = [(o, r) for o, r in rows if r is not None]
     role = expansion.role_for(spec.key)
@@ -266,17 +305,22 @@ def _report(
         # Through readiness() rather than around it. A veto that never emits a
         # directional signal is NOT_APPLICABLE, not short of data, and only the
         # role knows which.
-        verdict, reason = expansion.readiness(
+        decided, reason = expansion.classify(
             role=role,
-            evidence=expansion.EvidenceClass.INSUFFICIENT,
             score_span_used=0.0,
             monotonicity="INSUFFICIENT_EVIDENCE",
             mean_net_return=0.0,
             spearman_interval=None,
             raw_n=0,
+            effective_n=0,
         )
-        report.readiness = verdict.value
+        report.readiness = decided.value
         report.readiness_reason = reason
+        flag, flag_reason = expansion.redesign_flag(
+            strategy_verdict=decided, net_return_interval=None
+        )
+        report.redesign = flag.value
+        report.redesign_reason = flag_reason
         return report
 
     summary = expansion.episodes(
@@ -315,6 +359,7 @@ def _report(
         by_horizon.setdefault(r.horizon_id, []).append((o, r))
 
     best_ci: expansion.Interval | None = None
+    best_net_ci: expansion.Interval | None = None
     best_mono = "INSUFFICIENT_EVIDENCE"
     best_net = 0.0
     for horizon in horizons.horizons_for(spec.family):
@@ -356,6 +401,7 @@ def _report(
             best_ci is None or abs(coefficient) > abs(best_ci.point)
         ):
             best_ci = evidence.spearman_ci
+            best_net_ci = evidence.net_return_ci
             best_mono = evidence.monotonicity
             best_net = evidence.mean_net_return
 
@@ -392,17 +438,26 @@ def _report(
         report.component_evidence[name] = coefficient
 
     report.evidence = expansion.classify_evidence(report.effective_n).value
-    verdict, reason = expansion.readiness(
+    decided, reason = expansion.classify(
         role=role,
-        evidence=expansion.EvidenceClass(report.evidence),
         score_span_used=report.score_span_used,
         monotonicity=best_mono,
         mean_net_return=best_net,
         spearman_interval=best_ci,
         raw_n=report.raw_n,
+        effective_n=report.effective_n,
     )
-    report.readiness = verdict.value
+    report.readiness = decided.value
     report.readiness_reason = reason
+
+    # Does the ENTRY RULE pay even where the score fails to rank? Measured on
+    # the same horizon the ordering verdict came from, so the two statements
+    # are about one set of trades rather than two.
+    flag, flag_reason = expansion.redesign_flag(
+        strategy_verdict=decided, net_return_interval=best_net_ci
+    )
+    report.redesign = flag.value
+    report.redesign_reason = flag_reason
     return report
 
 

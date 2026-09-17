@@ -24,6 +24,17 @@ from itertools import pairwise
 
 import numpy as np
 
+from . import verdict
+from .verdict import (
+    CalibrationVerdict,
+    HistoricalSufficiency,
+    RedesignFlag,
+)
+
+#: Fraction of its theoretical range a score must actually use before any
+#: ordering claim is attempted. Below this it is a constant with noise.
+MIN_SCORE_SPAN = 0.02
+
 #: Bootstrap resamples. Fixed, and the seed is fixed too: a confidence interval
 #: that moved between runs would be another source of noise in a milestone
 #: about measuring noise.
@@ -110,16 +121,6 @@ def classify_evidence(effective_n: int) -> EvidenceClass:
     if effective_n < 500:
         return EvidenceClass.MODERATE_EVIDENCE
     return EvidenceClass.CALIBRATION_CANDIDATE
-
-
-class CalibrationReadiness(StrEnum):
-    READY_FOR_CALIBRATION = "READY_FOR_CALIBRATION"
-    MORE_DATA_REQUIRED = "MORE_DATA_REQUIRED"
-    NON_INFORMATIVE_SCORE = "NON_INFORMATIVE_SCORE"
-    NON_MONOTONIC = "NON_MONOTONIC"
-    COST_NEGATIVE = "COST_NEGATIVE"
-    RESEARCH_ONLY = "RESEARCH_ONLY"
-    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 @dataclass(frozen=True)
@@ -351,33 +352,45 @@ def bootstrap_spearman(
     )
 
 
-def readiness(
+def classify(
     *,
     role: StrategyRole,
-    evidence: EvidenceClass,
     score_span_used: float,
     monotonicity: str,
     mean_net_return: float,
     spearman_interval: Interval | None,
     raw_n: int,
-) -> tuple[CalibrationReadiness, str]:
-    """The milestone's final output for one strategy, with its reason.
+    effective_n: int,
+) -> tuple[CalibrationVerdict, str]:
+    """One verdict for one strategy, naming ONE cause.
 
-    Every verdict is decided here, including the ones for strategies that
-    never signalled. A caller that short-circuits an empty sample to
-    MORE_DATA_REQUIRED before reaching this function reports that more data
-    would help a veto, which is false -- no quantity of bars makes a veto emit
-    a directional opinion.
+    Every verdict is decided here, including for strategies that never
+    signalled. A caller that short-circuits an empty sample before reaching
+    this function reports that more data would help a veto, which is false --
+    no quantity of bars makes a veto emit a directional opinion.
+
+    The ORDER of these checks is the design. Several could apply at once, and
+    the one reported is the one a reader should act on first:
+
+      role         -- asking a veto a directional question is a category error
+      unobserved   -- an unsampled score is not a constant score
+      constant     -- no N rescues a score that does not move
+      raw count    -- too little of anything
+      episodes     -- plenty of signals, too few independent ones
+      shape        -- flat or non-monotone, measured with adequate power
+      resolution   -- measured, cannot be resolved from zero
+      direction    -- resolved, and pointing the wrong way
+      cost         -- resolved, right way, still loses to costs
     """
     if not scores_a_direction(role):
         if role is StrategyRole.RISK_FILTER:
             return (
-                CalibrationReadiness.NOT_APPLICABLE,
+                CalibrationVerdict.NOT_APPLICABLE,
                 "a veto rather than a directional opinion; 'does its score predict "
                 "return' is not a question it was built to answer",
             )
         return (
-            CalibrationReadiness.RESEARCH_ONLY,
+            CalibrationVerdict.RESEARCH_ONLY,
             f"role {role.value} is not evaluated as directional alpha",
         )
 
@@ -387,61 +400,158 @@ def readiness(
     # never sampled.
     if raw_n <= 0:
         return (
-            CalibrationReadiness.MORE_DATA_REQUIRED,
+            CalibrationVerdict.INSUFFICIENT_DATA,
             "never produced an actionable signal, so its score was never observed",
         )
 
     # A score that never moves cannot rank anything, whatever N says. Checked
-    # BEFORE the count, so a large sample of identical scores cannot pass.
-    if score_span_used < 0.02:
+    # BEFORE the counts, so a large sample of identical scores cannot pass.
+    if score_span_used < MIN_SCORE_SPAN:
         return (
-            CalibrationReadiness.NON_INFORMATIVE_SCORE,
+            CalibrationVerdict.NON_INFORMATIVE_SCORE,
             f"the score used {score_span_used:.1%} of its possible range, so it "
             f"carries no ordering information to calibrate",
         )
 
-    if evidence in (EvidenceClass.INSUFFICIENT, EvidenceClass.EXPLORATORY_ONLY):
+    if raw_n < verdict.MIN_RAW_FOR_EPISODE_COMPLAINT:
         return (
-            CalibrationReadiness.MORE_DATA_REQUIRED,
-            f"effective evidence is {evidence.value}",
+            CalibrationVerdict.INSUFFICIENT_DATA,
+            f"{raw_n} observations in total; collecting more bars is the action",
         )
 
-    # An AFFIRMATIVE ordering is required, not merely the absence of a
-    # negative verdict. Checking only for NON_MONOTONIC let INSUFFICIENT_EVIDENCE
-    # and FLAT pass as though monotonicity had been demonstrated: the session
-    # strategy's score collapsed into two usable quantile bins out of five, so
-    # monotonicity could not be established at all, and it was still reported
-    # READY_FOR_CALIBRATION. A monotone calibration map needs a monotone
-    # ordering to exist; "we could not tell" is not that.
+    # Plenty of signals, too few INDEPENDENT ones. Split from INSUFFICIENT_DATA
+    # because the remedy differs: more bars help only if they contain new
+    # episodes rather than longer ones.
+    if effective_n < verdict.MIN_EPISODES_FOR_ORDERING:
+        return (
+            CalibrationVerdict.INSUFFICIENT_INDEPENDENT_EPISODES,
+            f"{raw_n} signals but only {effective_n} independent episodes; the "
+            f"shortage is independence, not volume",
+        )
+
+    # An AFFIRMATIVE ordering is required, not merely the absence of a negative
+    # verdict. Checking only for NON_MONOTONIC once let INSUFFICIENT_EVIDENCE
+    # and FLAT pass as though monotonicity had been demonstrated, and produced
+    # a false READY_FOR_CALIBRATION.
     if monotonicity in ("NON_MONOTONIC", "FLAT"):
         return (
-            CalibrationReadiness.NON_MONOTONIC,
-            "outcome does not move consistently with score, so a monotone "
-            "calibration would be fitted to an ordering that is not there",
+            CalibrationVerdict.NON_MONOTONIC_SCORE,
+            f"measured with {effective_n} independent episodes and the outcome "
+            f"does not move consistently with the score ({monotonicity.lower()}); "
+            f"a monotone calibration would be fitted to an ordering that is not "
+            f"there",
         )
 
     if monotonicity not in ("MONOTONIC_POSITIVE", "WEAK_POSITIVE", "NEGATIVE"):
         return (
-            CalibrationReadiness.MORE_DATA_REQUIRED,
+            CalibrationVerdict.ORDERING_NOT_ESTABLISHED,
             f"monotonicity is {monotonicity}: the score does not spread across "
-            f"enough quantile bins to establish whether outcome moves with it",
+            f"enough quantile bins to judge shape, despite {effective_n} "
+            f"independent episodes. The distribution is the obstacle, not the "
+            f"quantity",
         )
 
     if spearman_interval is not None and not spearman_interval.excludes_zero:
         return (
-            CalibrationReadiness.MORE_DATA_REQUIRED,
+            CalibrationVerdict.ORDERING_NOT_ESTABLISHED,
             f"the rank correlation interval [{spearman_interval.lower:+.3f}, "
-            f"{spearman_interval.upper:+.3f}] includes zero",
+            f"{spearman_interval.upper:+.3f}] includes zero on {effective_n} "
+            f"independent episodes, so the relationship cannot be resolved from "
+            f"none",
+        )
+
+    # Resolved, and pointing the wrong way. Informative rather than absent: the
+    # score means the opposite of what the platform renders it as.
+    if monotonicity == "NEGATIVE" or (
+        spearman_interval is not None and spearman_interval.point < 0
+    ):
+        return (
+            CalibrationVerdict.NEGATIVE_ORDERING,
+            "higher scores rank WORSE outcomes; the ordering exists and runs "
+            "opposite to the direction the score is presented as meaning",
         )
 
     if mean_net_return <= 0:
         return (
-            CalibrationReadiness.COST_NEGATIVE,
+            CalibrationVerdict.COST_NEGATIVE,
             "the ordering exists but the mean net outcome does not survive costs",
         )
 
     return (
-        CalibrationReadiness.READY_FOR_CALIBRATION,
-        f"{evidence.value} with a rank correlation excluding zero and a "
-        f"positive net outcome",
+        CalibrationVerdict.READY_FOR_CALIBRATION,
+        f"{effective_n} independent episodes, a rank correlation excluding zero "
+        f"and a positive net outcome",
+    )
+
+
+def redesign_flag(
+    *,
+    strategy_verdict: CalibrationVerdict,
+    net_return_interval: Interval | None,
+) -> tuple[RedesignFlag, str]:
+    """Whether the SCORE or the SIGNAL RULE is the thing to revisit.
+
+    A bad score is not a bad trading hypothesis, and the synthetic run found
+    exactly that split: signals whose net outcome interval excluded zero,
+    carrying a score that failed to rank those same signals. Nothing is
+    redesigned here; this marks where to look.
+    """
+    if strategy_verdict in (
+        CalibrationVerdict.RESEARCH_ONLY,
+        CalibrationVerdict.NOT_APPLICABLE,
+        CalibrationVerdict.READY_FOR_CALIBRATION,
+    ):
+        return RedesignFlag.NONE, ""
+
+    if strategy_verdict in verdict.NEEDS_MORE_DATA:
+        return RedesignFlag.NONE, "too little evidence to judge either part"
+
+    signals_pay = (
+        net_return_interval is not None
+        and net_return_interval.excludes_zero
+        and net_return_interval.point > 0
+    )
+    if signals_pay:
+        return (
+            RedesignFlag.SCORE_REDESIGN_CANDIDATE,
+            "the entry rule produces a net outcome whose interval excludes zero "
+            "while its score fails to rank those same signals; the confidence "
+            "formula is the part that is not working",
+        )
+    return (
+        RedesignFlag.SIGNAL_RESEARCH_REQUIRED,
+        "neither the net outcome nor the score ordering is established, so the "
+        "trading hypothesis itself is the open question rather than the number "
+        "attached to it",
+    )
+
+
+def historical_sufficiency(
+    *, role: StrategyRole, raw_n: int, effective_n: int
+) -> tuple[HistoricalSufficiency, str]:
+    """Whether REAL evidence exists in enough quantity to judge at all.
+
+    Answered separately from calibration readiness because "no real data" and
+    "real data showing nothing" are different states that one verdict merges.
+    """
+    if not scores_a_direction(role):
+        return (
+            HistoricalSufficiency.NOT_APPLICABLE,
+            f"role {role.value} is not judged on directional ordering",
+        )
+    if raw_n <= 0:
+        return (
+            HistoricalSufficiency.NO_HISTORICAL_EVIDENCE,
+            "no signal was produced on historical data",
+        )
+    if effective_n < verdict.MIN_EPISODES_FOR_ORDERING:
+        return (
+            HistoricalSufficiency.MORE_HISTORICAL_DATA_REQUIRED,
+            f"{effective_n} independent historical episodes; "
+            f"{verdict.MIN_EPISODES_FOR_ORDERING} is the floor for an ordering "
+            f"claim",
+        )
+    return (
+        HistoricalSufficiency.HISTORICAL_EVIDENCE_SUFFICIENT,
+        f"{effective_n} independent historical episodes",
     )
