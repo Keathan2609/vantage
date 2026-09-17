@@ -1872,6 +1872,94 @@ from moving a threshold against an uncalibrated score. Building those
 measurements on that foundation would produce numbers that look like evidence
 and are not.
 
+## 30j. Signal coverage, statistical power, and two defects in the measurement itself
+
+The previous milestone could not answer its own question: 460 observations, no
+strategy past 100, four strategies never reaching their own warm-up because the
+TRAIN fixtures were shorter than their `required_bars`. This milestone gave the
+pipeline enough data and then measured how much of that data was actually
+evidence.
+
+No strategy formula, threshold, consensus policy or horizon was changed. More
+data, not looser rules.
+
+### The apparatus
+
+`research/datasets.py` generates sixteen market conditions from a seed, laid end
+to end and non-overlapping, at a declared `GENERATOR_VERSION`. The bars are NOT
+committed — rule 14 — so determinism is what makes that safe, and the dataset
+hash covers the generator identity as well as the bars. `research/expansion.py`
+holds the statistics; `research/historical.py` is the allowlisted seam for real
+bars, which reports `REAL_MARKET_VALIDATION_PENDING` because there are none and
+this milestone did not go looking for any. `python -m vantage_quant.research
+expanded` reproduces the run from committed code rather than a scratch script.
+
+### The measurement
+
+19 200 bars, 9 600 TRAIN, twelve strategies, 15 minutes on 12 workers.
+Full results in `docs/SIGNAL_RESEARCH.md`.
+
+**The working hypothesis was wrong in a useful direction.** Signal rates were
+expected near 2%; measured they span 1.22% to 71.76%. Five strategies produce
+over a thousand observations each. `macd_momentum` reaches 750 *effective*
+observations — comfortably a calibration candidate on count alone — and still
+fails, which is a more useful answer than "collect more".
+
+**Nothing is `READY_FOR_CALIBRATION`.** No calibration was fitted.
+
+### Two defects, both mine, both inflating confidence
+
+The first run reported `session_london_breakout` as `READY_FOR_CALIBRATION`.
+Both of the following were found by interrogating that single positive result
+rather than by a test failing.
+
+1. **`readiness` blocked only on the literal `NON_MONOTONIC`.** The session
+   strategy's score concentrates into two usable quantile bins out of five, so
+   `classify_monotonicity` returned `INSUFFICIENT_EVIDENCE` — and that sailed
+   through the gate as though monotonicity had been demonstrated. A monotone
+   calibration map requires a monotone ordering to exist; "could not establish
+   one" is not that. The gate now requires an affirmative verdict.
+
+2. **Evidence was graded on effective N while every interval was built on raw
+   N.** `EpisodeSummary`'s own docstring warns that counting clustered signals
+   as independent shrinks intervals "by roughly the square root of a lie", and
+   the bootstrap was doing exactly that. Every interval now resamples
+   **episodes**. The correction widened rank-correlation intervals by up to
+   2.37× (`rsi_mean_reversion`: 1 096 signals, 110 episodes, largest episode 82)
+   and by exactly 1.00× for `ma_trend_crossover`, whose 113 signals really are
+   113 independent events.
+
+After both fixes, the one ready verdict disappeared. That is the correct
+outcome: it was an artefact of the measurement, not a property of the strategy.
+
+### What actually blocks calibration
+
+- `macd_momentum` is the strongest **negative** result. Adequate power, score
+  `FLAT` at all three horizons, mean net return indistinguishable from zero.
+- `session_london_breakout` has a rank correlation surviving clustering and a
+  positive net outcome, but needs score *spread*, not more bars.
+- `bollinger_zscore_reversion` orders outcomes and still loses to costs.
+- `rsi_mean_reversion` orders them backwards at every horizon.
+- `grid_martingale_research` emitted 6 539 signals of a constant score.
+- `ml_direction_filter` and `ensemble_weighted_vote` emitted nothing at all.
+  The former **fails closed** with no model deployed, which is the design
+  working rather than a shortage.
+
+### Strategy edge is not score quality
+
+`donchian_breakout`'s mean net return is positive with an interval excluding
+zero at all three horizons, while its rank-correlation interval includes zero at
+all three. Its signals are profitable on this synthetic data and its score does
+not rank them. Calibrating that score would add nothing.
+
+### Every number above is synthetic
+
+`SYNTHETIC_CONTROLLED`, and the generator and the strategies share a model of
+what a trend is, so a trend strategy scoring well on a generated trend has
+partly measured that agreement. None of this is evidence of predictive value,
+calibration or edge, and none of it may be quoted as if it were.
+`REAL_MARKET_VALIDATION_PENDING` stands.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful. This
@@ -2193,19 +2281,19 @@ need real time.
 
 | Suite | Run | Result |
 | --- | --- | --- |
-| Go unit | this milestone | **681 pass, 0 fail, 0 skip** across 23 packages; `gofmt` and `go vet` clean. By package: domain 65, marketdata 59, orchestrator 49, risk 38, reconcile 34, quant 23, store 18, arch 13, fx 13, booking 12, scheduler 11, oms 10, econdata 9, portfolio 7, and the rest |
-| Go `-race` | this milestone | **0 races across all 23 packages.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
+| Go unit | this milestone | **664 pass, 0 fail, 36 skip** across 25 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack. No Go code changed this milestone |
+| Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | **carried — not re-run** | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
-| Python unit | this milestone | **202 pass, 0 fail**; `ruff` clean; `mypy` clean on 7 source files |
-| Web static | this milestone | `tsc --noEmit` clean; `eslint` clean; production build clean, 20 routes including `/operations` |
+| Python unit | this milestone | **269 pass, 0 fail**; `ruff` clean; `mypy` clean on 21 source files. 40 of them are this milestone's `test_research_expansion.py` |
+| Web static | this milestone | `tsc --noEmit` clean; `eslint` clean. **`npm run build` was NOT re-run** — no web code changed this milestone, and the previous revision's clean build is not re-asserted here |
 | Playwright | **carried — not re-run** | **51 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 21 are the new reconciliation and operations tests |
 | Smoke: trading | **carried — not re-run** | **55 pass, 0 fail** |
 | Smoke: research | **carried — not re-run** | **35 pass, 0 fail** |
 | Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | this milestone | 0 findings (`--config auto`, whole repository) |
+| Semgrep | this milestone | 0 findings across 231 tracked files with 371 rules, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
 | govulncheck | this milestone | 0 reachable. "Your code is affected by 0 vulnerabilities"; 1 vulnerability in a required module that nothing calls |
 | npm audit | this milestone | 0 vulnerabilities |
-| Trivy filesystem (vuln) | this milestone | 0 — nothing reported across the tree |
+| Trivy filesystem (vuln) | this milestone | 0 across `go.mod` and `package-lock.json`, CI's settings (`CRITICAL,HIGH`, `--ignore-unfixed`), exit 0. `.venv`, `node_modules` and `.next` skipped, as they do not exist in CI's fresh checkout — scanning them made Trivy die with a FATAL walk error that `--exit-code 0` reported as success |
 | Trivy config | this milestone | 0 HIGH/CRITICAL misconfigurations across all three Dockerfiles |
 | Trivy image — all three | **carried — not re-run** | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
 | Trivy image — unfiltered | this milestone | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
