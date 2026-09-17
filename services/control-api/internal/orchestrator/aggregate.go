@@ -537,7 +537,12 @@ func marshalVerdict(v Verdict, regime domain.Regime, fresh []Outcome,
 	}
 
 	return marshalJSON(map[string]any{
+		// Both the number a decision is stamped with AND the id that number
+		// resolves to in the register. The number alone is only interpretable
+		// while nobody has edited the thresholds behind it; the id names a
+		// frozen set that may never be edited.
 		"policy_version": v.PolicyVersion,
+		"policy_id":      string(ActivePolicyID),
 		"action":         string(v.Action),
 		"confidence":     v.Confidence.String(),
 		"reason":         v.Reason,
