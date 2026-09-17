@@ -58,6 +58,11 @@ type ReplayRun struct {
 	StartingBalance   *decimal.Decimal
 	StartingCurrency  string
 	StartingPositions int
+	// StartingStateCapture distinguishes "the account was flat" from "nobody
+	// could read the account". StartingPositions is an int, so both recorded 0
+	// and a research run could not tell which it had.
+	StartingStateCapture string
+	StartingStateError   string
 
 	// What was in force. Digests rather than documents: enough to detect that
 	// a comparison between two runs is invalid, which is the question they
@@ -108,6 +113,7 @@ func (s *ReplayStore) RecordRun(ctx context.Context, run ReplayRun) error {
             state, steps, bars_processed, step_errors, failure, warnings,
             warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
             starting_balance, starting_currency, starting_positions,
+            starting_state_capture, starting_state_error,
             risk_config_hash, authority_config_hash, correlation_policy,
             regime_policy, strategy_versions, model_versions)
         VALUES ($1, $2, $3, $4, $5, $6,
@@ -115,8 +121,9 @@ func (s *ReplayStore) RecordRun(ctx context.Context, run ReplayRun) error {
                 $11, $12, $13, $14, $15, $16,
                 $17, $18, $19, $20,
                 $21, $22, $23,
-                $24, $25, $26,
-                $27, $28, $29)
+                $24, $25,
+                $26, $27, $28,
+                $29, $30, $31)
         ON CONFLICT (id) DO UPDATE SET
             finished_at    = EXCLUDED.finished_at,
             state          = EXCLUDED.state,
@@ -135,6 +142,8 @@ func (s *ReplayStore) RecordRun(ctx context.Context, run ReplayRun) error {
             starting_balance      = EXCLUDED.starting_balance,
             starting_currency     = EXCLUDED.starting_currency,
             starting_positions    = EXCLUDED.starting_positions,
+            starting_state_capture = EXCLUDED.starting_state_capture,
+            starting_state_error   = EXCLUDED.starting_state_error,
             risk_config_hash      = EXCLUDED.risk_config_hash,
             authority_config_hash = EXCLUDED.authority_config_hash,
             correlation_policy    = EXCLUDED.correlation_policy,
@@ -146,6 +155,7 @@ func (s *ReplayStore) RecordRun(ctx context.Context, run ReplayRun) error {
 		run.State, run.Steps, run.BarsProcessed, run.StepErrors, run.Failure, warnings,
 		run.WarmupStart, run.EvaluationStart, run.EvaluationEnd, run.AllowWarmupTrading,
 		run.StartingBalance, run.StartingCurrency, run.StartingPositions,
+		captureOrNotAttempted(run.StartingStateCapture), run.StartingStateError,
 		run.RiskConfigHash, run.AuthorityConfigHash, run.CorrelationPolicy,
 		run.RegimePolicy, jsonOrEmptyArray(run.StrategyVersions),
 		jsonOrEmptyArray(run.ModelVersions))
@@ -163,6 +173,7 @@ func (s *ReplayStore) Run(ctx context.Context, id uuid.UUID) (ReplayRun, error) 
                state, steps, bars_processed, step_errors, failure, warnings,
                warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
                starting_balance, starting_currency, starting_positions,
+               starting_state_capture, starting_state_error,
                risk_config_hash, authority_config_hash, correlation_policy,
                regime_policy, strategy_versions, model_versions
         FROM replay_runs WHERE id = $1`, id)
@@ -190,6 +201,7 @@ func (s *ReplayStore) Runs(ctx context.Context, datasetID string, limit int) ([]
                state, steps, bars_processed, step_errors, failure, warnings,
                warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
                starting_balance, starting_currency, starting_positions,
+               starting_state_capture, starting_state_error,
                risk_config_hash, authority_config_hash, correlation_policy,
                regime_policy, strategy_versions, model_versions
         FROM replay_runs
@@ -233,6 +245,7 @@ func (s *ReplayStore) InterruptedRuns(ctx context.Context, limit int) ([]ReplayR
                state, steps, bars_processed, step_errors, failure, warnings,
                warmup_start, evaluation_start, evaluation_end, allow_warmup_trading,
                starting_balance, starting_currency, starting_positions,
+               starting_state_capture, starting_state_error,
                risk_config_hash, authority_config_hash, correlation_policy,
                regime_policy, strategy_versions, model_versions
         FROM replay_runs
@@ -266,6 +279,7 @@ func (s *ReplayStore) query(ctx context.Context, sql string, args ...any) ([]Rep
 			&r.Failure, &r.Warnings,
 			&r.WarmupStart, &r.EvaluationStart, &r.EvaluationEnd, &r.AllowWarmupTrading,
 			&r.StartingBalance, &r.StartingCurrency, &r.StartingPositions,
+			&r.StartingStateCapture, &r.StartingStateError,
 			&r.RiskConfigHash, &r.AuthorityConfigHash, &r.CorrelationPolicy,
 			&r.RegimePolicy, &r.StrategyVersions, &r.ModelVersions); serr != nil {
 			return nil, mapError(serr)
@@ -276,4 +290,18 @@ func (s *ReplayStore) query(ctx context.Context, sql string, args ...any) ([]Rep
 		return nil, mapError(rows.Err())
 	}
 	return out, nil
+}
+
+// captureOrNotAttempted keeps the CHECK constraint satisfied.
+//
+// An empty status is what a caller that never set one produces, and the column
+// permits only the three named states. NOT_ATTEMPTED is the right substitute
+// because it means exactly what an unset status means: nobody looked.
+func captureOrNotAttempted(status string) string {
+	switch status {
+	case "CAPTURED", "CAPTURE_FAILED", "NOT_ATTEMPTED":
+		return status
+	default:
+		return "NOT_ATTEMPTED"
+	}
 }

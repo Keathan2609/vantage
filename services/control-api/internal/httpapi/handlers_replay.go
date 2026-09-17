@@ -79,6 +79,12 @@ type replayRunView struct {
 	// AllowWarmupTrading says whether the suppression was waived, so a reader
 	// is never left inferring it from the absence of orders.
 	AllowWarmupTrading bool `json:"allow_warmup_trading"`
+	// StartingStateCapture says whether the account's opening state was
+	// observed: CAPTURED, CAPTURE_FAILED or NOT_ATTEMPTED. Surfaced because a
+	// reader deciding whether to trust a run's numbers needs to know whether
+	// its starting point was measured or defaulted.
+	StartingStateCapture string `json:"starting_state_capture"`
+	StartingStateError   string `json:"starting_state_error,omitempty"`
 
 	RowsPlayed int `json:"rows_played"`
 	RowsTotal  int `json:"rows_total"`
@@ -107,10 +113,12 @@ func (s *Server) replayView(run replay.Run) replayRunView {
 		Steps: run.Counters.Steps, BarsProcessed: run.Counters.BarsProcessed,
 		Errors: run.Counters.Errors,
 
-		Phase:              run.Phase,
-		WarmupInstants:     run.Counters.WarmupInstants,
-		EvaluationInstants: run.Counters.EvaluationInstants,
-		AllowWarmupTrading: run.AllowWarmupTrading,
+		Phase:                run.Phase,
+		WarmupInstants:       run.Counters.WarmupInstants,
+		EvaluationInstants:   run.Counters.EvaluationInstants,
+		AllowWarmupTrading:   run.AllowWarmupTrading,
+		StartingStateCapture: string(run.Inputs.StartingStateCapture),
+		StartingStateError:   run.Inputs.StartingStateError,
 
 		Simulated: true,
 		Label:     replayLabel,
@@ -381,6 +389,19 @@ type replayControlRequest struct {
 	Dataset string `json:"dataset"`
 	Seed    int64  `json:"seed"`
 	Speed   string `json:"speed"`
+	// AllowUncapturedStartingState waives the requirement that the account's
+	// opening balance and position set were actually observed.
+	//
+	// A POINTER so that omitting it means "require capture" rather than
+	// "waive it". A plain bool would default to false and silently turn every
+	// existing caller into one that waives the check -- which is the partial-
+	// update trap this repository has already been caught by once.
+	//
+	// The default is to REQUIRE capture. Every replay in this build exists to
+	// produce research evidence, and a result whose starting point is unknown
+	// is not attributable to anything. The waiver is for exploratory runs
+	// asking what a dataset looks like.
+	AllowUncapturedStartingState *bool `json:"allow_uncaptured_starting_state,omitempty"`
 	// Steps applies to STEP. Bounded, because a request that asked for a
 	// million steps would hold the handler for the life of the process.
 	Steps int `json:"steps"`
@@ -427,10 +448,27 @@ func (s *Server) handleReplayControl(w http.ResponseWriter, r *http.Request) {
 					"process on dataset time and the record should say why.")
 			return
 		}
+		requireStartingState := true
+		if req.AllowUncapturedStartingState != nil {
+			requireStartingState = !*req.AllowUncapturedStartingState
+		}
 		run, err = s.replay.Start(replay.Options{
 			DatasetID: req.Dataset, Seed: req.Seed, Speed: req.Speed,
 			CodeSHA: s.commit, ConfigHash: s.configHash,
+			RequireStartingState: requireStartingState,
 		})
+		if errors.Is(err, replay.ErrStartingStateUnavailable) {
+			// 422 rather than 500: nothing is broken in this process. The run
+			// was refused because its declared inputs could not be observed,
+			// and the caller can either fix that or ask for an exploratory run.
+			writeError(w, r, http.StatusUnprocessableEntity, "starting_state_uncaptured",
+				"The account's opening balance and position set could not be captured, "+
+					"so this run's result would not be attributable to a known starting "+
+					"point. Fix the account state, or pass "+
+					"allow_uncaptured_starting_state for an exploratory run. Detail: "+
+					err.Error())
+			return
+		}
 	case "step":
 		steps := req.Steps
 		if steps <= 0 {

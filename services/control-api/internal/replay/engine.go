@@ -238,6 +238,19 @@ type RunInputs struct {
 	StartingBalance   string
 	StartingCurrency  string
 	StartingPositions int
+	// StartingStateCapture says whether the account's opening state was
+	// actually READ, as opposed to defaulted.
+	//
+	// StartingPositions is an int with a zero value, so a run that began on a
+	// flat account and a run whose portfolio snapshot failed record the same
+	// 0. An empty position set is valid data; a failed snapshot is missing
+	// data; reading one as the other is how a calibration run attributes a
+	// result to a starting state it never observed.
+	StartingStateCapture CaptureStatus
+	// StartingStateError is why capture failed, and is empty otherwise. Read
+	// by an operator deciding whether a run's result can be trusted, so it
+	// carries a sentence rather than a stack trace.
+	StartingStateError string
 
 	RiskConfigHash      string
 	AuthorityConfigHash string
@@ -247,7 +260,37 @@ type RunInputs struct {
 	ModelVersions       []byte
 }
 
-// InputGatherer collects the declared inputs at Start.
+// CaptureStatus reports whether a run's declared starting state was observed.
+type CaptureStatus string
+
+const (
+	// CaptureNotAttempted is the honest answer for a run started by a process
+	// with no gatherer installed, and for every run recorded before this
+	// existed. Backfilling those as CAPTURED would manufacture an observation.
+	CaptureNotAttempted CaptureStatus = "NOT_ATTEMPTED"
+	// CaptureCaptured means every declared starting field was read.
+	CaptureCaptured CaptureStatus = "CAPTURED"
+	// CaptureFailed means at least one was not, and the run's inputs are
+	// therefore incomplete. A research run refuses to start on this.
+	CaptureFailed CaptureStatus = "CAPTURE_FAILED"
+)
+
+// Trustworthy reports whether the run's declared starting state may be relied
+// on as research evidence.
+func (c CaptureStatus) Trustworthy() bool { return c == CaptureCaptured }
+
+// ErrStartingStateUnavailable refuses a run that requires a trustworthy
+// starting state and could not get one.
+//
+// FAIL CLOSED, and deliberately: a calibration or comparison run whose opening
+// balance and position set are unknown produces numbers that look like
+// evidence and are not attributable to anything. An ordinary exploratory
+// replay may still opt out.
+var ErrStartingStateUnavailable = errors.New(
+	"replay: the run's starting account state could not be captured, and this " +
+		"run requires it")
+
+// InputGatherer collects the declared inputs at Start.// InputGatherer collects the declared inputs at Start.
 type InputGatherer func(ctx context.Context) (RunInputs, error)
 
 // SetInputGatherer installs it.
@@ -269,6 +312,14 @@ type Options struct {
 	Speed      string
 	CodeSHA    string
 	ConfigHash string
+	// RequireStartingState refuses to start unless the account's opening state
+	// was actually captured.
+	//
+	// Default TRUE. Every replay in this build exists to produce research
+	// evidence, and evidence whose starting point is unknown is not evidence.
+	// The opt-out exists for exploratory runs where the question is "what does
+	// this dataset look like" rather than "what did this policy earn".
+	RequireStartingState bool
 	// AllowWarmupTrading opts out of the warm-up suppression.
 	//
 	// Default false, and the default is the safe one: a replay that traded its
@@ -441,20 +492,61 @@ func (e *Engine) Start(opts Options) (Run, error) {
 	e.run.EvaluationEnd = window.EvaluationEnd
 	e.run.AllowWarmupTrading = window.AllowWarmupTrading
 
-	// The conditions this run began under. Not fatal on failure: a replay
-	// whose starting balance could not be read is still a replay, and the
-	// record says so by carrying empty fields rather than by not existing.
+	// The conditions this run began under.
+	//
+	// A failure here used to be non-fatal on the grounds that "a replay whose
+	// starting balance could not be read is still a replay". That is true of
+	// an exploratory run and false of a research one: a result whose starting
+	// balance and position set are unknown is not attributable to anything,
+	// and the record could not even say that capture had been ATTEMPTED --
+	// StartingPositions is an int, so a flat account and a failed snapshot
+	// both recorded 0.
+	//
+	// The status is now explicit and the run FAILS CLOSED when it requires a
+	// trustworthy one.
+	e.run.Inputs.StartingStateCapture = CaptureNotAttempted
 	if e.gatherInputs != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 		inputs, ierr := e.gatherInputs(ctx)
 		cancel()
-		if ierr != nil {
-			e.log.Warn("could not gather the run's declared inputs; the record "+
-				"will be incomplete and the run not fully reproducible from it",
-				"error", ierr)
-		} else {
+		switch {
+		case ierr != nil:
+			e.run.Inputs.StartingStateCapture = CaptureFailed
+			e.run.Inputs.StartingStateError = ierr.Error()
+		default:
 			e.run.Inputs = inputs
+			if e.run.Inputs.StartingStateCapture == "" {
+				// A gatherer that returned no status has not said whether it
+				// observed anything, and silence is not a capture.
+				e.run.Inputs.StartingStateCapture = CaptureNotAttempted
+			}
 		}
+	}
+
+	if opts.RequireStartingState && !e.run.Inputs.StartingStateCapture.Trustworthy() {
+		// The same teardown the recording failure below performs. The clock is
+		// already engaged by this point, so returning without disengaging
+		// would leave the process on dataset time with no run -- which is the
+		// one state that makes every later request behave inexplicably.
+		capture, reason := e.run.Inputs.StartingStateCapture, e.run.Inputs.StartingStateError
+		e.switcher.Disengage()
+		if e.restoreAggregator != nil {
+			e.restoreAggregator()
+			e.restoreAggregator = nil
+		}
+		e.state = StateIdle
+		e.run = nil
+		e.currentRun.Store(nil)
+
+		e.log.Warn("refusing to start: the run requires a captured starting state",
+			"capture", string(capture), "error", reason)
+		return Run{}, fmt.Errorf("%w (%s: %s)", ErrStartingStateUnavailable, capture, reason)
+	}
+	if !e.run.Inputs.StartingStateCapture.Trustworthy() {
+		e.log.Warn("the run's starting account state was not captured; its result "+
+			"is not attributable to a known starting point",
+			"capture", string(e.run.Inputs.StartingStateCapture),
+			"error", e.run.Inputs.StartingStateError)
 	}
 
 	// Written before the run is announced, and a failure aborts the start.

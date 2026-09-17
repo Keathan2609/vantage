@@ -511,25 +511,59 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 				RegimePolicy:      domain.DefaultRegimePolicy().Version,
 			}
 
+			// The capture is reported honestly, and "honestly" means every
+			// required field or none.
+			//
+			// This used to swallow each failure with `if err == nil`, so a
+			// portfolio snapshot that failed left StartingPositions at its
+			// zero value -- indistinguishable from a genuinely flat account.
+			// An empty position set is valid data; a failed snapshot is
+			// missing data; a research run must be able to tell them apart.
+			fail := func(what string, err error) (replay.RunInputs, error) {
+				in.StartingStateCapture = replay.CaptureFailed
+				in.StartingStateError = what + ": " + err.Error()
+				return in, nil
+			}
+
 			accounts, aerr := a.Store.Accounts.ListAllAccounts(gctx)
 			if aerr != nil {
-				return in, aerr
+				return fail("listing accounts", aerr)
 			}
-			if len(accounts) > 0 {
-				acct := accounts[0]
-				snapshot, serr := a.Portfolio.Compute(gctx, acct)
-				if serr == nil {
-					in.StartingBalance = snapshot.State.Balance.StringFixed()
-					in.StartingCurrency = string(snapshot.State.Balance.Currency())
-					in.StartingPositions = snapshot.State.OpenPositions
-				}
-				if limits, lerr := a.Store.Control.RiskLimitsForAccount(gctx, acct.ID); lerr == nil {
-					in.RiskConfigHash = digestOf(limits)
-				}
-				if auth, aerr2 := a.Store.Control.ActiveAuthorityForAccount(gctx, acct.ID); aerr2 == nil {
-					in.AuthorityConfigHash = digestOf(auth)
-				}
+			if len(accounts) == 0 {
+				// Not an error and not a capture. A replay with no account
+				// cannot trade, so there is no starting state to observe, and
+				// saying "captured zero positions" would be a claim about an
+				// account that does not exist.
+				in.StartingStateCapture = replay.CaptureFailed
+				in.StartingStateError = "no account exists, so there is no starting state to capture"
+				return in, nil
 			}
+
+			acct := accounts[0]
+			snapshot, serr := a.Portfolio.Compute(gctx, acct)
+			if serr != nil {
+				return fail("computing the portfolio snapshot", serr)
+			}
+			in.StartingBalance = snapshot.State.Balance.StringFixed()
+			in.StartingCurrency = string(snapshot.State.Balance.Currency())
+			in.StartingPositions = snapshot.State.OpenPositions
+
+			limits, lerr := a.Store.Control.RiskLimitsForAccount(gctx, acct.ID)
+			if lerr != nil {
+				return fail("loading the account's risk limits", lerr)
+			}
+			in.RiskConfigHash = digestOf(limits)
+
+			auth, autherr := a.Store.Control.ActiveAuthorityForAccount(gctx, acct.ID)
+			if autherr != nil {
+				return fail("loading the trading authority", autherr)
+			}
+			in.AuthorityConfigHash = digestOf(auth)
+
+			// Every declared starting field was read. The strategy list below
+			// is descriptive rather than part of the account's opening state,
+			// so it does not gate the status.
+			in.StartingStateCapture = replay.CaptureCaptured
 
 			// Which strategies were live, and at which version. Recorded as a
 			// list rather than a digest because "which strategies ran" is
@@ -590,6 +624,10 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 				StartingBalance:   decimalPtr(run.Inputs.StartingBalance),
 				StartingCurrency:  run.Inputs.StartingCurrency,
 				StartingPositions: run.Inputs.StartingPositions,
+				// Whether that position count was OBSERVED or defaulted. Both
+				// look like 0 without it.
+				StartingStateCapture: string(run.Inputs.StartingStateCapture),
+				StartingStateError:   run.Inputs.StartingStateError,
 
 				RiskConfigHash:      run.Inputs.RiskConfigHash,
 				AuthorityConfigHash: run.Inputs.AuthorityConfigHash,
