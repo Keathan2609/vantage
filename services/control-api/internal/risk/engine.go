@@ -296,9 +296,25 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	})
 
 	// --- Order size --------------------------------------------------------
+	//
+	// The FOURTH place rule 8 has had to be applied, and the last one found.
+	//
+	// A per-order quantity cap limits exposure, so an order that strictly
+	// reduces a position must never be refused by it. Without the exemption a
+	// position built up by several individually-permitted orders -- or opened
+	// while the cap was wider -- becomes impossible to close in one order, and
+	// the bigger the position the harder the exit. That is the same inversion
+	// the notional cap, the event blackout and the daily-loss limit each had
+	// to be rescued from, and this check was the one that still had it.
+	//
+	// `reducing` is exact and both halves matter: opposite side AND quantity
+	// no greater than the open position. A SELL of 1.00 against a 0.10 long is
+	// not reducing -- it closes 0.10 and opens 0.90 of new short exposure, and
+	// that 0.90 stays subject to every ceiling. "Opposite direction" is not a
+	// blanket exemption.
 	add(domain.RiskCheckResult{
 		Name:     domain.CheckOrderQuantity,
-		Passed:   in.Intent.Quantity.LessThanOrEqual(in.Limits.MaxOrderQuantity),
+		Passed:   reducing || in.Intent.Quantity.LessThanOrEqual(in.Limits.MaxOrderQuantity),
 		Limit:    in.Limits.MaxOrderQuantity.String(),
 		Observed: in.Intent.Quantity.String(),
 		Message: fmt.Sprintf("Order quantity %s against a limit of %s.",
