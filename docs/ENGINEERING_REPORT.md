@@ -1887,7 +1887,7 @@ data, not looser rules.
 
 `research/datasets.py` generates sixteen market conditions from a seed, laid end
 to end and non-overlapping, at a declared `GENERATOR_VERSION`. The bars are NOT
-committed — rule 14 — so determinism is what makes that safe, and the dataset
+committed — rule 15 — so determinism is what makes that safe, and the dataset
 hash covers the generator identity as well as the bars. `research/expansion.py`
 holds the statistics; `research/historical.py` is the allowlisted seam for real
 bars, which reports `REAL_MARKET_VALIDATION_PENDING` because there are none and
@@ -2069,15 +2069,94 @@ were never read. The synthetic baseline from Milestone E is preserved as its
 own run; the re-run under the corrected taxonomy carries a new run id rather
 than overwriting it.
 
+## 30l. Vantage owns its market data
+
+The platform could not acquire a price series. It generated one, replayed one
+from a fixture, or waited for somebody to drop a CSV in a directory. This
+milestone gives it a provider, a store, provenance, a coverage catalog and a
+chart that reads its own data.
+
+No API key is configured on this machine, so **no real bars were acquired**.
+Status: `TWELVE_DATA_CONFIGURATION_REQUIRED`. Everything else was built and
+tested against a mocked provider; see `docs/MARKET_DATA_PLATFORM.md`.
+
+### What exists now
+
+`TwelveDataProvider` behind the existing `marketdata.Provider` seam, so
+strategies cannot tell which provider supplied their bars. A symbol-mapping
+layer translating `XAUUSD` to `XAU/USD` once, at the boundary. A `Syncer` with
+deterministic chunking, incremental sync, gap repair, bounded retry and a fixed
+rate window. `market_data_segments` recording what was requested against what
+arrived. `research_datasets` giving research an immutable identity to cite.
+Read and admin API routes. A Lightweight Charts terminal page with decision
+markers and a provenance panel.
+
+### Three defects, all the same defect
+
+The first working version hard-coded `HISTORICAL_MARKET` on every research
+snapshot, and cheerfully labelled bars from the `mock` generator as real market
+evidence. Two milestones exist to keep generated and observed data apart; one
+constant walked past all of it. Source type is now DERIVED from the providers
+that supplied the bars, and a range mixing generated with real bars is REFUSED
+rather than labelled -- neither answer would be true.
+
+The same defect then reappeared one process boundary away: the Python importer
+assumed everything in the research directory was `HISTORICAL_MARKET`, which is
+right for a file an operator placed by hand and wrong for a snapshot Vantage
+had just exported from generated bars. Each export now carries a manifest
+stating what it is, and an unrecognised source type is refused rather than
+defaulted.
+
+And the coverage endpoint reported every weekend and every daily maintenance
+break as a gap -- precisely what `FindGaps`' own comment warns makes a complete
+dataset look broken. The store's query is structural by design; the handler
+has a market clock and was not using it. Measured after the fix on development
+data: 0 real gaps, 27 closed-market absences.
+
+All three were found by running the thing rather than by a test failing, which
+is the argument for exercising a new path against a live stack before believing
+it works.
+
+### A fourth, found by a test
+
+The provider requested ascending order and then unconditionally REVERSED the
+result -- correct only when the provider ignores the parameter. The first test
+passed because its fixture happened to be descending; the second caught it. It
+sorts now, which is right either way.
+
+### Secrets
+
+The key is server-side only. It is not in the configuration digest that travels
+into stored replay records, not in provider health, not in an error path, and
+not in the browser bundle -- a Playwright test watches the network and fails if
+the browser requests a provider host at all. Redirects are refused, because
+following one would carry the key to wherever the provider pointed.
+
+### What this does NOT do
+
+No strategy formula, threshold or `required_bars` changed. No calibration.
+`consensus-policy/v1` untouched. No sealed TEST partition read. PAPER remains
+the only executable mode and no broker was contacted. Twelve Data does not feed
+PAPER_FORWARD in this milestone: the provider has no live quote at all, and
+returns an error rather than a synthesised price, because a provider that
+invents a quote to satisfy an interface is how a strategy ends up trading a
+number nobody published.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
 
 - **No strategy has been validated against real market data.** Every measured
   result in this repository rests on `SYNTHETIC_CONTROLLED` bars, where the
-  generator and the strategies share a model of what a trend is. The ingestion
-  path, quality validation, partitioning and comparison are built and tested;
-  the data is absent. Status: `WAITING_FOR_HISTORICAL_DATA`.
+  generator and the strategies share a model of what a trend is. The
+  acquisition path, ingestion, quality validation, partitioning, snapshots and
+  comparison are built and tested; the data is absent because no provider API
+  key is configured. Status: `TWELVE_DATA_CONFIGURATION_REQUIRED`.
+- **The Twelve Data provider has never made a real request.** Every test runs
+  against a local `httptest` server. Parsing, chunking, rate limiting, retry
+  and error handling are exercised; the live API's behaviour, plan limits and
+  earliest available XAUUSD bar are unknown and are not guessed at anywhere in
+  this repository.
 
 This list is shorter than it was — six items from the previous revision have since
 been executed and moved into the tally — and what remains is what remains.
@@ -2397,16 +2476,16 @@ need real time.
 
 | Suite | Run | Result |
 | --- | --- | --- |
-| Go unit | this milestone | **664 pass, 0 fail, 36 skip** across 25 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack. No Go code changed this milestone |
+| Go unit | this milestone | **718 pass, 0 fail, 36 skip** across 26 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack |
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | **carried — not re-run** | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
-| Python unit | this milestone | **334 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files. 65 of them are this milestone's `test_research_historical.py`, covering ingestion security, timezone handling, quality gating, partitioning and the seal |
-| Web static | this milestone | `tsc --noEmit` clean; `eslint` clean. **`npm run build` was NOT re-run** — no web code changed this milestone, and the previous revision's clean build is not re-asserted here |
-| Playwright | **carried — not re-run** | **51 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 21 are the new reconciliation and operations tests |
-| Smoke: trading | **carried — not re-run** | **55 pass, 0 fail** |
-| Smoke: research | **carried — not re-run** | **35 pass, 0 fail** |
+| Python unit | this milestone | **339 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files |
+| Web static | this milestone | `tsc --noEmit` clean; `eslint` clean; `npm run build` clean, 20 routes. `lightweight-charts@5.2.1` added |
+| Playwright | this milestone | **57 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 6 are the new chart tests. Run on a freshly reseeded database |
+| Smoke: trading | this milestone | **66 pass, 0 fail** against the live stack |
+| Smoke: research | this milestone | **35 pass, 0 fail**. It first reported 34/1 on a seven-hour-old database whose earlier suites had left unresolved reconciliation discrepancies pausing automation; a reseed restored 35/35, which is the documented behaviour rather than a regression |
 | Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | this milestone | 0 findings across 238 tracked files with 394 rules, plus a separate 0-finding pass over the 52 research files (510 rules) because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
+| Semgrep | this milestone | 0 findings across 246 tracked files with 394 rules, plus a separate 0-finding pass over the 23 new market-data and chart files because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
 | govulncheck | this milestone | 0 reachable. "Your code is affected by 0 vulnerabilities"; 1 vulnerability in a required module that nothing calls |
 | npm audit | this milestone | 0 vulnerabilities |
 | Trivy filesystem (vuln) | this milestone | 0 across `go.mod` and `package-lock.json`, CI's settings (`CRITICAL,HIGH`, `--ignore-unfixed`), exit 0. `.venv`, `node_modules` and `.next` skipped, as they do not exist in CI's fresh checkout — scanning them made Trivy die with a FATAL walk error that `--exit-code 0` reported as success |

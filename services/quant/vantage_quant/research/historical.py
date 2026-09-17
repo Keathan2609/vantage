@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 from collections.abc import Hashable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -249,6 +250,15 @@ def load(
 
     # Hashed from the bytes BEFORE anything is parsed, so the record identifies
     # what actually arrived rather than what pandas made of it.
+    # A MANIFEST beside the file, when Vantage exported it.
+    #
+    # Read before anything is assumed about the data. Without it this importer
+    # labelled everything in the directory HISTORICAL_MARKET, which is right
+    # for a file an operator placed there by hand and WRONG for a snapshot
+    # Vantage exported from its own generated bars. A directory is not
+    # evidence of a source type; a recorded provenance is.
+    manifest = _read_manifest(path)
+
     original_hash = hashlib.sha256(path.read_bytes()).hexdigest()
 
     raw = _read_raw(path)
@@ -295,7 +305,9 @@ def load(
         quality_report=report,
         provenance=Provenance(
             source=str(path.name),
-            source_type=SourceType.HISTORICAL_MARKET,
+            # From the manifest when one exists, and only otherwise from the
+            # assumption that a hand-placed file is market data.
+            source_type=_source_type_of(manifest),
             instrument=instrument,
             timeframe=timeframe,
             start=frame.index[0].to_pydatetime(),
@@ -306,8 +318,12 @@ def load(
             normalized_dataset_hash=normalized_hash,
             original_timezone=original_tz,
             timezone_declared=tz_declared,
-            provider=provider,
-            acquisition_method=acquisition_method,
+            provider=manifest.get("provider", provider) if manifest else provider,
+            acquisition_method=(
+                "exported from the Vantage market-data store"
+                if manifest
+                else acquisition_method
+            ),
             licensing_note=licensing_note,
             source_timeframe=timeframe,
             has_observed_spread=has_spread,
@@ -494,3 +510,47 @@ def resample(
 #: Bumped when the aggregation rule changes, so two resampled datasets are
 #: never silently compared across a rule change.
 AGGREGATION_VERSION = 1
+
+
+def _read_manifest(path: Path) -> dict[str, Any] | None:
+    """Provenance Vantage wrote beside an exported snapshot, if present.
+
+    A malformed manifest is treated as ABSENT rather than fatal: the bars are
+    still readable and the caller's own declarations still apply. What it must
+    never do is half-apply -- a manifest that contributed a provider but not a
+    source type would be worse than none.
+    """
+    candidate = path.with_suffix("").with_suffix(".manifest.json")
+    if not candidate.is_file():
+        candidate = path.parent / (path.stem + ".manifest.json")
+    if not candidate.is_file():
+        return None
+    try:
+        loaded = json.loads(candidate.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(loaded, dict) or "source_type" not in loaded:
+        return None
+    return loaded
+
+
+def _source_type_of(manifest: dict[str, Any] | None) -> SourceType:
+    """What the data actually is, from the record rather than the directory.
+
+    An unrecognised value is refused rather than defaulted. Defaulting to
+    HISTORICAL_MARKET is exactly how generated bars would enter research as
+    real market evidence, and defaulting to SYNTHETIC_CONTROLLED would discard
+    real observations. Neither guess is safe, so neither is made.
+    """
+    if manifest is None:
+        # No manifest means a file an operator placed here deliberately, which
+        # is what this directory is for. The caller declares its provenance.
+        return SourceType.HISTORICAL_MARKET
+    declared = str(manifest.get("source_type", ""))
+    try:
+        return SourceType(declared)
+    except ValueError as exc:
+        raise MalformedDatasetError(
+            f"manifest declares source_type {declared!r}, which is not a "
+            f"recognised source type; refusing to guess what these bars are"
+        ) from exc

@@ -54,7 +54,7 @@ def test_every_market_condition_is_generated() -> None:
 
 
 def test_conditions_do_not_overlap_in_time() -> None:
-    """Rule 14: two datasets covering the same hours cannot both be replayed.
+    """Rule 15: two datasets covering the same hours cannot both be replayed.
 
     Also what makes the chronological partition a straight split rather than a
     judgement call.

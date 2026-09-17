@@ -1104,3 +1104,31 @@ select:disabled {
 .issue-actions .field {
   max-width: 560px;
 }
+
+/* --- Price chart (TradingView Lightweight Charts) ------------------------- */
+/*
+ * The library renders into a canvas it owns and sizes itself with autoSize,
+ * so the wrapper only needs to give it a box and a positioning context for
+ * the empty-state overlay.
+ */
+.chart-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.chart-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.chart-canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  pointer-events: none;
+}

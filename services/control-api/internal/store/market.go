@@ -552,3 +552,38 @@ func (s *MarketStore) PurgeReplayMarketData(ctx context.Context) (int64, error) 
 	}
 	return removed, nil
 }
+
+// BarsBefore returns the newest `limit` completed bars strictly before a time.
+//
+// The chart's backward pagination. Selecting DESC and reversing is what makes
+// it the bars ADJACENT to the cursor rather than the oldest in the series:
+// ascending with a LIMIT would return the beginning of history every time and
+// the chart would never actually page.
+func (s *MarketStore) BarsBefore(
+	ctx context.Context, instrumentID string, tf domain.Timeframe,
+	before time.Time, limit int,
+) ([]domain.Bar, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 500
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT instrument_id, timeframe, open_time, close_time, open, high, low, close,
+		       volume, complete, provider
+		FROM market_bars
+		WHERE instrument_id = $1 AND timeframe = $2 AND open_time < $3 AND complete = TRUE
+		ORDER BY open_time DESC
+		LIMIT $4`, instrumentID, string(tf), before, limit)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+
+	bars, err := scanBars(rows)
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(bars)-1; i < j; i, j = i+1, j-1 {
+		bars[i], bars[j] = bars[j], bars[i]
+	}
+	return bars, nil
+}

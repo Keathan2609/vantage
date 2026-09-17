@@ -661,6 +661,35 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 				"an explicit operator resume from a verified durable cursor")
 	}
 
+	// --- Historical market-data acquisition ----------------------------------
+	//
+	// Built ALWAYS, configured or not. An absent API key yields a provider
+	// reporting MISCONFIGURED rather than a nil one, so every route answers
+	// with a reason instead of a 404, and the rest of the platform -- synthetic
+	// data, replay, everything already stored -- keeps working. Refusing to
+	// start over an optional feature would take the whole system down for a
+	// capability most of it does not use.
+	marketSymbols, err := marketdata.NewSymbolMap("twelvedata", marketdata.TwelveDataSymbols)
+	if err != nil {
+		return nil, fmt.Errorf("app: twelve data symbol map: %w", err)
+	}
+	twelveData, err := marketdata.NewTwelveDataProvider(
+		cfg.TwelveDataBaseURL, cfg.TwelveDataAPIKey, marketSymbols, a.Clock,
+		cfg.TwelveDataRequestsPerMinute, cfg.TwelveDataTimeout)
+	if err != nil {
+		// A malformed BASE URL is configuration this process cannot honour, so
+		// it is fatal -- unlike a missing key, which is an ordinary state.
+		return nil, fmt.Errorf("app: twelve data provider: %w", err)
+	}
+	if !twelveData.Configured() {
+		log.Info("historical market-data provider is unconfigured",
+			"provider", twelveData.Name(),
+			"detail", "TWELVE_DATA_API_KEY is not set; historical acquisition is unavailable "+
+				"and every other market-data path is unaffected")
+	}
+	marketSyncer := marketdata.NewSyncer(
+		a.Store, twelveData, marketSymbols, a.Clock, a.MarketClock, Commit)
+
 	a.Server, err = httpapi.NewServer(httpapi.Deps{
 		Config: cfg, Logger: log, Pool: pool, Store: a.Store, Keyring: a.Keyring,
 		Limiter: a.Limiter, Brokers: a.Brokers, OMS: a.OMS, Portfolio: a.Portfolio,
@@ -668,7 +697,13 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		MockBroker: a.MockBroker,
 		Reconciler: a.Reconciler, Quant: a.Quant,
 		Orchestrator: a.Orchestrator, Clock: a.Clock, MarketClock: a.MarketClock,
-		Replay:  a.Replay,
+		Replay: a.Replay,
+
+		MarketProvider: twelveData,
+		MarketSync:     marketSyncer,
+		MarketSymbols:  marketSymbols,
+		ResearchDir:    cfg.ResearchDataDir,
+
 		Version: Version, Commit: Commit,
 	})
 	if err != nil {

@@ -340,7 +340,7 @@ def research_suite(*, bars_per_condition: int, base_seed: int = 20280103) -> lis
             )
         )
         # A week's gap between conditions keeps the ranges clearly separate,
-        # which matters because rule 14 forbids two datasets covering the same
+        # which matters because rule 15 forbids two datasets covering the same
         # hours from being replayed into one account.
         cursor = cursor + timedelta(hours=bars_per_condition) + timedelta(days=7)
     return specs

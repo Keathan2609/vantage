@@ -16,6 +16,7 @@ import pytest
 
 from vantage_quant.research import (
     compare,
+    datasets,
     expansion,
     historical,
     historical_run,
@@ -1082,3 +1083,89 @@ def test_the_parallel_and_serial_paths_agree(tmp_path: Path) -> None:
     assert [r.score_span_used for r in serial.reports] == [
         r.score_span_used for r in parallel.reports
     ]
+
+
+# --- the manifest boundary ---------------------------------------------------
+
+
+def test_an_exported_manifest_decides_the_source_type(tmp_path: Path) -> None:
+    """The defect this exists for.
+
+    This importer labelled everything in the research directory
+    HISTORICAL_MARKET. That is right for a file an operator placed there and
+    WRONG for a snapshot Vantage exported from its own generated bars -- which
+    is exactly what the market-data layer now writes there. A directory is not
+    evidence of a source type.
+    """
+    import json as json_module
+
+    directory = historical.data_directory(tmp_path)
+    _write_csv(directory, "exported.csv", _clean_rows(60), HEADER)
+    (directory / "exported.manifest.json").write_text(
+        json_module.dumps(
+            {
+                "source_type": "SYNTHETIC_CONTROLLED",
+                "provider": "mock",
+                "dataset_hash": "abc123",
+                "timezone": "UTC",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = historical.load(
+        "exported.csv", instrument="XAUUSD", timeframe="1h", root=tmp_path
+    )
+    assert loaded.provenance.source_type is datasets.SourceType.SYNTHETIC_CONTROLLED
+    assert loaded.provenance.provider == "mock"
+    assert "Vantage market-data store" in loaded.provenance.acquisition_method
+
+
+def test_a_file_with_no_manifest_is_still_treated_as_operator_supplied(
+    tmp_path: Path,
+) -> None:
+    """The hand-placed workflow is unchanged: the caller declares provenance."""
+    directory = historical.data_directory(tmp_path)
+    _write_csv(directory, "byhand.csv", _clean_rows(60), HEADER)
+    loaded = historical.load(
+        "byhand.csv", instrument="XAUUSD", timeframe="1h", root=tmp_path,
+        provider="an-operator-stated-provider",
+    )
+    assert loaded.provenance.source_type is datasets.SourceType.HISTORICAL_MARKET
+    assert loaded.provenance.provider == "an-operator-stated-provider"
+
+
+def test_an_unrecognised_source_type_is_refused_rather_than_defaulted(
+    tmp_path: Path,
+) -> None:
+    """Neither guess is safe, so neither is made.
+
+    Defaulting to HISTORICAL_MARKET is how generated bars become real
+    evidence; defaulting to SYNTHETIC_CONTROLLED discards real observations.
+    """
+    import json as json_module
+
+    directory = historical.data_directory(tmp_path)
+    _write_csv(directory, "weird.csv", _clean_rows(60), HEADER)
+    (directory / "weird.manifest.json").write_text(
+        json_module.dumps({"source_type": "SOMETHING_ELSE"}), encoding="utf-8"
+    )
+    with pytest.raises(historical.MalformedDatasetError, match="refusing to guess"):
+        historical.load("weird.csv", instrument="X", timeframe="1h", root=tmp_path)
+
+
+def test_a_malformed_manifest_is_ignored_rather_than_half_applied(
+    tmp_path: Path,
+) -> None:
+    """A manifest contributing a provider but not a source type would be worse
+    than none: partial provenance reads as complete provenance."""
+    directory = historical.data_directory(tmp_path)
+    _write_csv(directory, "broken.csv", _clean_rows(60), HEADER)
+    (directory / "broken.manifest.json").write_text("{not json", encoding="utf-8")
+
+    loaded = historical.load(
+        "broken.csv", instrument="XAUUSD", timeframe="1h", root=tmp_path,
+        provider="declared-by-caller",
+    )
+    assert loaded.provenance.source_type is datasets.SourceType.HISTORICAL_MARKET
+    assert loaded.provenance.provider == "declared-by-caller"

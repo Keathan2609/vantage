@@ -71,7 +71,19 @@ type Deps struct {
 	// Replay is nil unless this process was configured for market replay. A
 	// nil engine is how the handlers know the routes should not exist, rather
 	// than by re-reading configuration.
-	Replay  *replay.Engine
+	Replay *replay.Engine
+
+	// MarketProvider is the external historical-data provider. Nil when none
+	// is compiled in; present but UNCONFIGURED when no API key is set. The
+	// routes exist in both cases and answer with a reason, because a 404 on a
+	// documented endpoint tells an operator nothing about why.
+	MarketProvider *marketdata.TwelveDataProvider
+	MarketSync     *marketdata.Syncer
+	MarketSymbols  *marketdata.SymbolMap
+	// ResearchDir is where research dataset snapshots are materialised for
+	// the Python research plane, which does not touch this database.
+	ResearchDir string
+
 	Version string
 	Commit  string
 }
@@ -118,8 +130,20 @@ type Server struct {
 	// configHash identifies the configuration a replay ran under, so a result
 	// can be tied to the thresholds that produced it.
 	configHash string
-	router     chi.Router
-	startedAt  time.Time
+
+	// Market-data acquisition. The provider holds the API key; nothing here
+	// renders it, and the status handler returns provider.Health(), which
+	// carries no credential by construction.
+	marketProvider     *marketdata.TwelveDataProvider
+	marketSync         *marketdata.Syncer
+	marketSymbols      *marketdata.SymbolMap
+	marketProviderName string
+	// researchDir is the allowlisted directory the Python research plane
+	// reads. Fixed configuration, never a request parameter.
+	researchDir string
+
+	router    chi.Router
+	startedAt time.Time
 }
 
 // NewServer wires the router.
@@ -143,6 +167,23 @@ func NewServer(d Deps) (*Server, error) {
 		// stored run record, and neither does anything that cannot alter a
 		// decision.
 		configHash: configDigest(d.Config),
+
+		marketProvider: d.MarketProvider,
+		marketSync:     d.MarketSync,
+		marketSymbols:  d.MarketSymbols,
+	}
+	if d.MarketProvider != nil {
+		s.marketProviderName = d.MarketProvider.Name()
+	}
+	s.researchDir = d.ResearchDir
+	// An empty symbol map rather than nil, so the instruments handler does not
+	// need a nil check that would be forgotten the first time it is copied.
+	if s.marketSymbols == nil {
+		empty, err := marketdata.NewSymbolMap("none", map[string]string{})
+		if err != nil {
+			return nil, err
+		}
+		s.marketSymbols = empty
 	}
 	s.router = s.routes()
 	return s, nil
@@ -212,6 +253,14 @@ func (s *Server) routes() chi.Router {
 			auth.Get("/market/health", s.handleMarketHealth)
 			auth.Get("/market/bars", s.handleBars)
 			auth.Get("/market/status", s.handleMarketStatus)
+
+			// Reading what Vantage holds is not a privileged act: an operator
+			// who cannot see the data cannot interpret anything built on it.
+			// ACQUIRING data is privileged and lives in the admin group.
+			auth.Get("/market-data/instruments", s.handleMarketDataInstruments)
+			auth.Get("/market-data/status", s.handleMarketDataStatus)
+			auth.Get("/market-data/coverage", s.handleMarketDataCoverage)
+			auth.Get("/market-data/datasets", s.handleResearchDatasets)
 
 			auth.Get("/orders", s.handleListOrders)
 			auth.Get("/orders/{orderID}", s.handleGetOrder)
@@ -370,6 +419,15 @@ func (s *Server) routes() chi.Router {
 			// The run history is registered here too, but unlike the
 			// controls it answers in every process: a recorded run is
 			// evidence, and the engine being absent does not unmake it.
+			// Market-data acquisition. ADMIN because each call spends a
+			// metered external quota and writes to the bar series every
+			// strategy reads. Registered unconditionally so an unconfigured
+			// provider answers with a reason rather than a bare 404.
+			admin.Post("/market-data/backfill", s.handleMarketDataBackfill)
+			admin.Post("/market-data/sync", s.handleMarketDataSync)
+			admin.Post("/market-data/repair", s.handleMarketDataRepair)
+			admin.Post("/market-data/snapshot", s.handleMarketDataSnapshot)
+
 			admin.Get("/replay/runs", s.handleReplayRuns)
 			admin.Get("/replay/interrupted", s.handleReplayInterrupted)
 			admin.Get("/replay/digest/{accountID}", s.handleReplayDigest)

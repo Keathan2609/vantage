@@ -52,7 +52,7 @@ belongs in any report built on synthetic bars.
 
 ## Determinism, and why the data is not committed
 
-CLAUDE.md rule 14 forbids committing large market datasets. Sixteen conditions
+CLAUDE.md rule 15 forbids committing large market datasets. Sixteen conditions
 at 1200 bars each is megabytes, so the **generator** is committed and the bars
 are produced on demand.
 

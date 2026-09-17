@@ -206,6 +206,53 @@ var (
 		Help:    "Latency between a provider's source timestamp and ingestion.",
 		Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30},
 	}, []string{"provider"})
+
+	// External historical-data acquisition. Separate from the quote-path
+	// metrics above because the failure modes differ: a quote feed degrades,
+	// a history provider rate-limits and paginates.
+	MarketDataProviderRequests = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "provider_requests_total",
+		Help: "Outbound requests to an external market-data provider.",
+	}, []string{"provider"})
+
+	MarketDataProviderFailures = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "provider_failures_total",
+		Help: "Failed provider requests, by kind.",
+	}, []string{"provider", "kind"})
+
+	MarketDataRateLimitEvents = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "provider_rate_limited_total",
+		Help: "Times a provider reported its rate limit reached.",
+	}, []string{"provider"})
+
+	// Ingested and ignored are counted separately on purpose. A backfill that
+	// reports thousands of bars ingested when it re-fetched an existing range
+	// would hide that it did no work.
+	MarketDataBarsIngested = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "bars_ingested_total",
+		Help: "Bars written to the local store from a provider.",
+	}, []string{"provider", "instrument", "timeframe"})
+
+	MarketDataDuplicatesIgnored = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "bars_duplicate_total",
+		Help: "Bars already present locally when a provider returned them again.",
+	}, []string{"provider", "instrument", "timeframe"})
+
+	MarketDataInvalidBars = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "bars_invalid_total",
+		Help: "Provider bars refused before storage.",
+	}, []string{"provider", "instrument"})
+
+	MarketDataSyncDuration = factory.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "sync_duration_seconds",
+		Help:    "Wall time of a backfill, sync or repair run.",
+		Buckets: []float64{0.5, 1, 5, 15, 60, 300, 900, 3600},
+	}, []string{"provider", "kind"})
+
+	MarketDataLatestAge = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace, Subsystem: "marketdata", Name: "latest_bar_age_seconds",
+		Help: "Age of the newest locally stored bar per instrument and timeframe.",
+	}, []string{"instrument", "timeframe"})
 )
 
 // Strategy, model and reconciliation metrics.

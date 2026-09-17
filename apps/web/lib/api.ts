@@ -767,6 +767,60 @@ export interface AttributionBucket {
   entries: number;
 }
 
+export interface ProviderHealth {
+  provider: string;
+  state:
+    | "CONNECTED"
+    | "DEGRADED"
+    | "RATE_LIMITED"
+    | "UNAVAILABLE"
+    | "MISCONFIGURED";
+  configured: boolean;
+  last_success_at?: string;
+  last_failure_at?: string;
+  last_failure_reason?: string;
+  last_latency_ms?: number;
+  last_market_timestamp?: string;
+  requests_this_minute: number;
+  requests_per_minute: number;
+}
+
+export interface MarketDataCoverage {
+  instrument_id: string;
+  timeframe: string;
+  bars: number;
+  earliest_bar?: string;
+  latest_bar?: string;
+  providers: string[];
+  last_sync_at?: string;
+  last_sync_kind?: string;
+  last_sync_status?: string;
+}
+
+export interface MarketDataGap {
+  from: string;
+  to: string;
+  missing_bars: number;
+}
+
+export interface MarketDataSegment {
+  id: string;
+  kind: string;
+  status: string;
+  requested_start: string;
+  requested_end: string;
+  received_start?: string;
+  received_end?: string;
+  rows_returned: number;
+  rows_stored: number;
+  rows_duplicate: number;
+  rows_invalid: number;
+  provider: string;
+  provider_symbol: string;
+  failure_reason?: string;
+  warnings: string[];
+}
+
 export const api = {
   // Auth
   version: () => request<VersionInfo>("/version"),
@@ -828,6 +882,18 @@ export const api = {
     }>(`/api/v1/accounts/${accountId}/attribution?by=${by}`),
 
   // Market data
+  marketDataStatus: () =>
+    request<{ provider: ProviderHealth }>(`/api/v1/market-data/status`),
+
+  marketDataCoverage: (instrumentId: string, timeframe: string) =>
+    request<{
+      coverage: MarketDataCoverage;
+      gaps: MarketDataGap[];
+      segments: MarketDataSegment[];
+    }>(
+      `/api/v1/market-data/coverage?instrument_id=${encodeURIComponent(instrumentId)}&timeframe=${timeframe}`,
+    ),
+
   instruments: (enabledOnly = false) =>
     request<{ instruments: Instrument[] }>(
       `/api/v1/instruments${enabledOnly ? "?enabled=true" : ""}`,
@@ -835,9 +901,10 @@ export const api = {
   quotes: () => request<{ quotes: Quote[]; as_of: string }>("/api/v1/market/quotes"),
   marketHealth: () => request<{ health: MarketHealth[] }>("/api/v1/market/health"),
   marketStatus: () => request<MarketStatus>("/api/v1/market/status"),
-  bars: (instrumentId: string, timeframe: string, limit = 400) =>
+  bars: (instrumentId: string, timeframe: string, limit = 400, endBefore?: string) =>
     request<{ instrument_id: string; timeframe: string; bars: Bar[] }>(
-      `/api/v1/market/bars?instrument_id=${encodeURIComponent(instrumentId)}&timeframe=${timeframe}&limit=${limit}`,
+      `/api/v1/market/bars?instrument_id=${encodeURIComponent(instrumentId)}&timeframe=${timeframe}&limit=${limit}` +
+        (endBefore ? `&end=${encodeURIComponent(endBefore)}` : ""),
     ),
 
   // Trading

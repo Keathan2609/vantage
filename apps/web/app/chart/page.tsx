@@ -1,14 +1,19 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
+import { PriceChart, type ChartMarker } from "@/components/PriceChart";
 import { Empty, Panel } from "@/components/ui";
 import { api, type Bar } from "@/lib/api";
-import { decimal, percent, percentValue, time } from "@/lib/format";
+import { decimal, percent, time } from "@/lib/format";
 import { useAsync, useVantage } from "@/lib/store";
 
 const TIMEFRAMES = ["15m", "1h", "4h"] as const;
+
+/** Bars fetched per page. Bounded on the server too; this is what one pan
+ *  backwards asks for, not a ceiling. */
+const PAGE = 500;
 
 export default function ChartPage() {
   return (
@@ -20,7 +25,7 @@ export default function ChartPage() {
 
 function ChartView() {
   const params = useSearchParams();
-  const { quotes } = useVantage();
+  const { quotes, account } = useVantage();
   const instruments = useAsync(() => api.instruments(true), []);
 
   const [instrumentId, setInstrumentId] = useState(
@@ -31,20 +36,115 @@ function ChartView() {
   const available = instruments.data?.instruments ?? [];
   const selected = available.find((i) => i.id === instrumentId) ?? available[0];
 
-  const bars = useAsync(
+  // The most recent page. Older pages are appended to `history` as the user
+  // pans, so the chart grows backwards without ever re-fetching what it holds.
+  const recent = useAsync(
     () =>
       selected
-        ? api.bars(selected.id, timeframe, 400)
+        ? api.bars(selected.id, timeframe, PAGE)
         : Promise.resolve({ instrument_id: "", timeframe, bars: [] as Bar[] }),
     [selected?.id, timeframe],
   );
 
-  const quote = selected ? quotes[selected.id] : undefined;
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
+  // Older pages are keyed by the series they belong to. Switching instrument
+  // or timeframe therefore invalidates them by definition rather than by an
+  // effect that clears state after the fact -- which would render one frame
+  // showing the previous instrument's history under the new instrument's name.
+  const [pages, setPages] = useState<{ key: string; bars: Bar[]; exhausted: boolean }>({
+    key: "",
+    bars: [],
+    exhausted: false,
+  });
+  const seriesKey = `${selected?.id ?? ""}:${timeframe}`;
   // Memoised so the empty-history fallback is a stable array rather than a new
   // one each render, which would make every derived memo below recompute on
   // every market tick.
-  const series = useMemo(() => bars.data?.bars ?? [], [bars.data]);
+  const older = useMemo(
+    () => (pages.key === seriesKey ? pages.bars : []),
+    [pages, seriesKey],
+  );
+  const exhausted = pages.key === seriesKey && pages.exhausted;
+
+  const loadOlder = useCallback(
+    async (oldest: string) => {
+      if (!selected || loadingOlder || exhausted) return;
+      const key = `${selected.id}:${timeframe}`;
+      setLoadingOlder(true);
+      try {
+        const page = await api.bars(selected.id, timeframe, PAGE, oldest);
+        const bars = page.bars ?? [];
+        setPages((current) => {
+          const base = current.key === key ? current : { key, bars: [], exhausted: false };
+          // An empty page means the beginning of the stored series. Recording
+          // it stops the chart asking again on every further pan.
+          if (bars.length === 0) {
+            return { ...base, exhausted: true };
+          }
+          return { ...base, bars: [...bars, ...base.bars] };
+        });
+      } finally {
+        setLoadingOlder(false);
+      }
+    },
+    [selected, timeframe, loadingOlder, exhausted],
+  );
+
+  const series = useMemo(() => {
+    const head = recent.data?.bars ?? [];
+    if (older.length === 0) return head;
+    // De-duplicated at the seam. Two pages can overlap by a bar, and the
+    // chart library throws on a repeated timestamp rather than ignoring it.
+    const seen = new Set(older.map((b) => b.open_time));
+    return [...older, ...head.filter((b) => !seen.has(b.open_time))];
+  }, [recent.data, older]);
+
+  const quote = selected ? quotes[selected.id] : undefined;
+
+  // --- provider and coverage ------------------------------------------------
+  const providerStatus = useAsync(() => api.marketDataStatus(), []);
+  const coverage = useAsync(
+    () =>
+      selected
+        ? api.marketDataCoverage(selected.id, timeframe)
+        : Promise.resolve(null),
+    [selected?.id, timeframe],
+  );
+
+  // --- markers --------------------------------------------------------------
+  const decisions = useAsync(
+    () => (account ? api.decisions(account.id, 200) : Promise.resolve(null)),
+    [account?.id],
+  );
+
+  const markers = useMemo<ChartMarker[]>(() => {
+    const rows = decisions.data?.decisions ?? [];
+    if (!selected) return [];
+    return rows
+      .filter((d) => d.InstrumentID === selected.id)
+      .map((d) => {
+        const action = (d.SignalAction ?? "").toLowerCase();
+        const executed = d.Outcome === "EXECUTED";
+        const side: ChartMarker["side"] =
+          !executed || action === "flat" || action === "no_trade"
+            ? "flat"
+            : action === "buy"
+              ? "buy"
+              : "sell";
+        return {
+          time: d.CreatedAt,
+          side,
+          kind: executed ? "order" : "decision",
+          // NO TRADE is labelled as such rather than omitted. A refusal is a
+          // first-class outcome here and an operator needs to see that the
+          // platform looked and declined, not an empty stretch of chart.
+          text: executed
+            ? `${action.toUpperCase()}${d.ApprovedQty ? ` ${d.ApprovedQty}` : ""}`
+            : "NO TRADE",
+        } satisfies ChartMarker;
+      });
+  }, [decisions.data, selected]);
 
   const summary = useMemo(() => {
     if (series.length < 2) return null;
@@ -53,18 +153,20 @@ function ChartView() {
     if (!first || !last) return null;
     const open = Number.parseFloat(first.open);
     const close = Number.parseFloat(last.close);
-    const highs = series.map((b) => Number.parseFloat(b.high));
-    const lows = series.map((b) => Number.parseFloat(b.low));
     return {
       change: close - open,
       changePct: open > 0 ? (close - open) / open : 0,
-      high: Math.max(...highs),
-      low: Math.min(...lows),
+      high: Math.max(...series.map((b) => Number.parseFloat(b.high))),
+      low: Math.min(...series.map((b) => Number.parseFloat(b.low))),
       bars: series.length,
       from: first.open_time,
       to: last.open_time,
     };
   }, [series]);
+
+  const provider = providerStatus.data?.provider;
+  const held = coverage.data?.coverage;
+  const gaps = coverage.data?.gaps ?? [];
 
   return (
     <>
@@ -107,297 +209,136 @@ function ChartView() {
         }
         flush
       >
-        {bars.loading ? (
+        {recent.loading && series.length === 0 ? (
           <Empty>Loading bars…</Empty>
-        ) : series.length === 0 ? (
-          <Empty>
-            No completed bars for {selected?.symbol} at {timeframe}.
-          </Empty>
         ) : (
-          <Candles
-            bars={series}
-            precision={selected?.price_precision ?? 2}
-            label={
-              summary
-                ? `${selected?.symbol ?? "instrument"} ${timeframe} candlestick chart, ` +
-                  `${summary.bars} bars, high ${decimal(String(summary.high), selected?.price_precision ?? 2)}, ` +
-                  `low ${decimal(String(summary.low), selected?.price_precision ?? 2)}, ` +
-                  `change ${percentValue(summary.changePct * 100)}`
-                : `${selected?.symbol ?? "instrument"} ${timeframe} candlestick chart`
-            }
-          />
+          <div data-testid="price-chart">
+            <PriceChart
+              bars={series}
+              markers={markers}
+              onNeedOlderBars={loadOlder}
+              emptyMessage={
+                provider && !provider.configured
+                  ? "No stored bars. The market-data provider is not configured."
+                  : `No completed bars for ${selected?.symbol ?? "this instrument"} at ${timeframe}.`
+              }
+            />
+          </div>
         )}
       </Panel>
 
-      <div className="grid cols-2">
-        <Panel title="Range" flush>
-          <div className="panel-body">
-            {summary ? (
-              <dl className="kv">
-                <dt>Bars shown</dt>
-                <dd>{summary.bars}</dd>
-                <dt>From</dt>
-                <dd>{new Date(summary.from).toLocaleString("en-GB")}</dd>
-                <dt>To</dt>
-                <dd>{new Date(summary.to).toLocaleString("en-GB")}</dd>
-                <dt>High</dt>
-                <dd>{summary.high.toFixed(selected?.price_precision ?? 2)}</dd>
-                <dt>Low</dt>
-                <dd>{summary.low.toFixed(selected?.price_precision ?? 2)}</dd>
-                <dt>Change</dt>
-                <dd className={summary.change >= 0 ? "profit" : "loss"}>
-                  {summary.change >= 0 ? "+" : ""}
-                  {summary.change.toFixed(selected?.price_precision ?? 2)} (
-                  {(summary.changePct * 100).toFixed(2)}%)
-                </dd>
-              </dl>
-            ) : (
-              <Empty>Not enough history.</Empty>
-            )}
-            <p className="tiny muted" style={{ marginTop: 8, marginBottom: 0 }}>
-              Only COMPLETED bars are shown and served. The in-progress bar is withheld
-              because its close has not happened — a strategy reading it would be reading
-              the future.
-            </p>
-          </div>
-        </Panel>
-
-        <Panel title="Recent bars" flush>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th className="right">Open</th>
-                  <th className="right">High</th>
-                  <th className="right">Low</th>
-                  <th className="right">Close</th>
-                  <th className="right">Volume</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...series]
-                  .reverse()
-                  .slice(0, 60)
-                  .map((bar) => {
-                    const up =
-                      Number.parseFloat(bar.close) >= Number.parseFloat(bar.open);
-                    return (
-                      <tr key={bar.open_time}>
-                        <td className="mono muted">
-                          {new Date(bar.open_time).toLocaleString("en-GB", {
-                            day: "2-digit",
-                            month: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </td>
-                        <td className="mono right">
-                          {decimal(bar.open, selected?.price_precision ?? 2)}
-                        </td>
-                        <td className="mono right">
-                          {decimal(bar.high, selected?.price_precision ?? 2)}
-                        </td>
-                        <td className="mono right">
-                          {decimal(bar.low, selected?.price_precision ?? 2)}
-                        </td>
-                        <td className={`mono right ${up ? "profit" : "loss"}`}>
-                          {decimal(bar.close, selected?.price_precision ?? 2)}
-                        </td>
-                        <td className="mono right muted">{decimal(bar.volume, 0)}</td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      </div>
-    </>
-  );
-}
-
-/**
- * Candlesticks drawn as inline SVG.
- *
- * Hand-drawn rather than pulled from a charting library: the whole renderer is
- * a loop over bars computing four coordinates each. It gives exact control over
- * the palette and the density, it adds no dependency to audit or update, and it
- * cannot pull in a licence that needs reviewing.
- */
-function Candles({
-  bars,
-  precision,
-  label,
-}: {
-  bars: Bar[];
-  precision: number;
-  label: string;
-}) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(900);
-  const [hover, setHover] = useState<number | null>(null);
-
-  useEffect(() => {
-    const element = hostRef.current;
-    if (!element) return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) setWidth(Math.max(320, entry.contentRect.width));
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  const height = 400;
-  const padding = { top: 12, right: 62, bottom: 22, left: 8 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-
-  const highs = bars.map((b) => Number.parseFloat(b.high));
-  const lows = bars.map((b) => Number.parseFloat(b.low));
-  const max = Math.max(...highs);
-  const min = Math.min(...lows);
-  const span = max - min || 1;
-  // A little headroom so wicks do not touch the frame.
-  const top = max + span * 0.04;
-  const bottom = min - span * 0.04;
-  const scale = (price: number) =>
-    padding.top + ((top - price) / (top - bottom)) * plotHeight;
-
-  const slot = plotWidth / bars.length;
-  const bodyWidth = Math.max(1, Math.min(9, slot * 0.62));
-
-  const gridLines = 5;
-  const ticks = Array.from({ length: gridLines }, (_, index) => {
-    const price = bottom + ((top - bottom) * index) / (gridLines - 1);
-    return { price, y: scale(price) };
-  });
-
-  const active = hover !== null ? bars[hover] : undefined;
-
-  return (
-    <div ref={hostRef} style={{ position: "relative" }}>
-      <svg
-        width={width}
-        height={height}
-        role="img"
-        // The whole chart is one image to assistive technology, so this label
-        // is everything a screen-reader user gets. "price chart" would be
-        // nothing: the instrument, the timeframe and the range at least say
-        // what is on screen.
-        aria-label={label}
-        onMouseLeave={() => setHover(null)}
+      {/* Where these bars came from. Provenance visible to the operator rather
+          than buried in a database: a chart that cannot say which provider
+          produced it, how fresh it is and whether it has holes is a chart that
+          invites trust it has not earned. */}
+      <Panel
+        title="Data source"
+        note={
+          loadingOlder
+            ? "loading older history…"
+            : exhausted
+              ? "start of stored history reached"
+              : undefined
+        }
       >
-        {ticks.map((tick) => (
-          <g key={tick.price}>
-            <line
-              x1={padding.left}
-              x2={padding.left + plotWidth}
-              y1={tick.y}
-              y2={tick.y}
-              stroke="var(--border)"
-              strokeWidth="1"
-            />
-            <text
-              x={padding.left + plotWidth + 6}
-              y={tick.y + 3.5}
-              fill="var(--text-muted)"
-              fontSize="10"
-              fontFamily="var(--font-mono)"
-            >
-              {tick.price.toFixed(precision)}
-            </text>
-          </g>
-        ))}
-
-        {bars.map((bar, index) => {
-          const open = Number.parseFloat(bar.open);
-          const high = Number.parseFloat(bar.high);
-          const low = Number.parseFloat(bar.low);
-          const close = Number.parseFloat(bar.close);
-          const x = padding.left + index * slot + slot / 2;
-          const up = close >= open;
-          const colour = up ? "var(--profit)" : "var(--loss)";
-          const bodyTop = scale(Math.max(open, close));
-          const bodyBottom = scale(Math.min(open, close));
-
-          return (
-            <g
-              key={bar.open_time}
-              onMouseEnter={() => setHover(index)}
-              style={{ cursor: "crosshair" }}
-            >
-              {/* An invisible wide target makes hovering usable at this density. */}
-              <rect
-                x={x - slot / 2}
-                y={padding.top}
-                width={Math.max(slot, 2)}
-                height={plotHeight}
-                fill="transparent"
-              />
-              <line
-                x1={x}
-                x2={x}
-                y1={scale(high)}
-                y2={scale(low)}
-                stroke={colour}
-                strokeWidth="1"
-              />
-              <rect
-                x={x - bodyWidth / 2}
-                y={bodyTop}
-                width={bodyWidth}
-                height={Math.max(1, bodyBottom - bodyTop)}
-                fill={colour}
-              />
-            </g>
-          );
-        })}
-
-        {hover !== null ? (
-          <line
-            x1={padding.left + hover * slot + slot / 2}
-            x2={padding.left + hover * slot + slot / 2}
-            y1={padding.top}
-            y2={padding.top + plotHeight}
-            stroke="var(--border-focus)"
-            strokeWidth="1"
-            strokeDasharray="2 3"
-          />
-        ) : null}
-      </svg>
-
-      {active ? (
-        <div
-          style={{
-            position: "absolute",
-            top: 8,
-            left: 12,
-            background: "var(--bg-panel-raised)",
-            border: "1px solid var(--border-strong)",
-            borderRadius: 2,
-            padding: "5px 9px",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            pointerEvents: "none",
-          }}
-        >
-          {new Date(active.open_time).toLocaleString("en-GB")} · O{" "}
-          {decimal(active.open, precision)} · H {decimal(active.high, precision)} · L{" "}
-          {decimal(active.low, precision)} · C {decimal(active.close, precision)}
+        <div className="kv-grid" data-testid="market-data-provenance">
+          <div>
+            <dt>Provider</dt>
+            <dd>{provider?.provider ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Feed status</dt>
+            <dd data-testid="provider-state">{provider?.state ?? "UNKNOWN"}</dd>
+          </div>
+          <div>
+            <dt>Last provider success</dt>
+            <dd>
+              {provider?.last_success_at ? time(provider.last_success_at) : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>Newest market timestamp</dt>
+            <dd>
+              {provider?.last_market_timestamp
+                ? time(provider.last_market_timestamp)
+                : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>Local history</dt>
+            <dd>
+              {held?.earliest_bar && held?.latest_bar
+                ? `${time(held.earliest_bar)} → ${time(held.latest_bar)}`
+                : "none stored"}
+            </dd>
+          </div>
+          <div>
+            <dt>Bars held</dt>
+            <dd>{held ? held.bars.toLocaleString() : "—"}</dd>
+          </div>
+          <div>
+            <dt>Gaps</dt>
+            <dd data-testid="coverage-gaps">
+              {gaps.length === 0
+                ? "none detected"
+                : `${gaps.length} (${gaps.reduce((n, g) => n + g.missing_bars, 0)} bars)`}
+            </dd>
+          </div>
+          <div>
+            <dt>Last sync</dt>
+            <dd>
+              {held?.last_sync_at
+                ? `${held.last_sync_kind ?? ""} ${held.last_sync_status ?? ""} · ${time(held.last_sync_at)}`
+                : "never"}
+            </dd>
+          </div>
         </div>
-      ) : null}
+        {provider && !provider.configured && (
+          <p className="note" data-testid="provider-unconfigured">
+            TWELVE_DATA_CONFIGURATION_REQUIRED — no API key is configured, so no
+            new history can be acquired. Everything already stored still works.
+          </p>
+        )}
+      </Panel>
 
-      <div
-        className="tiny muted"
-        style={{ padding: "0 12px 8px", display: "flex", justifyContent: "space-between" }}
-      >
-        <span>{new Date(bars[0]?.open_time ?? "").toLocaleString("en-GB")}</span>
-        <span>
-          {time(bars[bars.length - 1]?.open_time)} · completed bars only · simulated data
-        </span>
-      </div>
-    </div>
+      {summary && (
+        <Panel title="Window">
+          <div className="kv-grid">
+            <div>
+              <dt>Change</dt>
+              <dd className={summary.change >= 0 ? "positive" : "negative"}>
+                {summary.change.toFixed(selected?.price_precision ?? 2)} (
+                {(summary.changePct * 100).toFixed(2)}%)
+              </dd>
+            </div>
+            <div>
+              <dt>High</dt>
+              <dd>{summary.high.toFixed(selected?.price_precision ?? 2)}</dd>
+            </div>
+            <div>
+              <dt>Low</dt>
+              <dd>{summary.low.toFixed(selected?.price_precision ?? 2)}</dd>
+            </div>
+            <div>
+              <dt>Bars loaded</dt>
+              <dd>{summary.bars.toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt>From</dt>
+              <dd>{time(summary.from)}</dd>
+            </div>
+            <div>
+              <dt>To</dt>
+              <dd>{time(summary.to)}</dd>
+            </div>
+          </div>
+          {/* Simulated trades must never look like live execution. */}
+          <p className="note">
+            Markers show PAPER decisions and simulated orders only. No live
+            execution exists in this build.
+          </p>
+        </Panel>
+      )}
+    </>
   );
 }

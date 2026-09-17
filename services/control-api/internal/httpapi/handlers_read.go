@@ -516,7 +516,26 @@ func (s *Server) handleBars(w http.ResponseWriter, r *http.Request) {
 			"timeframe must be one of 1m, 5m, 15m, 1h, 4h, 1d.")
 		return
 	}
-	bars, err := s.store.Market.Bars(r.Context(), instrumentID, tf, intParam(r, "limit", 500, 5000), true)
+	// Bounded, always. "Every bar ever" is not a request this API answers: ten
+	// years of hourly gold is roughly 60 000 rows, which is a slow query, a
+	// large response and a browser that stops responding while it parses.
+	limit := intParam(r, "limit", 500, maxBarQuery)
+
+	// An optional END lets the chart page backwards without re-sending the
+	// bars it already holds. Absent, the newest `limit` bars are returned,
+	// which is what a chart opening for the first time wants.
+	var bars []domain.Bar
+	if raw := r.URL.Query().Get("end"); raw != "" {
+		end, perr := time.Parse(time.RFC3339, raw)
+		if perr != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_range",
+				"end must be an RFC3339 timestamp.")
+			return
+		}
+		bars, err = s.store.Market.BarsBefore(r.Context(), instrumentID, tf, end.UTC(), limit)
+	} else {
+		bars, err = s.store.Market.Bars(r.Context(), instrumentID, tf, limit, true)
+	}
 	if err != nil {
 		writeStoreError(w, r, err, "No bars available.")
 		return

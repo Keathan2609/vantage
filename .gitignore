@@ -65,3 +65,8 @@ Thumbs.db
 
 # Docker local volumes
 /infra/docker/volumes/
+
+# Market-data snapshots exported for the research plane. Generated, often
+# large, and never evidence on their own — the manifest beside each one says
+# what it is. Rule 14: large market datasets are not committed.
+services/quant/research-data/

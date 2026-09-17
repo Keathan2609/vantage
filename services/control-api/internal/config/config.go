@@ -85,6 +85,35 @@ type Config struct {
 	QuantServiceToken string
 	QuantTimeout      time.Duration
 
+	// TwelveDataAPIKey authorises historical market-data acquisition.
+	//
+	// OPTIONAL, deliberately. An absent key makes the provider report
+	// MISCONFIGURED and leaves synthetic data, replay and everything already
+	// stored working. Refusing to start would take the whole platform down
+	// over a feature most of it does not use, and an operator debugging a
+	// dead process learns less than one reading a provider status of
+	// MISCONFIGURED.
+	//
+	// SERVER-SIDE ONLY. It is never rendered, never returned by an API, never
+	// logged, and never placed in a decision snapshot. configDigest in
+	// internal/httpapi is deliberately narrow and does not read it, and
+	// TestTheProviderStatusNeverCarriesTheKey pins the API surface.
+	TwelveDataAPIKey string
+	// TwelveDataBaseURL is FIXED configuration, not a request parameter. A
+	// provider URL that a caller could set is an SSRF primitive pointed at
+	// whatever the server can reach.
+	TwelveDataBaseURL string
+	// TwelveDataRequestsPerMinute bounds outbound request rate. The free plan
+	// is 8/min at the time of writing; the default is deliberately under it
+	// because being throttled by a provider looks like an outage.
+	TwelveDataRequestsPerMinute int
+	TwelveDataTimeout           time.Duration
+
+	// ResearchDataDir is where research dataset snapshots are written for
+	// the Python research plane. Fixed configuration: the API never takes
+	// a filesystem path from a request.
+	ResearchDataDir string
+
 	// SessionTTL is how long a session remains valid without re-authentication.
 	SessionTTL time.Duration
 	// SessionIdleTTL expires sessions that stop being used sooner than the
@@ -118,8 +147,14 @@ func Load() (Config, error) {
 		ReplayAutoStart:      env("VANTAGE_REPLAY_DATASET", ""),
 		QuantBaseURL:         env("VANTAGE_QUANT_BASE_URL", "http://localhost:8000"),
 		QuantServiceToken:    env("VANTAGE_QUANT_SERVICE_TOKEN", ""),
-		SessionTTL:           12 * time.Hour,
-		SessionIdleTTL:       60 * time.Minute,
+
+		TwelveDataAPIKey:            strings.TrimSpace(os.Getenv("TWELVE_DATA_API_KEY")),
+		TwelveDataBaseURL:           env("VANTAGE_TWELVE_DATA_BASE_URL", "https://api.twelvedata.com"),
+		TwelveDataRequestsPerMinute: envInt("VANTAGE_TWELVE_DATA_RPM", 7),
+		TwelveDataTimeout:           15 * time.Second,
+		ResearchDataDir:             env("VANTAGE_RESEARCH_DATA_DIR", "../quant/research-data"),
+		SessionTTL:                  12 * time.Hour,
+		SessionIdleTTL:              60 * time.Minute,
 	}
 
 	switch c.Env {
@@ -247,6 +282,29 @@ func (c Config) IsDevelopment() bool {
 // It is always true in this build and is surfaced to clients so no interface
 // can present paper numbers as real by omission.
 func (c Config) SimulatedFunds() bool { return c.ExecutionMode == "paper" }
+
+// TwelveDataConfigured reports whether historical acquisition is possible.
+//
+// A method rather than a comparison at each call site, so that "is the key
+// present" has one answer and cannot drift into three slightly different
+// emptiness checks.
+func (c Config) TwelveDataConfigured() bool {
+	return strings.TrimSpace(c.TwelveDataAPIKey) != ""
+}
+
+// envInt reads a bounded integer, falling back rather than failing: a typo in
+// a rate limit must not stop the process, and the default is the safe value.
+func envInt(key string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
 
 func env(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok && strings.TrimSpace(v) != "" {
