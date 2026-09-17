@@ -1052,3 +1052,33 @@ def test_the_historical_command_does_not_fail_hard_without_data(
 
     assert cli.main(["historical"]) == 0
     assert "WAITING_FOR_HISTORICAL_DATA" in capsys.readouterr().out
+
+
+def test_the_parallel_and_serial_paths_agree(tmp_path: Path) -> None:
+    """Workers must not change a result, only how long it takes.
+
+    The pool re-imports each dataset by name inside the worker rather than
+    receiving a pickled frame, so this also checks that the re-read reproduces
+    what the parent validated.
+    """
+    directory = historical.data_directory(tmp_path)
+    start = datetime(2024, 1, 2, 0, tzinfo=UTC)
+    for i in range(2):
+        _write_csv(
+            directory, f"probe_{i}.csv",
+            _clean_rows(200, start=start + timedelta(days=40 * i)), HEADER,
+        )
+
+    serial = historical_run.run(root=tmp_path, workers=1)
+    parallel = historical_run.run(root=tmp_path, workers=4)
+
+    assert [r.raw_n for r in serial.reports] == [r.raw_n for r in parallel.reports]
+    assert [r.effective_n for r in serial.reports] == [
+        r.effective_n for r in parallel.reports
+    ]
+    assert [r.readiness for r in serial.reports] == [
+        r.readiness for r in parallel.reports
+    ]
+    assert [r.score_span_used for r in serial.reports] == [
+        r.score_span_used for r in parallel.reports
+    ]

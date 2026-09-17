@@ -448,6 +448,20 @@ artefact of the generator. Disagreements are classified instead:
 parts of the score function they are not measuring the same population, and any
 apparent agreement downstream is between different things.
 
+## Throughput
+
+Measured on constructed fixture bars, because throughput is a property of the
+code rather than the market: **41.3 bars/sec** and 110 observations/sec across
+12 workers, against 9.4 bars/sec single-threaded before the run was
+parallelised. That is roughly 2.5 minutes per year of hourly TRAIN data, or
+about 12 minutes for five years — multi-year work is practical.
+
+Workers re-import each dataset by name inside the worker rather than receiving
+a pickled frame: the re-read costs milliseconds against seconds of strategy
+evaluation, and addressing by name keeps the allowlist check inside the worker
+instead of trusting whatever arrived over the process boundary. A test asserts
+the serial and parallel paths produce identical counts, spans and verdicts.
+
 ## Current status
 
 **`WAITING_FOR_HISTORICAL_DATA`.** No legitimate historical dataset exists

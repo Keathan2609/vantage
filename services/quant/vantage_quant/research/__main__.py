@@ -40,6 +40,7 @@ def _historical(args: argparse.Namespace) -> int:
             acquisition_method=args.acquisition_method,
             licensing_note=args.licensing_note,
             declared_timezone=args.declared_timezone,
+            workers=args.workers,
         )
     except historical_run.NoHistoricalDataError as exc:
         # Deliberately not an error exit: "no data yet" is a legitimate state
@@ -243,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
         help="the timezone the SOURCE states its timestamps are in. Omitted "
              "means nobody said, which is recorded as an assumption rather "
              "than resolved from this machine's locale",
+    )
+    hist.add_argument(
+        "--workers", type=int, default=None,
+        help="worker processes; defaults to min(12, cpu_count)",
     )
     hist.add_argument("--out", type=Path, default=None)
     hist.set_defaults(handler=_historical)

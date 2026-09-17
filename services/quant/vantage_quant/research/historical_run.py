@@ -27,7 +27,9 @@ statistic averaged across the two describes no market that exists.
 
 from __future__ import annotations
 
+import os
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -190,6 +192,49 @@ def _assign(
     return out
 
 
+@dataclass(frozen=True)
+class _Task:
+    """One (strategy, dataset) unit of work for the pool.
+
+    Carries the dataset NAME rather than its bars. Pickling frames across a
+    process boundary costs more than re-reading a file, and a name keeps the
+    allowlist check inside the worker instead of trusting whatever arrived.
+    """
+
+    strategy_key: str
+    dataset_name: str
+    dataset_id: str
+    digest: str
+    sha: str
+    root: Path | None
+    instrument: str
+    timeframe: str
+    declared_timezone: str | None
+
+
+def _observe_task(task: _Task) -> tuple[str, int, list[Any]]:
+    """Re-import the dataset in the worker, then evaluate one strategy over it.
+
+    `reject_on_error` stays True here even though the parent already validated:
+    a file that changed between the two reads must not be silently analysed.
+    """
+    dataset = historical.load(
+        task.dataset_name,
+        instrument=task.instrument,
+        timeframe=task.timeframe,
+        root=task.root,
+        declared_timezone=task.declared_timezone,
+        reject_on_error=True,
+    )
+    return expanded.observe_frame(
+        task.strategy_key,
+        frame=dataset.frame,
+        dataset_id=task.dataset_id,
+        digest=task.digest,
+        sha=task.sha,
+    )
+
+
 def run(
     *,
     run_id: str = "signal-research-3-historical",
@@ -200,6 +245,7 @@ def run(
     acquisition_method: str = "UNRECORDED",
     licensing_note: str = "UNRECORDED",
     declared_timezone: str | None = None,
+    workers: int | None = None,
 ) -> HistoricalRun:
     """The historical experiment. TRAIN only; TEST is sealed and unread."""
     started = time.monotonic()
@@ -237,17 +283,34 @@ def run(
     collected: dict[str, list[Any]] = {key: [] for key in strategies.REGISTRY}
     eligible_bars: dict[str, int] = dict.fromkeys(strategies.REGISTRY, 0)
 
-    for key in sorted(strategies.REGISTRY):
-        for dataset in train:
-            _, eligible, rows = expanded.observe_frame(
-                key,
-                frame=dataset.frame,
-                dataset_id=dataset.dataset_id,
-                digest=dataset.provenance.normalized_dataset_hash[:32],
-                sha=sha,
-            )
-            collected[key].extend(rows)
-            eligible_bars[key] += eligible
+    tasks = [
+        _Task(
+            strategy_key=key,
+            dataset_name=dataset.provenance.source,
+            dataset_id=dataset.dataset_id,
+            digest=dataset.provenance.normalized_dataset_hash[:32],
+            sha=sha,
+            root=root,
+            instrument=instrument,
+            timeframe=timeframe,
+            declared_timezone=declared_timezone,
+        )
+        for key in sorted(strategies.REGISTRY)
+        for dataset in train
+    ]
+
+    max_workers = workers or min(12, (os.cpu_count() or 4))
+    if max_workers > 1 and len(tasks) > 1:
+        with ProcessPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(_observe_task, tasks, chunksize=1))
+    else:
+        # One worker means run here: a pool of one pays the spawn cost to gain
+        # nothing, and a single-process path keeps the run debuggable.
+        results = [_observe_task(task) for task in tasks]
+
+    for key, eligible, rows in results:
+        collected[key].extend(rows)
+        eligible_bars[key] += eligible
 
     reports = [
         expanded.build_report(
