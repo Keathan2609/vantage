@@ -9,16 +9,222 @@ intelligence milestone is `0a6d8a3`, `4bc1aaa`, `ee32862`, `339b74e`,
 that carries this revision of the report. Appendix A is the summary; this body
 is the evidence behind it.
 
-This revision covers the market-replay milestone. The previous revision's
-largest recorded gap was that the replay provider drove the decision layer but
-not the application; that gap is closed, and section 19b states exactly what
-a replay now drives and what it assumes.
+**Section 0 is the requirement matrix: the fastest answer to "what is
+actually known about this platform right now."** It is maintained as a standing
+inventory rather than per milestone, so it is the section to read first and the
+section to update when an answer changes. The body below is the evidence
+behind it and is organised by milestone.
+
+The current revision audited the market-data layer and gave its acquisition
+path its first tests. Those tests found a defect no amount of reading had:
+a forming bar and a finished bar collide on the same primary key, and the
+unconditional upsert let the incomplete one win. Section 30m records it and
+five others, including a leaked API key.
+
+The revision before this one covered the market-replay milestone. Its
+predecessor's largest recorded gap was that the replay provider drove the
+decision layer but not the application; that gap is closed, and section 19b
+states exactly what a replay now drives and what it assumes.
 
 The headline result is that one deterministic dataset now runs the real
 pipeline end to end -- ingestion, bars, strategies, orchestration, risk,
 Autopilot, OMS, mock venue, fills, ledger, audit -- and two runs from a
 byte-identical database produce byte-identical financial output. Reaching that
 took five defects, four of them in code the previous milestones had passed.
+
+---
+
+## 0. Requirement matrix — current state
+
+This section is a standing inventory of what the platform is required to do and
+what is actually known about each requirement. It is written from the
+repository rather than from an earlier report, and it is the first thing to
+update when a milestone changes an answer.
+
+The classifications mean exactly this:
+
+| Class | Meaning |
+|---|---|
+| **VERIFIED** | Something was executed and observed: a test that ran, output that was read, a probe that was made. |
+| **PARTIAL** | The requirement holds over part of its range, or holds against a stand-in rather than the real thing. The limit is stated in the row. |
+| **UNVERIFIED** | The code is there and is believed correct, but nothing has been run that would show it. This is not a claim of correctness. |
+| **BROKEN** | Executed, and the result was wrong or absent. |
+| **MISSING** | Not built. |
+
+A row citing a test names a test that exists in this tree. A row citing a
+result names a run recorded in §0.12.
+
+### 0.1 Market data
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| MD-1 | One provider seam, several implementations behind it | VERIFIED | `internal/marketdata/provider.go`, `replay.go`, `twelvedata.go`, registered in `internal/app/app.go`. 127 tests in the package, all run. |
+| MD-2 | Bars keep advancing; live quotes fold into 15m, 1h and 4h | VERIFIED | `internal/marketdata/aggregate.go`, with `Aggregator.Seed` wired in `internal/app/app.go`. Observed resuming 18 forming bars across a restart. |
+| MD-3 | Quality gating: stale or absent data refuses rather than guesses | VERIFIED | `/health/ready` and `/market/health`; smoke asserts the refusal on a stale feed. Observed again this session — the venue's maintenance break produces `no_data`, not a fabricated quote. |
+| MD-4 | Historical acquisition: backfill, sync and repair through one path | PARTIAL | `internal/marketdata/sync.go`. `internal/marketdata/acquisition_integration_test.go` (16 tests) drives the real `Syncer` against a fake server implementing Twelve Data's **documented** contract. Never run against the provider itself — see MD-9. |
+| MD-5 | A large range is chunked and fully covered | VERIFIED | `TestALargeRangeIsChunkedAndFullyCovered` — 9 000 bars over three requests, with no hole at the seams. |
+| MD-6 | Re-acquisition is idempotent | VERIFIED | `TestReacquiringTheSameRangeChangesNothing`; `market_bars` is keyed on `(instrument_id, timeframe, open_time)` with `ON CONFLICT DO UPDATE` in `internal/store/market.go`. |
+| MD-7 | A forming bar never overwrites a finished one | VERIFIED | The `WHERE NOT (market_bars.complete AND NOT EXCLUDED.complete)` guard in `internal/store/market.go`; `TestAFormingBarNeverOverwritesAFinishedOne`, `TestAProviderMayStillCorrectItsOwnFinishedBar`. **This was BROKEN at the start of this session**; it is the defect the new integration suite found. |
+| MD-8 | Repair never fabricates a bar the provider does not have | VERIFIED | `TestRepairNeverFabricatesABarTheProviderDoesNotHave`. A closed-market range is left alone, which is what made the first version of that fixture wrong rather than the platform. |
+| MD-9 | The Twelve Data provider works against Twelve Data | UNVERIFIED | `internal/marketdata/twelvedata.go`. No API key is configured on this machine and the provider has never been contacted. What is verified: the request shape against the published documentation, and the response handling against a fake that follows it. The Individual plan's licence is personal, internal and non-commercial — recorded here because it constrains what any acquired data may later be used for. |
+| MD-10 | Provenance: what was asked for, and what came back | VERIFIED | `market_data_segments`; `TestProvenanceRecordsWhatWasAskedAndWhatCameBack`. A short answer is recorded PARTIAL with a warning rather than silently accepted. |
+| MD-11 | The API key never reaches a response, a log or the database | VERIFIED | `scrub` and `transportCause` in `internal/marketdata/twelvedata.go`; `TestATransportFailureDoesNotCarryTheKey`, `TestTheProviderHealthNeverCarriesTheKey`, `TestAFailedAcquisitionNeverPersistsTheKey`. This was a real leak, found by probing rather than by reading. |
+| MD-12 | The provider base URL is fixed configuration, never caller-steered | VERIFIED | `NewTwelveDataProvider` requires https and takes the base URL from configuration only; no handler passes one through. |
+| MD-13 | Legitimate historical XAUUSD 1H data present in the system | MISSING | Nothing has been acquired. The apparatus to acquire it is MD-4; the reason it has not run is MD-9. |
+
+### 0.2 Research
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| RS-1 | The research plane cannot reach a broker | VERIFIED | `TestTheQuantBridgeCannotReachExecution` in `internal/arch/arch_test.go`; no broker client exists under `services/quant`. |
+| RS-2 | No look-ahead in any indicator or backtest | VERIFIED | `services/quant/tests/test_research_leakage.py` (15 tests); `marketdata.ReplayProvider` never returns a bar past the cursor. |
+| RS-3 | Backtests report honestly — costs, slippage, out-of-sample | VERIFIED | `services/quant/tests/test_backtest.py` (25 tests). |
+| RS-4 | A source type is never assumed across the process boundary | VERIFIED | `internal/marketdata/snapshot.go` writes the CSV under a temporary name and renames it only once `.manifest.json` is down; `services/quant/vantage_quant/research/historical.py` refuses an export-shaped file with no manifest, and refuses an unrecognised value. `test_research_historical.py` (72 tests). |
+| RS-5 | The evidence taxonomy distinguishes "not enough data" from "the score is the problem" | VERIFIED | `research/verdict.py`, `research/requirements.py`; `test_research_expansion.py` (40 tests), `test_score_inventory.py` (9). |
+| RS-6 | Regime classification is consistent across its own bands | VERIFIED | `services/quant/vantage_quant/scanner.py`; `test_regime.py` (7 tests). Corrected this milestone: a market going nowhere is a range at any ADX. |
+| RS-7 | Research conclusions drawn from real market data | MISSING | Every dataset in the tree is `SYNTHETIC_CONTROLLED`. This is why MD-13 is the next thing that matters. |
+
+### 0.3 Replay
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| RP-1 | Replay drives the real pipeline, not a copy of it | VERIFIED | `Scheduler.ReplayStep` calls the same job functions the interval loops call; `TestTheReplayEngineHoldsNoBrokerAdapter`. |
+| RP-2 | The dataset registry is an allowlist, never a path | VERIFIED | `internal/replay/fixtures.go`, `dataset.go`; 75 tests in `internal/replay`. |
+| RP-3 | Two runs from a byte-identical database produce identical financial output | VERIFIED | `tests/replay` (22 tests, stack-gated). Established in the replay and determinism milestones (§30c, §30g) and not re-executed for this revision; the finding that a stale control plane fakes non-determinism is recorded there. |
+| RP-4 | A simulated clock never moves a security lifetime | VERIFIED | `TestAuthenticationUsesRealTimeNotTheTradingClock`. |
+| RP-5 | A replay reports its preconditions rather than stepping through silently | VERIFIED | The engine's preflight. §30k records the run that stepped a whole dataset producing nothing because the research service was down, and what now prevents it. |
+
+### 0.4 Strategies
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| ST-1 | Strategies are registered, versioned and promoted one lifecycle stage at a time | VERIFIED | `services/quant/vantage_quant/strategies.py`; `test_strategies.py` (21 tests). A seeded database carries 12 registered, 5 at PAPER. |
+| ST-2 | Consensus is a pure, versioned policy: vetoes before votes, never a majority | VERIFIED | `internal/orchestrator/consensus.go`, with `aggregate.go` as its only production caller, pinned by `TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict`. 76 tests in the package. |
+| ST-3 | Ten deterministic market scenarios exercise the decision layer | VERIFIED | `internal/orchestrator/scenario_test.go`. |
+| ST-4 | The strategies produce an actionable signal when the market suits them | **BROKEN** | A `trend-clean` replay through the real pipeline produced 26 decisions, every regime correctly resolved to TRENDING, and **130 strategy signals of which every one was `no_trade`, mean confidence 0.000**. On the project's own clean-trend fixture not one of the five PAPER strategies fired. Everything around them is verified; this is the platform's open question, and it is a strategy problem, not a pipeline problem. |
+
+### 0.5 Risk
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| RK-1 | The risk engine is a pure function with no database reach | VERIFIED | `TestRiskEngineDoesNotReachTheDatabase`; `internal/risk/engine.go`. 54 tests in the package. |
+| RK-2 | A check that limits exposure or loss never refuses a reducing order | VERIFIED | `internal/risk/reducing_matrix_test.go` covers both halves of the rule — opposite side *and* quantity no greater than the open position — and the side-flip case. |
+| RK-3 | Risk may only reduce a requested size | VERIFIED | `internal/risk/sizing.go`. No path increases a request. |
+| RK-4 | Trading authority is a technical control with a date range and a scope | VERIFIED | `internal/risk/authority_boundary_test.go`. Observed: a 2027 replay against a 90-day authority skipped 610 runs with "Trading authority has expired". |
+| RK-5 | Fail closed — a missing rate or a stale quote refuses | VERIFIED | Asserted by smoke; `internal/fx` returns a refusal, never a guess. |
+
+### 0.6 OMS
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| OM-1 | Only the OMS holds a broker adapter | VERIFIED | `TestOnlyTheOMSCanPlaceABrokerOrder`, `TestBrokerAdapterIsHeldByAnAllowlistOfPackagesOnly`. |
+| OM-2 | Every order placement goes through one method | VERIFIED | `TestEveryOrderPlacementGoesThroughTheSameOMSMethod`. |
+| OM-3 | Only `internal/booking` appends a fill, and it holds no adapter | VERIFIED | `TestOnlyBookingAppendsFills`, `TestBookingHoldsNoBrokerAdapter`; 12 tests in `internal/booking`. |
+| OM-4 | Idempotent under concurrency — a duplicate request cannot double-fill | VERIFIED | `tests/race`, **15 pass 0 fail against the running stack for this revision**; `go test -race ./internal/...` clean. |
+| OM-5 | The order state machine refuses illegal transitions | VERIFIED | `internal/domain` (145 tests). |
+| OM-6 | Autopilot halts only the autonomous pipeline; the kill switch halts everything | VERIFIED | Both are enforced inside the order transaction. Smoke asserts that manual trading, cancel and flatten survive Autopilot OFF. |
+
+### 0.7 Reconciliation
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| RC-1 | Snapshot both sides, classify with a pure function | VERIFIED | `internal/reconcile`, `domain.PolicyFor`; 34 tests. |
+| RC-2 | Only provable divergence is repaired; the ambiguous halts for an operator | VERIFIED — **and observed live** | Two orphan venue executions injected by the smoke suite were classified `EXTRA_BROKER_FILL`, severity `critical`, `OPERATOR_ACTION_REQUIRED`, and held the account in `TRADING_HALTED` for two hours until the database was reset. Automatically-safe classes beside them were repaired. That is the rule working, read out of the live database rather than out of a test. |
+| RC-3 | "Not re-detected" means "fixed", never "no longer examined" | VERIFIED | `closeVanishedIssues` together with the frozen execution cursor in `reconcile.runLocked`; unit tests in `internal/reconcile`. |
+| RC-4 | Reconciliation endpoints are reachable by the role permitted to use them | VERIFIED | `TestEveryReconciliationHandlerUsesTheOperationsScope`; `apps/web/tests/e2e/reconciliation.spec.ts` (21 tests). |
+| RC-5 | Position quantities are never written to match the venue | VERIFIED | No such path exists. `reconcile.Resolve` exposes named actions only, and there is no generic "set order status" endpoint. |
+
+### 0.8 Paper trading
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| PT-1 | Live and demo execution are impossible in this build | VERIFIED | `config.BuildAllowsLiveExecution = false` at `internal/config/config.go:33`, the validation in `config.Load`, the absence of a live adapter, and database CHECK constraints; `TestPaperOnlyGuaranteeIsStillCompiledIn`. `/health/ready` reports `"execution_mode":"paper"`. |
+| PT-2 | Money never becomes a float | VERIFIED | `TestNoFloatingPointColumnsInTheSchema`, `TestMoneyHasNoFloatConstructor`; `apps/web/lib/format.ts` formats decimal strings without constructing one. |
+| PT-3 | The audit chain is tamper-evident and its hashes match | VERIFIED | `internal/domain`; microsecond truncation, and `json` rather than `jsonb` so the stored bytes are the hashed bytes. |
+| PT-4 | An order placed at the terminal reaches the venue, fills, books and settles | VERIFIED | Smoke, end to end against a running stack. |
+| PT-5 | The mock venue misbehaves on purpose, so recovery is exercised against a venue that actually does | VERIFIED | `internal/broker/mock` fault modes (10 tests). The reconciliation evidence in RC-2 came from them. |
+
+### 0.9 UI
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| UI-1 | The terminal holds no business rules; every refusal comes from the API with a machine-readable code | VERIFIED | `apps/web`; `trading.spec.ts` asserts the codes rather than the prose. |
+| UI-2 | Charts render from Vantage's own bars, not a third party's feed | VERIFIED | `apps/web/components/PriceChart.tsx` uses `lightweight-charts` as a renderer only; the bars come from `/market/bars`. `chart.spec.ts` (6 tests). |
+| UI-3 | Authentication, MFA and session handling in the browser | VERIFIED | `auth.spec.ts` (9 tests). The whole Playwright suite — 57 tests — passed against the terminal for this revision. |
+| UI-4 | Reconciliation review and repair from the terminal | VERIFIED | `reconciliation.spec.ts` (21 tests). |
+| UI-5 | No `Date.now()` during render | VERIFIED | The `useNow` hook in `lib/store.tsx`. |
+| UI-6 | Accessibility | MISSING | There is no automated accessibility suite: no axe run, no keyboard-navigation test. Nothing in this report should be read as a claim about it. |
+
+### 0.10 Security
+
+| # | Requirement | Class | Evidence |
+|---|---|---|---|
+| SC-1 | No cryptographic primitive is implemented here | VERIFIED | `internal/crypto` composes the standard library; 11 tests. |
+| SC-2 | No secrets in the repository, a log, a response, a decision snapshot or audit metadata | VERIFIED | gitleaks: 0 findings. MD-11 closed the one real leak this session. |
+| SC-3 | Authorisation is enforced server-side, per role | VERIFIED | `internal/httpapi` (29 tests), `internal/auth` (11); `auth.spec.ts`. |
+| SC-4 | Authentication lifetimes read real time, never the trading clock | VERIFIED | `TestAuthenticationUsesRealTimeNotTheTradingClock`. |
+| SC-5 | CSRF, CORS and security headers | VERIFIED | `internal/httpapi`. CORS allows exactly one origin. |
+| SC-6 | Dependency and container scanning | VERIFIED | govulncheck 0 reachable, trivy 0, npm audit 0, semgrep 0 across 247 files. |
+| SC-7 | SSRF: no outbound URL a caller could steer | VERIFIED | MD-12. |
+| SC-8 | CI enforces all of the above on every push | UNVERIFIED | `.github/workflows/ci.yml` and `security.yml` exist and pass `actionlint`. **The repository has no remote and GitHub Actions have never executed.** Every result in this report came from a local run. |
+
+### 0.11 Where three of these classifications came from
+
+Three rows changed during this session, and how they changed is the point.
+
+- **MD-7 was BROKEN.** Nothing in the tree tested it. The new integration
+  suite acquired 9 000 bars and found 8 999 stored; the missing one was the
+  hour the process happened to be in, because the live aggregator's forming
+  bar and the syncer's finished bar collide on the same primary key and the
+  unconditional upsert let the incomplete one win.
+- **MD-11 was BROKEN.** The test that existed drove a 401, whose error is a
+  static string with no URL in it, and passed. The leak was on the transport
+  path.
+- **MD-4 had no coverage at all.** `Backfill`, `Sync`, `Repair` and `Snapshot`
+  had zero references in any test file before this session; every `Syncer`
+  test exercised a pure helper.
+
+Each was on a path whose test existed and exercised a different branch. That
+is the general lesson from this audit, and it is why the UNVERIFIED rows above
+say only what they say.
+
+### 0.12 What was executed for this revision
+
+Every command below was run on this machine on 2026-09-30 and its output read.
+
+| Command | Result |
+|---|---|
+| `gofmt -l .` (services/control-api) | clean |
+| `go vet ./...` | clean |
+| `go test -count=1 -v ./...` | **874 pass, 0 fail, 54 skip**, exit 0 (the stack-gated suites skip) |
+| `CGO_ENABLED=1 go test -race ./internal/...` | clean |
+| `go test ./internal/marketdata/` with `VANTAGE_MARKETDATA_E2E=1` against the dev Postgres | **16 acquisition tests pass**, alongside the rest of the package |
+| `python -m ruff check .` (services/quant) | clean |
+| `python -m mypy vantage_quant` | clean, 26 source files |
+| `python -m pytest` | **348 pass, 0 fail** |
+| `npm run typecheck`, `npm run lint` (apps/web) | clean |
+| `npm audit` | 0 vulnerabilities |
+| `npx playwright test` against the terminal on :3005 | **57 pass, 0 fail, 0 skip** on Chromium, on a freshly reseeded database |
+| `go test ./tests/race/` with `VANTAGE_RACE_E2E=1` | **15 pass, 0 fail, 0 skip** against the running stack, on its own fresh seed |
+| `python tests/smoke/smoke.py` | **66 pass, 0 fail** |
+| `python tests/smoke/smoke_research.py` | **35 pass, 0 fail** |
+| `gitleaks`, `semgrep`, `trivy`, `govulncheck`, `actionlint` | 0 findings each; semgrep across 247 files |
+| `./scripts/dev-up.ps1 -Reset -Seed`, four times | 20 migrations applied each time; 11 790 bars, 12 strategies, 5 at PAPER. One seed per stack-dependent suite, because the daily-loss budget and the exposure ceilings are finite fixture resources |
+| `GET /health/ready` | `ready`, `paper`, quant `ok`, reconciliation `HEALTHY` |
+
+Not executed, and therefore not claimed:
+
+- Any request to Twelve Data. No key is configured on this machine (MD-9).
+- GitHub Actions. The repository has no remote (SC-8).
+- Any accessibility tooling (UI-6).
+- `go test ./tests/replay/` as a single invocation. That is deliberate rather
+  than an omission: several of those suites replay the same dataset into the
+  same account, so one `go test` measures an exhausted fixture and reports
+  agreement it has not earned. RP-3 is therefore carried from the milestone
+  that ran each suite on its own seed, and is labelled as carried.
+- `npm run build` was not re-run after the Playwright change, because a build
+  replaces `.next` underneath the server that was serving the suite. The change
+  is in test code only; `tsc --noEmit` and `eslint` were run and are clean.
 
 ---
 
@@ -2238,6 +2444,160 @@ That is consistent with what the research milestones already found and is the
 open question this platform still has: the strategies, not the plumbing around
 them. The plumbing now works and can be shown to work.
 
+## 30n. The blocker to real historical data, and the smallest thing that removes it
+
+The task was to find the highest-priority blocker to bringing legitimate
+historical XAUUSD 1H data into Vantage, and to build the smallest coherent
+thing that removes it.
+
+### The blocker is not the provider
+
+The obvious answer is "there is no API key", and it is the wrong one. A key is
+a five-minute change to `.env`, and the moment it exists the platform would
+start writing real bars into `market_bars` through a code path **that had never
+been executed**. Grepping the tree for callers of `Backfill`, `Sync`, `Repair`
+and `Snapshot` inside `internal/marketdata/*_test.go` returned nothing at all.
+Every `Syncer` test exercised a pure helper: chunk arithmetic, symbol mapping,
+gap detection on a slice. The acquisition path itself — provider to store to
+provenance record — had no test.
+
+That is the blocker, because of what the data is for. Bars acquired here become
+the evidence a strategy is judged on. A chunking bug that drops the bar at each
+seam, an upsert that lets a forming bar overwrite a finished one, a repair that
+invents a candle to fill a hole: none of these announce themselves. They
+produce a slightly wrong history that every later measurement treats as
+ground truth, and nothing downstream re-checks it. Acquiring real data before
+the path that acquires it can be shown to work is the expensive order to do
+this in.
+
+### The decision
+
+Build a fake Twelve Data server that implements the provider's **published**
+contract, and drive the real `Syncer` and the real store against it.
+
+The alternatives were worse. Mocking the `Provider` interface tests the
+`Syncer`'s view of a provider rather than the provider, and the provider is
+half the risk. Calling Twelve Data from a test is not available — no key — and
+would be the wrong shape anyway, since a test that needs the internet is a test
+that is sometimes skipped. So: a real HTTP server, in the test, answering the
+way the documentation says Twelve Data answers.
+
+The documented behaviours the fake reproduces, each of which the implementation
+has to get right:
+
+- values come back **newest first** unless `order=ASC` is sent;
+- `outputsize` is capped at 5 000, and a request for more silently returns
+  fewer;
+- errors arrive as `{"code","message","status":"error"}` with **HTTP 200**, so
+  a client that checks the status code sees success;
+- `datetime` is `2006-01-02 15:04:05`, in the timezone the request asked for.
+
+The fake also parses the **request** dates strictly as `2006-01-02T15:04:05`
+and refuses any other form. That is deliberate: the implementation was sending
+a space separator, which the documentation does not list. A provider that
+silently reinterprets a date is worse than one that rejects it, because the
+response still looks like a success and the window is quietly not the window
+that was asked for. The format is now the documented one, and the fake fails
+the test if it regresses.
+
+`internal/marketdata/acquisition_integration_test.go` holds sixteen tests. They
+are gated on `VANTAGE_MARKETDATA_E2E=1` plus a database URL and skip cleanly
+without them, because they need a real Postgres: the thing being tested is
+partly the SQL.
+
+### What the tests found
+
+**A real defect, and it was the one that mattered.** Acquiring a 9 000-bar
+range reported `stored 8999 of 9000`. The missing bar was the hour the process
+happened to be in. The live quote aggregator writes that hour as an
+**incomplete** bar; the syncer writes it as a **complete** one from the
+provider; they collide on `(instrument_id, timeframe, open_time)`; and the
+unconditional `ON CONFLICT DO UPDATE` let whichever arrived last win. In a
+development database the aggregator always arrives last, so a real backfill
+would have left one truncated bar per instrument per timeframe at the boundary
+between history and live data — exactly where a strategy's newest bar is.
+
+The fix is one clause in `internal/store/market.go`:
+
+    WHERE NOT (market_bars.complete AND NOT EXCLUDED.complete)
+
+A complete bar is never replaced by an incomplete one. A provider may still
+correct its own finished bar, which providers do, and there is a test for each
+half.
+
+**Two of my own fixtures were wrong, and the platform was right.** A repair
+test left one gap behind; the hole I had punched was on a Sunday, and `Repair`
+correctly declines to invent bars for a closed market. A second fixture
+collided with an existing test helper name. Both were my errors. They are
+recorded because the first one is the shape of mistake that turns into a
+platform "bug report" if nobody checks the calendar.
+
+### What this does not establish
+
+Nothing here has spoken to Twelve Data. The request shape is verified against
+the published documentation and pinned by a test; the response handling is
+verified against a fake that follows it. The first real response may differ,
+and if it does the failure will be in the parsing, not in the pipeline —
+which is the point of doing it in this order.
+
+Two things to carry forward when a key is configured: the provider's Individual
+plans are licensed for personal, internal and non-commercial use, which
+constrains what acquired data may later be used for; and the free tier's limits
+(8 requests a minute, 800 a day, 5 000 data points a request) are what the
+syncer's 4 000-bar chunking already assumes.
+
+### And then the Playwright suite tested a different application
+
+This was found while gathering the evidence for §0.12 rather than while
+building anything, and it is worth writing down because the failure mode is
+the same one as everything else in this section: a check that exists, passes,
+and is looking at the wrong thing.
+
+`playwright.config.ts` defaults `baseURL` to `http://localhost:3000`. On this
+machine another project — FORGE, a workflow orchestrator — now holds that
+port. The suite loaded FORGE's landing page and then failed every test at
+sign-in, waiting for a `.topbar` that page has never had:
+
+    31 failed, 26 passed (12.2m)
+
+Twelve minutes, thirty-one failures, every one of them reading as a defect in
+this application's own auth, chart, terminal and trading code. Nothing in the
+output named the port, the other application, or the fact that the Vantage
+terminal had never been reached; the only place that information existed was
+the page snapshot in `test-results/*/error-context.md`. CLAUDE.md has warned
+about exactly this since the milestone it first happened in, and the warning
+did not help, because by the time you go looking for a warning you have already
+spent the twelve minutes and have thirty-one plausible bug reports in hand.
+
+The fix is a preflight in `tests/e2e/global-setup.ts`: fetch `baseURL` once and
+refuse to run if the server-rendered HTML is not this terminal's. It costs one
+request and turns the whole failure into its first line of output:
+
+    Error: http://localhost:3000 is not the Vantage terminal. It answered 200
+    with a page titled "FORGE — distributed workflow orchestration". Another
+    application is almost certainly holding that port — set
+    VANTAGE_E2E_BASE_URL to the port the terminal actually got, and set
+    VANTAGE_PUBLIC_WEB_ORIGIN to match before restarting the API.
+
+Both branches were verified rather than assumed: against :3000 it names FORGE,
+and against a port with nothing on it, it says the terminal could not be
+reached rather than letting 57 tests time out one at a time.
+
+The check is a title match, which is a weak signal deliberately: anything
+stronger would need a marker in the application bundle, and a rebuild to add
+one, and the failure this prevents does not need a strong signal. Serving a
+completely different product is not a subtle condition.
+
+With the terminal started on :3005, `VANTAGE_PUBLIC_WEB_ORIGIN` set to match
+and the control plane restarted so CORS agreed: **57 passed, 0 failed, in 1.6
+minutes**. The same suite, the same code, against the right application.
+
+One consequence worth stating plainly: the smoke suite sends an `Origin` header
+that must equal `VANTAGE_PUBLIC_WEB_ORIGIN`, so moving the terminal off :3000
+made `smoke.py` fail its first order with `csrf_origin_mismatch` — the CSRF
+control working exactly as designed. `VANTAGE_SMOKE_WEB_ORIGIN` is how that is
+told where the terminal went, and with it the suite reports 66 passed, 0 failed.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -2252,7 +2612,24 @@ Stated plainly, because a report that lists only successes is not useful.
   against a local `httptest` server. Parsing, chunking, rate limiting, retry
   and error handling are exercised; the live API's behaviour, plan limits and
   earliest available XAUUSD bar are unknown and are not guessed at anywhere in
-  this repository.
+  this repository. What changed this revision is the *shape* of that gap: the
+  acquisition path now has sixteen integration tests driving the real `Syncer`
+  and the real store against a fake built to the published contract, so a first
+  real response will fail in the parsing if it fails at all, rather than
+  somewhere deeper. Section 30n.
+
+- **No PAPER-promoted strategy has produced an actionable signal on the
+  project's own clean-trend fixture.** 130 signals, every one `no_trade`, mean
+  confidence 0.000, with the regime correctly resolved to TRENDING on all 26
+  decisions. This is measured, not inferred, and it is the platform's largest
+  open question. It is a strategy problem: everything between the bar and the
+  venue is verified, and calibrating a strategy to fix it would be changing the
+  measurement rather than the thing measured.
+
+- **Accessibility is not tested at all.** No axe run, no keyboard-navigation
+  test, no screen-reader pass. The terminal is a single-operator tool, which is
+  a reason it has not been prioritised and not a reason to claim anything about
+  it.
 
 This list is shorter than it was — six items from the previous revision have since
 been executed and moved into the tally — and what remains is what remains.
@@ -2572,13 +2949,14 @@ need real time.
 
 | Suite | Run | Result |
 | --- | --- | --- |
-| Go unit | this milestone | **723 pass, 0 fail, 36 skip** across 26 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack |
+| Go unit | this revision | **874 pass, 0 fail, 54 skip**, exit 0, from `go test -count=1 -v ./...` across the whole module; `gofmt` and `go vet` clean. That count includes subtests, so it is not comparable with the 723 top-level tests reported for the previous milestone — it is a different measurement of the same tree, not growth. The skips are the suites that require a running stack |
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
-| Go concurrency and recovery integration | **carried — not re-run** | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
+| Go concurrency and recovery integration | this revision | **15 pass, 0 fail, 0 skip** against a running stack and a real venue simulator, on its own fresh seed: the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
+| Market-data acquisition integration | this revision | **16 pass, 0 fail** with `VANTAGE_MARKETDATA_E2E=1` against the development Postgres, driving the real `Syncer` and the real store against a fake Twelve Data server built to the published contract. These are the first tests this project has had for `Backfill`, `Sync`, `Repair` and `Snapshot`; two of them failed on first run and one of those was a real defect |
 | Python unit | this milestone | **348 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files |
-| Web static | this milestone | `tsc --noEmit` clean; `eslint` clean; `npm run build` clean, 20 routes. `lightweight-charts@5.2.1` added |
-| Playwright | this milestone | **57 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 6 are the new chart tests. Run on a freshly reseeded database |
-| Smoke: trading | this milestone | **66 pass, 0 fail** against the live stack |
+| Web static | this revision | `tsc --noEmit` clean; `eslint` clean. `npm run build` was NOT re-run after the `global-setup.ts` change, because a build replaces `.next` underneath the running server; the change is test-only. The build was clean earlier in this session, 20 routes, with `lightweight-charts@5.2.1` |
+| Playwright | this revision | **57 pass, 0 fail, 0 skip** on Chromium against the live stack, on a freshly reseeded database, with the terminal on :3005. The run before it reported 31 failed / 26 passed because port 3000 is now held by a different project and the suite silently tested THAT application; `global-setup.ts` now refuses to start against anything that is not this terminal. Section 30n |
+| Smoke: trading | this revision | **66 pass, 0 fail** against the live stack on its own fresh seed. It first failed at the first order with `csrf_origin_mismatch`, which is the CSRF control working: moving the terminal to :3005 moved `VANTAGE_PUBLIC_WEB_ORIGIN` with it, and the suite's `Origin` header follows through `VANTAGE_SMOKE_WEB_ORIGIN` |
 | Smoke: research | this milestone | **35 pass, 0 fail**. It first reported 34/1 on a seven-hour-old database whose earlier suites had left unresolved reconciliation discrepancies pausing automation; a reseed restored 35/35, which is the documented behaviour rather than a regression |
 | Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
 | Semgrep | this milestone | 0 findings across 246 tracked files with 394 rules, plus a separate 0-finding pass over the 23 new market-data and chart files because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |

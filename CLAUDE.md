@@ -177,13 +177,27 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
 
 ## Things that will waste your time
 
-- **If port 3000 is taken, Playwright silently tests the WRONG APPLICATION.**
-  `playwright.config.ts` defaults `baseURL` to `http://localhost:3000`. On a
-  machine running another project there, all 23 UI tests fail at `signIn` with
-  "waiting for locator('.topbar')" — because the page that loaded was a
-  different app's landing page, which has no Vantage markup at all. The page
-  snapshot in `test-results/*/error-context.md` is what reveals it; the error
-  message alone reads like a broken login. Set `VANTAGE_E2E_BASE_URL`.
+- **If port 3000 is taken, Playwright used to silently test the WRONG
+  APPLICATION.** `playwright.config.ts` defaults `baseURL` to
+  `http://localhost:3000`. On a machine running another project there, every UI
+  test failed at `signIn` with "waiting for locator('.topbar')" — because the
+  page that loaded was a different app's landing page, which has no Vantage
+  markup at all. It happened twice: 23 failures the first time, 31 the second,
+  and on both occasions the only place the truth existed was the page snapshot
+  in `test-results/*/error-context.md`.
+
+  `tests/e2e/global-setup.ts` now fetches `baseURL` before the suite runs and
+  refuses to start unless the served HTML is this terminal's, naming the
+  application that answered instead. You still have to **set
+  `VANTAGE_E2E_BASE_URL`** — the guard tells you that you must, in the first
+  line of output, instead of twelve minutes and thirty-one plausible bug
+  reports later.
+
+  Moving the terminal off :3000 has two consequences, and both are the
+  platform being right: `VANTAGE_PUBLIC_WEB_ORIGIN` must change and the API
+  must be restarted, or the browser reports CORS; and the smoke suite's
+  `Origin` header must follow through `VANTAGE_SMOKE_WEB_ORIGIN`, or its first
+  order is refused with `csrf_origin_mismatch`.
 
 - **Do not run `npm run build` while a server is serving that build.** The
   build replaces `.next` underneath the running process, which then serves a

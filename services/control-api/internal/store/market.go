@@ -242,7 +242,29 @@ func (s *MarketStore) UpsertBars(ctx context.Context, bars []domain.Bar) error {
 					close_time = EXCLUDED.close_time, open = EXCLUDED.open,
 					high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
 					volume = EXCLUDED.volume, complete = EXCLUDED.complete,
-					provider = EXCLUDED.provider, ingested_at = now()`,
+					provider = EXCLUDED.provider, ingested_at = now()
+				-- A COMPLETE bar is never replaced by an INCOMPLETE one.
+				--
+				-- Two writers share this primary key: the quote aggregator,
+				-- folding live ticks into the forming interval, and the
+				-- historical syncer, storing finished candles from a provider.
+				-- Both are correct on their own and the upsert had no opinion
+				-- about order, so whichever ran last won.
+				--
+				-- That is fine in every direction but one. A backfill covering
+				-- the CURRENT hour stores a finished bar; the aggregator's next
+				-- tick then overwrote it with a one-tick partial, and the bar
+				-- silently left every complete = TRUE query -- including the
+				-- one strategies read. An integration test caught exactly this:
+				-- 9000 bars acquired, 8999 visible, the missing one being the
+				-- hour the process happened to be in.
+				--
+				-- Losing information is never the right resolution, so this is
+				-- the one case the update declines. Everything else still
+				-- applies: the aggregator keeps extending its own forming bar,
+				-- and a provider may still replace a finished bar with a
+				-- corrected one.
+				WHERE NOT (market_bars.complete AND NOT EXCLUDED.complete)`,
 				b.InstrumentID, b.Timeframe, b.OpenTime, b.CloseTime,
 				b.Open, b.High, b.Low, b.Close, b.Volume, b.Complete, b.Provider)
 		}

@@ -355,6 +355,14 @@ func (v timeSeriesValue) toBar(
 	}, nil
 }
 
+// twelveDataDateLayout is the request date format the API documents.
+//
+// The RESPONSE uses "2006-01-02 15:04:05" (space) or "2006-01-02", which is
+// why parseTwelveDataTime below accepts those. The REQUEST is documented
+// differently, and the two are not interchangeable just because both describe
+// the same instant.
+const twelveDataDateLayout = "2006-01-02T15:04:05"
+
 // parseTwelveDataTime reads the two datetime shapes the API emits, as UTC.
 func parseTwelveDataTime(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
@@ -395,8 +403,16 @@ func (p *TwelveDataProvider) timeSeries(
 	query := url.Values{}
 	query.Set("symbol", vendorSymbol)
 	query.Set("interval", interval)
-	query.Set("start_date", from.UTC().Format("2006-01-02 15:04:05"))
-	query.Set("end_date", to.UTC().Format("2006-01-02 15:04:05"))
+	// The DOCUMENTED date format is "2006-01-02" or "2006-01-02T15:04:05".
+	// This sent a space separator instead, which the API may or may not
+	// tolerate -- and a date the provider silently reinterprets is worse than
+	// one it rejects, because the response still looks like a success and the
+	// window is quietly not the window that was asked for.
+	//
+	// NOT verified against the live API: no key is configured on this machine.
+	// It is verified against the published documentation and pinned by a test.
+	query.Set("start_date", from.UTC().Format(twelveDataDateLayout))
+	query.Set("end_date", to.UTC().Format(twelveDataDateLayout))
 	query.Set("outputsize", strconv.Itoa(twelveDataMaxOutputSize))
 	query.Set("timezone", "UTC")
 	query.Set("order", "ASC")

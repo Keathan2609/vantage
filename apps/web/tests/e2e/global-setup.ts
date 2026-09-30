@@ -23,6 +23,61 @@ import { request, type FullConfig } from "@playwright/test";
 export const TRADER_STATE = "test-results/.auth/trader.json";
 export const VIEWER_STATE = "test-results/.auth/viewer.json";
 
+/**
+ * The marker that says the page under test is this terminal.
+ *
+ * It is the `title` that `app/layout.tsx` declares, and it is in the server-
+ * rendered HTML before any JavaScript runs, which is what makes it usable as a
+ * preflight.
+ */
+const TERMINAL_TITLE_MARKER = "Vantage";
+
+/**
+ * Refuses to run the suite against an application that is not this one.
+ *
+ * `baseURL` defaults to http://localhost:3000, and on a machine where another
+ * project owns that port the suite loads THAT project's page and then fails
+ * every test at sign-in, waiting for a `.topbar` that page has never had. The
+ * output reads exactly like a broken login: no error mentions the port, the
+ * other application, or the fact that the terminal was never reached.
+ *
+ * That is not hypothetical. It cost a full 12-minute run on this machine —
+ * 31 failures, all of them in the application's own code by appearance, none
+ * of them real — against a page titled "FORGE — distributed workflow
+ * orchestration". Checking the title costs one request and names the problem
+ * in the first line of output instead of the last.
+ */
+async function requireTheTerminal(baseURL: string): Promise<void> {
+  const ctx = await request.newContext({
+    // The suite's saved session must not leak into this probe: the question is
+    // what the server serves, not what it serves a signed-in trader.
+    storageState: undefined,
+  });
+  try {
+    const res = await ctx.get(baseURL, { timeout: 15_000 });
+    const html = await res.text();
+    const title = /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
+    const served = html.includes(TERMINAL_TITLE_MARKER) || title?.includes(TERMINAL_TITLE_MARKER);
+    if (!served) {
+      throw new Error(
+        `${baseURL} is not the Vantage terminal. It answered ${res.status()} with a page ` +
+          `titled ${title ? `"${title}"` : "(no title)"}. Another application is almost ` +
+          `certainly holding that port — set VANTAGE_E2E_BASE_URL to the port the terminal ` +
+          `actually got, and set VANTAGE_PUBLIC_WEB_ORIGIN to match before restarting the API.`,
+      );
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("is not the Vantage terminal")) throw err;
+    throw new Error(
+      `${baseURL} could not be reached, so there is nothing to test: ${String(err)}. ` +
+        `The suite does not start the terminal itself; start it, or set ` +
+        `VANTAGE_E2E_BASE_URL to where it is.`,
+    );
+  } finally {
+    await ctx.dispose();
+  }
+}
+
 async function saveSession(
   apiBase: string,
   email: string,
@@ -75,8 +130,10 @@ function clearDevRateLimits(): void {
   }
 }
 
-export default async function globalSetup(_config: FullConfig): Promise<void> {
+export default async function globalSetup(config: FullConfig): Promise<void> {
   const apiBase = process.env.VANTAGE_E2E_API_BASE_URL ?? "http://localhost:8080";
+  const baseURL = config.projects[0]?.use?.baseURL;
+  if (baseURL) await requireTheTerminal(baseURL);
   clearDevRateLimits();
 
   const traderPassword = process.env.VANTAGE_E2E_PASSWORD;
