@@ -101,7 +101,8 @@ result names a run recorded in §0.12.
 | ST-1 | Strategies are registered, versioned and promoted one lifecycle stage at a time | VERIFIED | `services/quant/vantage_quant/strategies.py`; `test_strategies.py` (21 tests). A seeded database carries 12 registered, 5 at PAPER. |
 | ST-2 | Consensus is a pure, versioned policy: vetoes before votes, never a majority | VERIFIED | `internal/orchestrator/consensus.go`, with `aggregate.go` as its only production caller, pinned by `TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict`. 76 tests in the package. |
 | ST-3 | Ten deterministic market scenarios exercise the decision layer | VERIFIED | `internal/orchestrator/scenario_test.go`. |
-| ST-4 | The strategies produce an actionable signal when the market suits them | **BROKEN** | A `trend-clean` replay through the real pipeline produced 26 decisions, every regime correctly resolved to TRENDING, and **130 strategy signals of which every one was `no_trade`, mean confidence 0.000**. On the project's own clean-trend fixture not one of the five PAPER strategies fired. Everything around them is verified; this is the platform's open question, and it is a strategy problem, not a pipeline problem. |
+| ST-4 | The strategies produce an actionable signal when the market suits them | VERIFIED | A `trend-clean` replay through the real pipeline now produces **46 actionable signals** — 26 buy (mean 0.453) and 20 sell (mean 0.700) — beside 73 genuine abstentions. The previous revision recorded this row as BROKEN on the strength of 130 signals all at confidence 0.000; **266 of those were strategies that had been handed fewer bars than they require and could not form an opinion at all**, recorded as opinions. Section 30o. |
+| ST-5 | An actionable signal that survives the policy becomes an order | **BROKEN** | The same replay produced 39 decisions, every regime correctly TRENDING, and **no order**. The cause is now measurable rather than inferred: the only strategy clearing the policy's 0.55 floor (`rsi_mean_reversion`, 0.700) declares itself valid only in RANGING, so the regime gate correctly discards it; the strategies that ARE valid in a trend peak at 0.538 (`macd_momentum`) and 0.441 (`donchian_breakout`) because the score is a raw average with hard-coded constants. On a trending market the set that can clear the floor and the set permitted to act do not intersect. Calibrating the scale is research; moving the threshold would answer it dishonestly. |
 
 ### 0.5 Risk
 
@@ -211,6 +212,7 @@ Every command below was run on this machine on 2026-09-30 and its output read.
 | `gitleaks`, `semgrep`, `trivy`, `govulncheck`, `actionlint` | 0 findings each; semgrep across 247 files |
 | `./scripts/dev-up.ps1 -Reset -Seed`, four times | 20 migrations applied each time; 11 790 bars, 12 strategies, 5 at PAPER. One seed per stack-dependent suite, because the daily-loss budget and the exposure ceilings are finite fixture resources |
 | `GET /health/ready` | `ready`, `paper`, quant `ok`, reconciliation `HEALTHY` |
+| A full `trend-clean` replay through the real pipeline, both planes rebuilt | 140/140 rows, 81 evaluation instants, 0 errors. `strategy_runs`: 551 skipped (266 of them insufficient history, naming both numbers), 73 no_signal, **46 succeeded**. 39 decisions, all TRENDING, no order |
 
 Not executed, and therefore not claimed:
 
@@ -2598,6 +2600,117 @@ made `smoke.py` fail its first order with `csrf_origin_mismatch` — the CSRF
 control working exactly as designed. `VANTAGE_SMOKE_WEB_ORIGIN` is how that is
 told where the terminal went, and with it the suite reports 66 passed, 0 failed.
 
+## 30o. "No strategy fires" was the measurement, not the strategies
+
+The previous revision recorded the platform's largest open question as ST-4:
+a `trend-clean` replay produced 130 strategy signals, every one `no_trade` at
+a mean confidence of 0.000, and the conclusion drawn was that the strategies
+themselves were the problem. That conclusion was wrong, and the way it was
+wrong is the same shape as every other finding in this report.
+
+### The one number that should have been suspicious
+
+Five strategies, five different families, five unrelated formulas — a moving
+average crossover, a channel breakout, an RSI fade, a MACD histogram and a
+z-score — and every one of them returned exactly 0.000. Independent methods do
+not agree to three decimal places. A uniform answer across unrelated code is
+the signature of a shared precondition failing, not of five judgements.
+
+### Where it actually broke
+
+The strategies declare how much history they need. Four of the five PAPER
+strategies require **120 completed bars**, the fifth 100.
+
+The orchestrator loads up to 300 bars and refuses below **50** of its own.
+Between 50 and 120 it did everything: loaded the bars, resolved the session and
+event risk, called the research service, received an answer, recorded it, and
+handed it to the consensus policy. The answer was
+`no_trade("... requires 120 bars and received 63")` at confidence 0 — a refusal
+to answer, arriving on the wire in exactly the shape of an abstention.
+
+So the control plane wrote it into `strategy_runs` as `no_signal`, which is
+what it writes when a strategy has looked at the market and declined. And
+`opinionsFrom` passed it to `Decide` as a **fresh opinion**, where the policy
+weights each opinion by one over the number of strategies in its family — so a
+strategy that never formed a view halved the weight of the one that did, and
+the decision snapshot recorded five contributors when one had contributed.
+
+The replay warm-up is 60 instants, chosen for the 50-bar volatility baseline
+and the research plane's 60-bar regime floor. Nothing connected that number to
+the 120 the strategies ask for, and nothing had to: the two live in different
+processes and neither ever compared them.
+
+### How much of the evidence this was
+
+Measured over every replay fixture, at the standard 60-instant warm-up:
+
+| Fixture | Bars | Signals recorded | Guaranteed `no_trade` |
+| --- | ---: | ---: | ---: |
+| `trend_clean` | 140 | 405 | **280 (69%)** |
+| `range_bound` | 140 | 405 | 280 (69%) |
+| `drawdown` | 120 | 305 | **280 (92%)** |
+| `false_breakout` | 120 | 305 | 280 (92%) |
+
+Four fixtures — `drawdown`, `false_breakout`, `spread_spike`,
+`test_partial_fill` — are shorter than 120 bars plus their warm-up, so no PAPER
+strategy could produce a signal on them **at any point in the dataset**. Not a
+weak signal: a structurally impossible one.
+
+### The fix
+
+The requirement belongs to the strategy, so the strategy reports it. `evaluate`
+now stamps `required_bars` on every answer and sets `insufficient_history` when
+it refused for want of history; both cross the wire; and the orchestrator
+records such an answer as a **SKIP with its numbers** rather than as an
+opinion, before `valid` is set and therefore before it can reach the policy.
+
+No threshold was moved, no formula changed, no fixture lengthened and no
+requirement lowered. The number is not duplicated on the Go side either — a
+second copy of "120" in the control plane would be a constant that could drift
+from the code it describes.
+
+### What the same replay says now
+
+Same dataset, same strategies, same parameters, through the real pipeline:
+
+    strategy_runs   skipped 551 · no_signal 73 · succeeded 46
+    of the skips    266 are "insufficient history", naming both numbers
+    signals         buy  26  mean 0.453  max 0.538
+                    sell 20  mean 0.700  max 0.725
+                    no_trade 73 — genuine abstentions
+    decisions       39, every regime TRENDING
+    orders          none
+
+The strategies fire. Forty-six actionable signals on the fixture that was
+reported as producing none.
+
+### And the real reason nothing trades, which is now visible
+
+No order was placed, and the numbers above say exactly why — two causes, and
+neither is "the strategies do not work":
+
+- **The only strategy clearing the confidence floor is not allowed to trade a
+  trend.** `rsi_mean_reversion` scores 0.700 and declares itself valid in
+  RANGING and LOW_VOLATILITY, so the regime gate correctly discards it on a
+  clean trend. That is the policy working.
+- **The strategies that ARE valid in a trend cannot clear the floor.**
+  `macd_momentum` peaks at 0.538 and `donchian_breakout` at 0.441, against a
+  policy that discards below 0.55 and requires 0.60 net. This report already
+  recorded why: the score is a raw average of hand-chosen components, three
+  strategies average a real component with a hard-coded constant, and
+  `donchian_breakout` averages its penetration with a constant 0.5 — so its
+  ceiling is arithmetic, not market. It could not clear 0.55 however clean the
+  trend.
+
+The honest statement of ST-4 is therefore not "no strategy fires". It is that
+**the confidence scale and the policy's thresholds were never calibrated
+against each other**, and on a trending market the set of strategies that can
+clear the floor and the set permitted to act do not intersect.
+
+That is a research question with a defined shape, and moving the threshold to
+make trades appear would answer it dishonestly. What has changed is that it can
+now be measured: the 266 fabricated abstentions that used to bury it are gone.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -2618,13 +2731,26 @@ Stated plainly, because a report that lists only successes is not useful.
   real response will fail in the parsing if it fails at all, rather than
   somewhere deeper. Section 30n.
 
-- **No PAPER-promoted strategy has produced an actionable signal on the
-  project's own clean-trend fixture.** 130 signals, every one `no_trade`, mean
-  confidence 0.000, with the regime correctly resolved to TRENDING on all 26
-  decisions. This is measured, not inferred, and it is the platform's largest
-  open question. It is a strategy problem: everything between the bar and the
-  venue is verified, and calibrating a strategy to fix it would be changing the
-  measurement rather than the thing measured.
+- **The confidence scale and the policy's thresholds have never been
+  calibrated against each other, and on a trending market they do not
+  intersect.** Corrected from the previous revision, which recorded this as "no
+  strategy fires": 266 of those 130-odd signals were strategies that had been
+  handed fewer bars than they require, recorded as opinions (section 30o). With
+  that fixed the same replay produces 46 actionable signals — and still no
+  order, because the only strategy clearing the 0.55 floor is regime-gated out
+  of a trend and the trend-valid ones peak at 0.538 and 0.441 against it. The
+  score is a raw average with hard-coded constants and is not a probability of
+  anything. Calibrating it against realised outcomes is research and needs
+  evidence; moving the threshold would manufacture trades rather than earn
+  them.
+
+- **The replay fixtures are too short for the strategies they exercise.** Four
+  of the fourteen are shorter than the 120 bars a PAPER strategy requires plus
+  its 60-instant warm-up, so no strategy can produce a signal on them at any
+  point. They remain useful for the execution and recovery scenarios they were
+  built for, and are NOT evidence about strategy behaviour. Lengthening them is
+  a separate decision with its own constraint: each fixture needs its own date
+  range.
 
 - **Accessibility is not tested at all.** No axe run, no keyboard-navigation
   test, no screen-reader pass. The terminal is a single-operator tool, which is
@@ -2953,11 +3079,12 @@ need real time.
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | this revision | **15 pass, 0 fail, 0 skip** against a running stack and a real venue simulator, on its own fresh seed: the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
 | Market-data acquisition integration | this revision | **16 pass, 0 fail** with `VANTAGE_MARKETDATA_E2E=1` against the development Postgres, driving the real `Syncer` and the real store against a fake Twelve Data server built to the published contract. These are the first tests this project has had for `Backfill`, `Sync`, `Repair` and `Snapshot`; two of them failed on first run and one of those was a real defect |
-| Python unit | this milestone | **348 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files |
+| Python unit | this revision | **373 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files. The 25 new ones pin that a strategy starved of history says so machine-readably, at exactly its declared boundary, and that a fed strategy never does |
 | Web static | this revision | `tsc --noEmit` clean; `eslint` clean. `npm run build` was NOT re-run after the `global-setup.ts` change, because a build replaces `.next` underneath the running server; the change is test-only. The build was clean earlier in this session, 20 routes, with `lightweight-charts@5.2.1` |
 | Playwright | this revision | **57 pass, 0 fail, 0 skip** on Chromium against the live stack, on a freshly reseeded database, with the terminal on :3005. The run before it reported 31 failed / 26 passed because port 3000 is now held by a different project and the suite silently tested THAT application; `global-setup.ts` now refuses to start against anything that is not this terminal. Section 30n |
 | Smoke: trading | this revision | **66 pass, 0 fail** against the live stack on its own fresh seed. It first failed at the first order with `csrf_origin_mismatch`, which is the CSRF control working: moving the terminal to :3005 moved `VANTAGE_PUBLIC_WEB_ORIGIN` with it, and the suite's `Origin` header follows through `VANTAGE_SMOKE_WEB_ORIGIN` |
 | Smoke: research | this milestone | **35 pass, 0 fail**. It first reported 34/1 on a seven-hour-old database whose earlier suites had left unresolved reconciliation discrepancies pausing automation; a reseed restored 35/35, which is the documented behaviour rather than a regression |
+| Replay: `trend-clean` end to end | this revision | 140/140 rows, 81 evaluation instants, 0 errors, on a freshly seeded database with both planes rebuilt and Autopilot on. **46 actionable signals** where the previous revision measured none, 266 starved evaluations now recorded as skips rather than opinions, 39 decisions all TRENDING, no order placed. Section 30o |
 | Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
 | Semgrep | this milestone | 0 findings across 246 tracked files with 394 rules, plus a separate 0-finding pass over the 23 new market-data and chart files because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
 | govulncheck | this milestone | 0 reachable. "Your code is affected by 0 vulnerabilities"; 1 vulnerability in a required module that nothing calls |

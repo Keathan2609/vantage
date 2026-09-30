@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
@@ -68,6 +68,24 @@ class Signal:
     explanation: str = ""
     indicators: dict[str, str] = field(default_factory=dict)
     features: dict[str, float] = field(default_factory=dict)
+    #: How many completed bars this strategy declares it needs. Reported on
+    #: every signal so the caller never has to know it independently.
+    required_bars: int = 0
+    #: True when the strategy was given fewer than `required_bars` and so
+    #: could not form an opinion at all.
+    #:
+    #: The distinction is the whole point. A no_trade from a strategy that
+    #: examined the market is an ABSTENTION and belongs in the consensus; a
+    #: no_trade from a strategy that was never given enough history is a
+    #: REFUSAL TO ANSWER and does not. Both used to arrive as
+    #: `action="no_trade", confidence=0.0` and were indistinguishable, so the
+    #: control plane recorded the second as the first -- writing down an
+    #: opinion no strategy had formed and then feeding it to the policy.
+    #:
+    #: Set by `evaluate`, which is the only place that knows both numbers.
+    #: A strategy never sets it: by the time its own code runs it has already
+    #: been given the history it asked for.
+    insufficient_history: bool = False
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -1396,9 +1414,15 @@ def evaluate(
 
     if len(bars) < spec.required_bars:
         return (
-            no_trade(
-                f"{spec.name} requires {spec.required_bars} bars and received {len(bars)}"
+            replace(
+                no_trade(
+                    f"{spec.name} requires {spec.required_bars} bars and received {len(bars)}"
+                ),
+                required_bars=spec.required_bars,
+                insufficient_history=True,
             ),
             spec,
         )
-    return spec.generate(bars, params, ctx), spec
+    # Stamped onto every answer, not only the refusals, so a caller can report
+    # what the strategy asked for without holding a second copy of the number.
+    return replace(spec.generate(bars, params, ctx), required_bars=spec.required_bars), spec

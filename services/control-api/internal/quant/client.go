@@ -213,6 +213,25 @@ type SignalResponse struct {
 	Features        json.RawMessage   `json:"features,omitempty"`
 	BarTime         string            `json:"bar_time"`
 	CodeHash        string            `json:"code_hash"`
+	// RequiredBars is the history the strategy declares it needs, and
+	// InsufficientHistory says it did not get it.
+	//
+	// Without these a no_trade means two different things that look identical:
+	// a strategy that examined the market and ABSTAINED, whose abstention the
+	// consensus should hear, and a strategy that was handed too few bars and
+	// REFUSED TO ANSWER, which has no opinion to contribute. Both arrive as
+	// action "no_trade" at confidence 0.
+	//
+	// The control plane was recording the second as the first. Over the replay
+	// fixtures that was 69% of every signal on `trend_clean` and 92% on
+	// `drawdown` -- each one written to strategy_runs as `no_signal` and fed to
+	// the policy as a fresh opinion, diluting its family's weight and inflating
+	// how many strategies the decision appeared to consult.
+	//
+	// Absent from an older research build, which reads as false: the weaker
+	// claim, and the behaviour that existed before.
+	RequiredBars        int  `json:"required_bars"`
+	InsufficientHistory bool `json:"insufficient_history"`
 	// Regime is the market's shape at the instant of the signal, as the
 	// research plane classified it from the bars it was sent.
 	//

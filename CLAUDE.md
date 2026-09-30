@@ -354,6 +354,32 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   preflight warnings rather than calling `control` directly, or it will step
   through the whole dataset producing nothing and pass.
 
+- **A strategy that was starved of history used to be recorded as one that
+  declined.** The orchestrator loads up to 300 bars and refuses below 50 of its
+  own; the PAPER strategies declare 100 and 120. Between those numbers it did
+  the whole evaluation, got back `no_trade` at confidence 0 -- a REFUSAL TO
+  ANSWER, arriving in exactly the shape of an ABSTENTION -- wrote it to
+  `strategy_runs` as `no_signal`, and handed it to the consensus as a fresh
+  opinion, halving the weight of the strategy in that family that HAD looked.
+
+  With a 60-instant warm-up that was 69% of every signal on `trend_clean` and
+  92% on `drawdown`, and it read in aggregate as "no strategy fires on a clean
+  trend". It was the measurement. The research plane now sets
+  `insufficient_history` and `required_bars` on every answer and the
+  orchestrator records such an answer as a SKIP, before `valid` is set and so
+  before it can reach the policy.
+
+  Two things follow. **Do not duplicate `required_bars` on the Go side** -- it
+  belongs to the strategy and a second copy is a constant that drifts. And
+  **four fixtures are shorter than 120 bars plus their warm-up**
+  (`drawdown`, `false_breakout`, `spread_spike`, `test_partial_fill`), so no
+  PAPER strategy can signal on them at any point; they are evidence about
+  execution and recovery, never about strategy behaviour.
+
+  The general lesson, and it is the third time this repository has paid for it:
+  **five unrelated strategies agreeing to three decimal places is not a
+  finding, it is a shared precondition failing.**
+
 - **Time-dependent tests must not wait on the real market.** Use
   `marketdata.ReplayProvider` and the series generators
   (`TrendingSeries`, `RangingSeries`, `VolatilityShockSeries`,

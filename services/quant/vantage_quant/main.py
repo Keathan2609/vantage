@@ -151,6 +151,21 @@ class SignalResponse(BaseModel):
     features: dict[str, float] = Field(default_factory=dict)
     bar_time: str
     code_hash: str
+    # How much history this strategy declares it needs, and whether it got it.
+    #
+    # A no_trade means two entirely different things and used to look the same
+    # on the wire. A strategy that examined the market and declined has
+    # ABSTAINED, and its abstention belongs in the consensus. A strategy that
+    # was handed fewer bars than it requires has REFUSED TO ANSWER, and
+    # recording that as an abstention puts an opinion into the decision that no
+    # strategy ever formed.
+    #
+    # Measured over the replay fixtures, the second case was 69% of every
+    # signal on `trend_clean` and 92% on `drawdown` -- all of them stored as
+    # `no_signal` at confidence 0.000, and read back as evidence that no
+    # strategy fires on a clean trend.
+    required_bars: int = 0
+    insufficient_history: bool = False
     # The market's shape at the instant of the signal, and the measures behind
     # it. UNKNOWN is a real answer and is returned whenever the evidence is
     # thin; it must never be coerced into a tradable label.
@@ -358,6 +373,8 @@ async def generate_signal(request: SignalRequest) -> SignalResponse:
         features={k: round(v, 8) for k, v in signal.features.items() if np.isfinite(v)},
         bar_time=frame.index[-1].isoformat(),
         code_hash=spec.code_hash,
+        required_bars=signal.required_bars,
+        insufficient_history=signal.insufficient_history,
         regime=regime,
         # The measures are the account of the label. A regime with no numbers
         # behind it cannot be argued with after the fact.

@@ -166,6 +166,40 @@ type routingContext struct {
 	scoreKind string
 }
 
+// historyRefusal reports whether a research answer is a refusal to answer for
+// want of history, rather than an opinion, and the reason to record.
+//
+// The two arrive identically -- action "no_trade" at confidence 0 -- and for a
+// whole milestone the second was written down as the first. The orchestrator
+// loads up to 300 bars and refuses below 50 of its own; the seeded PAPER
+// strategies declare 100 and 120. Between those numbers it performed a
+// complete evaluation whose outcome was fixed before it started, stored it in
+// strategy_runs as `no_signal`, and handed it to the consensus as a fresh
+// abstention -- halving its family's weight and making the decision look as
+// though five strategies had considered the market.
+//
+// Measured over the replay fixtures with the standard 60-instant warm-up:
+// 280 of 405 recorded signals on `trend_clean` (69%) and 280 of 305 on
+// `drawdown` (92%) could not have been anything else. Read back in aggregate
+// that said "no strategy fires on a clean trend". Given the history they ask
+// for, the same five produce 49 actionable signals on `trend_clean` at a mean
+// score of 0.561.
+//
+// The requirement is deliberately NOT duplicated here. It belongs to the
+// strategy, the research plane reports it on every answer, and a second copy
+// on this side would be a number that could drift from the code it describes.
+func historyRefusal(signal quant.SignalResponse, sent int) (bool, string) {
+	if !signal.InsufficientHistory {
+		return false, ""
+	}
+	return true, fmt.Sprintf(
+		"insufficient history: the strategy requires %d completed bars and was "+
+			"sent %d, so it could not form an opinion. Recorded as a skip rather "+
+			"than as a no-trade, because an opinion nobody formed must not enter "+
+			"the consensus",
+		signal.RequiredBars, sent)
+}
+
 // EvaluateAndRoute runs one strategy and optionally routes its signal.
 func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome, error) {
 	log := logging.FromContext(ctx)
@@ -374,6 +408,17 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	}
 
 	metrics.StrategyRunDuration.WithLabelValues(strategy.Key).Observe(time.Since(start).Seconds())
+
+	// A strategy that was not given the history it requires has not formed an
+	// opinion, and must not be recorded as having formed one.
+	//
+	// This is checked BEFORE the signal counter and before `valid` is set, so
+	// such an answer never becomes a fresh opinion in `opinionsFrom` and never
+	// reaches the policy. See historyRefusal for what it cost.
+	if refused, reason := historyRefusal(signal, len(bars)); refused {
+		return skip(reason)
+	}
+
 	action := domain.SignalAction(signal.Action)
 	metrics.SignalsGenerated.WithLabelValues(strategy.Key, string(action)).Inc()
 
