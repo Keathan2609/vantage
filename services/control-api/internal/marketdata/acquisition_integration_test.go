@@ -19,6 +19,8 @@ package marketdata
 
 import (
 	"context"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -36,15 +38,21 @@ const (
 	// The canonical instrument mapped to XAU/USD. The broker-contract
 	// instrument XAUUSD.m is deliberately NOT mapped: a spot series is not
 	// that contract's history.
+	// acqAPIKey is deliberately self-describing: a credential-shaped literal
+	// in a repository must say what it is not.
+	acqAPIKey     = "test-key-not-a-real-credential"
 	acqInstrument = "XAUUSD"
 	acqTimeframe  = domain.Timeframe("1h")
 )
 
 // harness is a Syncer wired to a fake provider and a real database.
 type harness struct {
-	syncer   *Syncer
-	store    *store.Store
-	pool     *db.Pool
+	syncer *Syncer
+	store  *store.Store
+	pool   *db.Pool
+	// td is the provider under test. Held so a test can reach the transport
+	// layer -- the only path that can leak the API key.
+	td       *TwelveDataProvider
 	provider *fakeTwelveData
 	clock    fixedClock
 	ctx      context.Context
@@ -84,7 +92,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	clock := fixedClock{time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 	td, err := NewTwelveDataProvider(
-		"https://api.twelvedata.com", "test-key-not-a-real-credential",
+		"https://api.twelvedata.com", acqAPIKey,
 		symbols, clock, 600, 10*time.Second)
 	if err != nil {
 		t.Fatalf("provider: %v", err)
@@ -103,6 +111,7 @@ func newHarness(t *testing.T) *harness {
 		syncer:   NewSyncer(s, td, symbols, clock, market, "test-sha"),
 		store:    s,
 		pool:     pool,
+		td:       td,
 		provider: provider,
 		clock:    clock,
 		ctx:      ctx,
@@ -120,8 +129,18 @@ func newHarness(t *testing.T) *harness {
 // test can undo itself.
 func (h *harness) clean(t *testing.T) {
 	t.Helper()
+	// Every provider, not just twelvedata. The forming-bar tests write a bar
+	// attributed to `mock` on purpose, and a provider filter here left it
+	// behind on the one run that matters: if the UpsertBars completeness guard
+	// regressed, the stray row survived teardown and the NEXT run failed in
+	// TestBackfillStoresWhatTheProviderReturned, which reads the same range and
+	// counts rows. One real defect would have become a permanent failure
+	// misattributed to an unrelated test.
+	//
+	// `acqInstrument` is XAUUSD, which the development seed does not use --
+	// its instrument is XAUUSD.m -- so this cannot delete seeded data.
 	h.exec(t, `DELETE FROM market_bars
-		WHERE instrument_id = $1 AND timeframe = $2 AND provider = 'twelvedata'`,
+		WHERE instrument_id = $1 AND timeframe = $2`,
 		acqInstrument, string(acqTimeframe))
 	h.exec(t, `DELETE FROM market_data_segments WHERE instrument_id = $1 AND timeframe = $2`,
 		acqInstrument, string(acqTimeframe))
@@ -416,10 +435,37 @@ func TestAFailedAcquisitionNeverLeaksTheAPIKey(t *testing.T) {
 	// The key is a query parameter, so any error carrying a URL carries the
 	// credential. The segment record is PERSISTED and served by the coverage
 	// endpoint, so a leak here outlives the process that produced it.
+	//
+	// The failure must be at the TRANSPORT level, and that is the entire point
+	// of this test. An HTTP 500 or a 401 produces a static error string with no
+	// URL in it, so a test driving one passes whether or not the scrub exists.
+	// ENGINEERING_GUIDE.md records that trap; the first version of this test walked into
+	// it anyway by using the fake's "server" mode.
+	//
+	// `http.Client.Do` returns a *url.Error carrying the whole request URL, and
+	// Go's own redaction strips userinfo passwords while leaving the query
+	// untouched. Pointing the provider at a closed port is the cheapest way to
+	// reach it.
+	//
+	// This asserts the END-TO-END guarantee over BOTH locks -- the provider
+	// keeping only the transport cause, and the syncer scrubbing again before
+	// persisting -- so it passes while either one holds. That is deliberate:
+	// the guarantee is "the key is never persisted", not "lock one works".
+	// `TestATransportFailureDoesNotCarryTheKey` pins the provider's lock on its
+	// own. Verified by removing both: the segment then records
+	// `...?apikey=test-key-not-a-real-credential&...` and this fails.
 	h := newHarness(t)
 	from := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
-	h.provider.Seed(from, 50)
-	h.provider.FailNext(10, "server")
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not reserve a port: %v", err)
+	}
+	addr := closed.Addr().String()
+	if cerr := closed.Close(); cerr != nil {
+		t.Fatalf("could not close the listener: %v", cerr)
+	}
+	h.td.baseURL = "http://" + addr
 
 	_, _ = h.syncer.Backfill(h.ctx, acqInstrument, acqTimeframe, from, from.Add(50*time.Hour))
 
@@ -427,10 +473,29 @@ func TestAFailedAcquisitionNeverLeaksTheAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("segments: %v", err)
 	}
+	var sawFailure bool
 	for _, s := range segments {
-		if strings.Contains(s.FailureReason, "test-key-not-a-real-credential") {
+		if s.FailureReason == "" {
+			continue
+		}
+		sawFailure = true
+		if strings.Contains(s.FailureReason, acqAPIKey) {
 			t.Fatalf("the API key was persisted in a segment record: %s", s.FailureReason)
 		}
+		if strings.Contains(s.FailureReason, url.QueryEscape(acqAPIKey)) {
+			t.Fatalf("the percent-encoded API key was persisted: %s", s.FailureReason)
+		}
+	}
+	// Without this the test passes when nothing failed at all, which is the
+	// shape of a test that has stopped testing anything.
+	if !sawFailure {
+		t.Fatal("no segment recorded a failure, so nothing was checked for a leak")
+	}
+
+	// The same error reaches provider health, which the market-data status
+	// endpoint serves to the browser.
+	if ph := h.td.Health(); strings.Contains(ph.LastFailureReason, acqAPIKey) {
+		t.Fatalf("the API key reached provider health: %s", ph.LastFailureReason)
 	}
 }
 
@@ -456,7 +521,20 @@ func TestSyncFetchesOnlyWhatIsNewer(t *testing.T) {
 	}
 	after := h.provider.Requests()
 
-	// Whatever it fetched, it must not have re-requested from the beginning.
+	// Assert it fetched SOMETHING first. Without this the loop below has no
+	// iterations and the test passes for a Sync that regressed to doing
+	// nothing at all -- which is the failure this suite exists to catch, and
+	// it would announce itself as "sync correctly fetched only what is newer".
+	if len(after) <= before {
+		t.Fatalf("sync made no request at all; 50 newer bars were waiting at the "+
+			"provider and it fetched none of them (requests before %d, after %d)",
+			before, len(after))
+	}
+	if result.BarsStored == 0 {
+		t.Errorf("sync stored no bars although 50 newer ones were available")
+	}
+
+	// And, having fetched, it must not have re-requested from the beginning.
 	for _, q := range after[before:] {
 		start, perr := time.Parse(fakeRequestDateLayout, q.Get("start_date"))
 		if perr != nil {
@@ -466,7 +544,6 @@ func TestSyncFetchesOnlyWhatIsNewer(t *testing.T) {
 			t.Errorf("sync asked from %s, which re-downloads history it already holds", start)
 		}
 	}
-	_ = result
 }
 
 func TestAGapIsDetectedAndRepairedWithoutTouchingTheRest(t *testing.T) {

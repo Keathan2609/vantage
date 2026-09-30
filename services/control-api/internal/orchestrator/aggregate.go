@@ -342,7 +342,7 @@ func directionToRoute(v Verdict, existing *domain.Position) (domain.OrderSide, d
 
 	// ---- The reducing rescue ----------------------------------------------
 	//
-	// CLAUDE.md rule 8: a check that limits exposure or loss must never refuse
+	// ENGINEERING_GUIDE.md rule 8: a check that limits exposure or loss must never refuse
 	// a reducing order. Aggregation is not a check, but suppressing the
 	// reducing leg of a disagreement produces exactly the inversion the rule
 	// exists to prevent, and it is a NEW way to produce it.

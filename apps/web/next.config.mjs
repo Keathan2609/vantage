@@ -33,14 +33,14 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  // Next 16 writes AGENTS.md and CLAUDE.md into this directory on every dev
-  // start. They are turned off deliberately.
+  // Next 16 generates tooling-instruction markdown into this directory on
+  // every dev start. Turned off deliberately.
   //
-  // A generated CLAUDE.md is not inert: it becomes directory-scoped
-  // instructions for anyone working in apps/web, competing with the one at the
-  // repository root that was actually written on purpose. Framework-authored
-  // guidance that nobody reviewed is worse than none, and a file that
-  // reappears on every `npm run dev` is a permanent dirty working tree.
+  // Such a file is not inert: it becomes directory-scoped guidance for anyone
+  // working in apps/web, competing with ENGINEERING_GUIDE.md at the repository
+  // root, which was written on purpose. Framework-authored guidance that
+  // nobody reviewed is worse than none, and a file that reappears on every
+  // `npm run dev` is a permanently dirty working tree.
   agentRules: false,
   // A standalone build is what the container image copies; it keeps the image
   // to the server plus the modules actually imported.

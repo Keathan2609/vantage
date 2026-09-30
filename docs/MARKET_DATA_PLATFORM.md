@@ -165,7 +165,7 @@ inherited silently by every conclusion drawn from it.
 ### The manifest carries provenance across the process boundary
 
 The research plane is Python and does not touch the control plane's database
-(CLAUDE.md rule 5), so a snapshot is materialised as a CSV in the allowlisted
+(ENGINEERING_GUIDE.md rule 5), so a snapshot is materialised as a CSV in the allowlisted
 research directory. A CSV cannot say what it is — and the Python importer
 previously assumed everything in that directory was `HISTORICAL_MARKET`, which
 is right for a file an operator placed by hand and wrong for a snapshot Vantage

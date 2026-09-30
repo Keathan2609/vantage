@@ -36,7 +36,7 @@ import (
 //
 // # Why it is also written to a file
 //
-// The research plane is Python and does not touch this database -- CLAUDE.md
+// The research plane is Python and does not touch this database -- ENGINEERING_GUIDE.md
 // rule 5. So the snapshot is ALSO materialised as a CSV plus a manifest in the
 // allowlisted research directory, which the existing, tested Python importer
 // already knows how to read. The database row is the identity; the file is the
@@ -336,7 +336,7 @@ func writeSnapshotFile(
 	// manifest write, a crash, a full disk -- in which a CSV of generated bars
 	// sat in the research directory with no manifest, and the importer's
 	// documented default for an unaccompanied file is HISTORICAL_MARKET. That
-	// is CLAUDE.md rule 14 exactly: generated bars entering research as real
+	// is ENGINEERING_GUIDE.md rule 14 exactly: generated bars entering research as real
 	// evidence, with nothing downstream re-checking.
 	//
 	// Ordering the writes this way means a visible CSV always has its manifest.

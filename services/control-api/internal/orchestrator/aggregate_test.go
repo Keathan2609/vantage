@@ -204,7 +204,7 @@ func TestAnActionableVerdictRoutesUncapped(t *testing.T) {
 }
 
 func TestADisagreementStillLetsTheReducingLegThrough(t *testing.T) {
-	// CLAUDE.md rule 8, at the aggregation layer.
+	// ENGINEERING_GUIDE.md rule 8, at the aggregation layer.
 	//
 	// The account is long. The trend strategy says BUY and the reversion
 	// strategy says SELL, so the policy refuses: a split is not a decision.

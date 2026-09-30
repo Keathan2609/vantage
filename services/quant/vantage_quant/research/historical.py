@@ -5,7 +5,7 @@ establish predictive value: the generator and the strategy share a model of
 what a trend is, so a trend strategy scoring well on a generated trend partly
 measures that agreement. Every claim about real edge needs real bars.
 
-None are available locally, and this milestone does not go looking. CLAUDE.md
+None are available locally, and this milestone does not go looking. ENGINEERING_GUIDE.md
 rule 3 and the brief are both explicit: no downloads, no broker, no scraping,
 no third-party host. So the adapter is built, it reads from an allowlisted
 local directory, and the status it reports today is honest:

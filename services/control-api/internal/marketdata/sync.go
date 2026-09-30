@@ -245,7 +245,7 @@ func (s *Syncer) acquire(
 			// DERIVED from the provider, never hard-coded. The Syncer takes any
 			// Provider and is exported, so a synthetic one would otherwise
 			// stamp HISTORICAL_MARKET onto generated bars -- the exact mistake
-			// CLAUDE.md rule 14 records, which this file's own snapshot path
+			// ENGINEERING_GUIDE.md rule 14 records, which this file's own snapshot path
 			// already had to have corrected once.
 			SourceType:           sourceTypeFor(s.provider),
 			NormalizationVersion: NormalizationVersion,

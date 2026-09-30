@@ -43,7 +43,7 @@ import (
 // the documented contract, written down and executed, which is a great deal
 // more than an untested assumption. See the report for what remains unverified.
 type fakeTwelveData struct {
-	server *http.Server
+	server *httptest.Server
 	URL    string
 
 	mu sync.Mutex
@@ -74,12 +74,17 @@ func newFakeTwelveData() *fakeTwelveData {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/time_series", f.handleTimeSeries)
 	srv := httptest.NewServer(mux)
-	f.server = srv.Config
+	f.server = srv
 	f.URL = srv.URL
 	return f
 }
 
-func (f *fakeTwelveData) Close() { /* httptest server is closed by the test */ }
+// Close shuts the server down.
+//
+// It used to keep only srv.Config and do nothing here, so the t.Cleanup that
+// calls it was a no-op and all sixteen tests leaked a listener and its
+// goroutines for the life of the test binary.
+func (f *fakeTwelveData) Close() { f.server.Close() }
 
 // Seed fills the provider's market with a deterministic hourly series.
 func (f *fakeTwelveData) Seed(from time.Time, hours int) {

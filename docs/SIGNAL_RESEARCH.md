@@ -52,7 +52,7 @@ belongs in any report built on synthetic bars.
 
 ## Determinism, and why the data is not committed
 
-CLAUDE.md rule 15 forbids committing large market datasets. Sixteen conditions
+ENGINEERING_GUIDE.md rule 15 forbids committing large market datasets. Sixteen conditions
 at 1200 bars each is megabytes, so the **generator** is committed and the bars
 are produced on demand.
 
@@ -325,7 +325,7 @@ recorded.
 
 ## Nothing is fetched
 
-No download, no scrape, no provider API, no broker. CLAUDE.md rule 3 and the
+No download, no scrape, no provider API, no broker. ENGINEERING_GUIDE.md rule 3 and the
 research plane's whole design forbid it, and a missing dataset therefore fails
 loudly rather than reaching for a network. Acquiring data is a human decision
 with licensing attached to it.

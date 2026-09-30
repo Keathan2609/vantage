@@ -745,3 +745,73 @@ func TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict(t *testing.T) {
 		}
 	}
 }
+
+// TestAStarvedStrategyIsSkippedBeforeItCanBecomeAnOpinion pins the ORDER of
+// two statements in EvaluateAndRoute, because the order is the whole control.
+//
+// A research answer marked `insufficient_history` is a refusal to answer, not
+// an abstention: the strategy was handed fewer bars than it requires and never
+// formed a view. If it is allowed past the point where the routing context is
+// built with `valid: true`, `opinionsFrom` treats it as a fresh opinion and
+// hands it to the consensus policy -- which weights each opinion by one over
+// its family size, so a strategy that never looked halves the weight of the
+// one that did.
+//
+// That was the state of this code for a whole milestone, and the aggregate it
+// produced (130 signals, every one at confidence 0.000) was written up as
+// evidence that the strategies did not work.
+//
+// A unit test cannot catch a regression here: `historyRefusal` can be correct
+// and simply not called, at which point it is dead code and every test in the
+// orchestrator package still passes. So the call site itself is asserted.
+func TestAStarvedStrategyIsSkippedBeforeItCanBecomeAnOpinion(t *testing.T) {
+	source := readSource(t, "internal/orchestrator")
+
+	start := strings.Index(source, "func (s *Service) EvaluateAndRoute(")
+	if start < 0 {
+		t.Fatal("EvaluateAndRoute not found; if it was renamed, update this test " +
+			"rather than deleting the assertion")
+	}
+	end := strings.Index(source[start+1:], "\nfunc ")
+	body := source[start:]
+	if end > 0 {
+		body = source[start : start+1+end]
+	}
+
+	refusal := strings.Index(body, "historyRefusal(")
+	if refusal < 0 {
+		t.Fatal("EvaluateAndRoute never consults historyRefusal.\n" +
+			"A research answer that means 'I was not given enough history to have " +
+			"an opinion' is then recorded as an opinion of no_trade at confidence " +
+			"0, and reaches the consensus policy as a fresh abstention.")
+	}
+
+	// `valid: true` is the moment an evaluation becomes eligible to be an
+	// opinion. Everything that must not become one has to be refused above it.
+	valid := strings.Index(body, "valid:         true")
+	if valid < 0 {
+		valid = strings.Index(body, "valid: true")
+	}
+	if valid < 0 {
+		t.Fatal("the routing context literal was not found in EvaluateAndRoute; " +
+			"this test can no longer check what it claims to")
+	}
+
+	if refusal > valid {
+		t.Error("EvaluateAndRoute consults historyRefusal AFTER building a valid " +
+			"routing context.\n" +
+			"By then the evaluation is already eligible to be a consensus opinion. " +
+			"The check has to come first, and the refusal has to leave through a " +
+			"skip.")
+	}
+
+	// The refusal must leave through a skip, not fall through into the signal
+	// path. A `return skipAtBar(...)` or `return skip(...)` within the few lines
+	// after the check is what makes it a refusal rather than a log line.
+	window := body[refusal:min(refusal+400, len(body))]
+	if !strings.Contains(window, "return skip") {
+		t.Error("historyRefusal is consulted but its result does not leave through " +
+			"a skip.\nRecording it any other way puts an opinion no strategy " +
+			"formed into strategy_runs and into the decision.")
+	}
+}

@@ -1177,7 +1177,7 @@ def test_a_broken_export_is_refused_rather_than_defaulted(tmp_path: Path) -> Non
     The operator default (HISTORICAL_MARKET) is right for a file somebody
     placed here deliberately and wrong for an export whose manifest went
     missing: those bars may be generated, and calling them real market
-    evidence is precisely CLAUDE.md rule 14.
+    evidence is precisely ENGINEERING_GUIDE.md rule 14.
     """
     directory = historical.data_directory(tmp_path)
     _write_csv(directory, "XAUUSD-m_1h_dcb581a9036d1ebf.csv", _clean_rows(60), HEADER)

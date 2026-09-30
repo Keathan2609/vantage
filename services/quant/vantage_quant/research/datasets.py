@@ -22,7 +22,7 @@ trading edge, and no report built on it may claim otherwise.
 
 # Why these are generated rather than committed
 
-CLAUDE.md forbids committing large market datasets; the fourteen replay
+ENGINEERING_GUIDE.md forbids committing large market datasets; the fourteen replay
 fixtures are a deliberate 170 KB exception. Sixteen conditions at thousands of
 bars each is megabytes, so the GENERATOR is committed and the data is produced
 on demand. Determinism is what makes that safe: the same version and seed

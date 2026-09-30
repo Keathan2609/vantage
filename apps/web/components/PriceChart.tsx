@@ -84,7 +84,7 @@ function palette() {
  * This is the one place a price is allowed to become a float, and it is
  * allowed because a pixel coordinate is presentational and never returns to
  * the server. Nothing derived from these numbers is submitted, stored or
- * compared — see the money conventions in CLAUDE.md.
+ * compared — see the money conventions in ENGINEERING_GUIDE.md.
  */
 function toCandles(bars: Bar[]): CandlestickData<Time>[] {
   const out: CandlestickData<Time>[] = [];

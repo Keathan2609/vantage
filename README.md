@@ -173,3 +173,8 @@ runs everything and reports every failure instead of stopping at the first.
   could.
 - It makes no claim about profitability. The research tools are built to
   measure whether an approach works and to report honestly when it does not.
+
+## Licence
+
+All rights reserved — see [LICENSE](LICENSE). The code is published for review
+and evaluation, not for reuse. If you want to do something with it, ask.

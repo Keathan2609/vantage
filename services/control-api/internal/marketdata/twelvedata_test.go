@@ -15,7 +15,7 @@ import (
 )
 
 // The provider is exercised against a local test server, never the real
-// Twelve Data. CLAUDE.md rule 3 forbids sending traffic to a third party, and
+// Twelve Data. ENGINEERING_GUIDE.md rule 3 forbids sending traffic to a third party, and
 // a test that depended on an external service would fail for reasons that have
 // nothing to do with this code.
 

@@ -153,7 +153,7 @@ func TestAnAuthorityCeilingNeverLoosensTheAccountsOwnLimit(t *testing.T) {
 }
 
 func TestNoAuthorityCeilingRefusesAnOrderThatReducesAPosition(t *testing.T) {
-	// CLAUDE.md rule 8, applied to the four new checks before they can break
+	// ENGINEERING_GUIDE.md rule 8, applied to the four new checks before they can break
 	// it. A check that limits exposure or loss must never refuse a reducing
 	// order; three separate checks had already been found trapping an
 	// operator in a position, and enforcing the authority is exactly the kind

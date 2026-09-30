@@ -70,3 +70,8 @@ Thumbs.db
 # large, and never evidence on their own — the manifest beside each one says
 # what it is. Rule 14: large market datasets are not committed.
 services/quant/research-data/
+
+# Local tooling pointer. The project rules live in ENGINEERING_GUIDE.md,
+# which IS tracked; this file only points at it and is personal to a checkout.
+CLAUDE.md
+AGENTS.md

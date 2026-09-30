@@ -223,9 +223,23 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	}
 	version = strategyVersion.Version
 
-	skip := func(reason string) (Outcome, error) {
+	// skipAtBar records a refusal against a specific bar, so the per-bar unique
+	// index deduplicates it.
+	//
+	// The index is PARTIAL -- `WHERE bar_time IS NOT NULL` -- so a refusal
+	// recorded with a nil bar time is inserted afresh on every tick. The
+	// scheduler evaluates every 30 seconds and an hourly bar lasts 120 ticks,
+	// so a condition that persists across a bar writes 120 identical rows
+	// instead of one. Nothing prunes `strategy_runs`, and
+	// `PurgeStrategyRunsInRange` only deletes rows that HAVE a bar time, so a
+	// replay reset cannot clear them either.
+	//
+	// A refusal that knows which bar it refused should therefore say so. The
+	// pre-flight refusals below genuinely do not know -- they happen before the
+	// bars are loaded -- and keep the nil.
+	skipAtBar := func(reason string, barTime *time.Time) (Outcome, error) {
 		out := Outcome{Status: domain.RunSkipped, Action: domain.SignalNoTrade, SkipReason: reason}
-		runID, rerr := s.recordRun(ctx, req, version, domain.RunSkipped, reason, "", start, nil)
+		runID, rerr := s.recordRun(ctx, req, version, domain.RunSkipped, reason, "", start, barTime)
 		if rerr != nil {
 			return out, rerr
 		}
@@ -236,6 +250,10 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		log.Info("strategy run skipped",
 			"strategy", strategy.Key, "instrument", req.InstrumentID, "reason", reason)
 		return out, nil
+	}
+
+	skip := func(reason string) (Outcome, error) {
+		return skipAtBar(reason, nil)
 	}
 
 	// ---- Pre-flight refusals ----------------------------------------------
@@ -415,8 +433,11 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	// This is checked BEFORE the signal counter and before `valid` is set, so
 	// such an answer never becomes a fresh opinion in `opinionsFrom` and never
 	// reaches the policy. See historyRefusal for what it cost.
+	// Keyed on the bar, because this refusal knows which bar it refused and
+	// the condition persists for every tick of it. See skipAtBar.
 	if refused, reason := historyRefusal(signal, len(bars)); refused {
-		return skip(reason)
+		refusedAt := bars[len(bars)-1].OpenTime
+		return skipAtBar(reason, &refusedAt)
 	}
 
 	action := domain.SignalAction(signal.Action)

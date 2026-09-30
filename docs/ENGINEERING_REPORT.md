@@ -1044,7 +1044,7 @@ must never refuse an order that strictly reduces exposure.** "Strictly
 reducing" is opposite side AND quantity no greater than the open position --
 both halves, because "opposite side" alone let an account long 0.08 lots sell
 5.00 and skip the exposure family entirely. Seven tests, and the rule is also
-recorded in `CLAUDE.md` and `docs/ORDER_LIFECYCLE.md` because the failure is
+recorded in `ENGINEERING_GUIDE.md` and `docs/ORDER_LIFECYCLE.md` because the failure is
 invisible in normal operation: everything looks correct until the day someone
 needs out.
 
@@ -1944,7 +1944,7 @@ digest on run 1 and the EMPTY-account digest on runs 2 and 3, while
 `trend-clean` and `correlated-pair` produced nothing at all. On a freshly
 started process: three identical digests per class, and run 1 of `range-bound`
 produced the SAME digest as before -- so the code was deterministic throughout
-and the suite was measuring a broken process. In CLAUDE.md now.
+and the suite was measuring a broken process. In ENGINEERING_GUIDE.md now.
 
 **5. A Playwright test hard-coded the API port.** FIXED. `auth.spec.ts` fetched
 `http://localhost:8080` inside `page.evaluate`, so on a machine where the
@@ -2179,7 +2179,7 @@ asked what the local machine actually has.
 **It has none.** `research-data/` is empty, `Downloads`, `Desktop` and
 `Documents` contain no market file, and the only CSVs in the repository are the
 fourteen generated replay fixtures. Nothing was downloaded, scraped or fetched:
-CLAUDE.md rule 3 forbids it and the brief forbade it twice. The status is
+ENGINEERING_GUIDE.md rule 3 forbids it and the brief forbade it twice. The status is
 `WAITING_FOR_HISTORICAL_DATA`, and the specification of what would unblock the
 next run is printed by `python -m vantage_quant.research datasets`.
 
@@ -2372,7 +2372,7 @@ whose test existed and exercised a different branch.
 
 Fixed twice over: at the source, where only the transport CAUSE is kept, and at
 the boundary with a scrub that removes the raw and percent-encoded forms. Two
-locks, because the first already failed once. CLAUDE.md rule 13.
+locks, because the first already failed once. ENGINEERING_GUIDE.md rule 13.
 
 ### Five more defects in the same layer
 
@@ -2387,7 +2387,7 @@ locks, because the first already failed once. CLAUDE.md rule 13.
   the tick count, which would have shown a restart in the data as a volume
   collapse.
 - **`.Add(time.Nanosecond)` is a no-op against Postgres**, which stores
-  microseconds -- a fact CLAUDE.md already records. Two half-open ranges used it
+  microseconds -- a fact ENGINEERING_GUIDE.md already records. Two half-open ranges used it
   to mean "inclusive" and silently dropped their last row. In the coverage
   endpoint that meant the MOST RECENT gap was never reported: a feed that
   stopped for three days and resumed showed no gaps at all.
@@ -2566,7 +2566,7 @@ Twelve minutes, thirty-one failures, every one of them reading as a defect in
 this application's own auth, chart, terminal and trading code. Nothing in the
 output named the port, the other application, or the fact that the Vantage
 terminal had never been reached; the only place that information existed was
-the page snapshot in `test-results/*/error-context.md`. CLAUDE.md has warned
+the page snapshot in `test-results/*/error-context.md`. ENGINEERING_GUIDE.md has warned
 about exactly this since the milestone it first happened in, and the warning
 did not help, because by the time you go looking for a warning you have already
 spent the twelve minutes and have thirty-one plausible bug reports in hand.
@@ -2726,6 +2726,68 @@ The lesson is not about strategies. **A report that contradicts itself in two
 places is worse than one that admits it does not know**, and the only defence
 is the one section 0 now exists to be: a single place where each requirement
 has exactly one current answer, updated rather than appended to.
+
+## 30p. What an independent review of this milestone found
+
+The two commits above were reviewed before publication, and the review found
+six things. They are recorded because three of them are the same failure this
+milestone is about -- a check that exists, passes, and is looking at the wrong
+thing -- committed by the same hand that had just written the warning.
+
+**A regression introduced by the fix itself.** Recording a history refusal as a
+skip routed it through `skip()`, which records with a NIL bar time. Both
+per-bar unique indexes are partial -- `WHERE bar_time IS NOT NULL` -- so
+`ON CONFLICT DO NOTHING` never matched and every 30-second tick inserted a
+fresh row. An hourly bar is 120 ticks; five strategies across three instruments
+starved for twenty hours would write 36 000 rows where the previous code wrote
+300. Nothing prunes `strategy_runs`, and `PurgeStrategyRunsInRange` only
+deletes rows that HAVE a bar time, so a replay reset could not clear them
+either. Fixed with `skipAtBar`: a refusal that knows which bar it refused says
+so, and the per-bar index deduplicates it. The pre-flight refusals keep the nil
+because they genuinely happen before the bars are loaded.
+
+**A test for the API-key leak that could not fail.** It drove an HTTP 500,
+which returns a static error string with no URL in it. The only path that can
+carry the credential is the transport error from `client.Do`. This is the exact
+trap this report records in section 30m, and ENGINEERING_GUIDE.md names it in
+so many words -- repeated three weeks later with 500 in place of 401. The test
+now points the provider at a closed port. Verified by removing both scrubs: the
+segment then records `...?apikey=test-key-not-a-real-credential&...` and the
+test fails. With either scrub in place it passes, which is correct -- the
+guarantee is that the key is never persisted, not that a particular lock works,
+and the provider's lock has its own unit test.
+
+**Nothing connected the fix to the thing it fixed.** `historyRefusal` was
+tested in isolation and the consensus behaviour was tested with a hand-built
+`Outcome`. Delete the call site and `historyRefusal` becomes dead code with
+every test still green. A unit test cannot catch that, so
+`TestAStarvedStrategyIsSkippedBeforeItCanBecomeAnOpinion` asserts the call site
+itself: that `EvaluateAndRoute` consults it, BEFORE the routing context is
+built with `valid: true`, and that the result leaves through a skip. Verified
+by deleting the early return; the test fails with "EvaluateAndRoute never
+consults historyRefusal".
+
+**A test that passed when its subject did nothing.** `TestSyncFetchesOnlyWhatIsNewer`
+iterated over the requests `Sync` had made and asserted none re-downloaded old
+history. With zero requests the loop body never ran. A `Sync` that regressed to
+fetching nothing at all reported success -- the passing lie this report
+documents elsewhere, in a test written to guard against it. It now asserts a
+request was made and that bars were stored, before checking what was asked for.
+
+**Two smaller ones.** The fake provider kept `srv.Config` and discarded the
+`*httptest.Server`, so `Close()` was a no-op and sixteen tests leaked a
+listener each. And the cleanup deleted only `provider = 'twelvedata'` rows,
+while the forming-bar test writes one attributed to `mock` -- so if the
+`UpsertBars` guard ever regressed, the stray row would survive teardown and the
+NEXT run would fail in an unrelated test that counts rows over the same range.
+One real defect would have become a permanent, misattributed failure.
+
+The review confirmed the three production changes themselves: the `UpsertBars`
+truth table is exactly as intended and `complete` is `NOT NULL` so there is no
+three-valued hole; the early return skips nothing mandatory; `dataclasses.replace`
+preserves the mutable defaults and cannot bypass `__post_init__`; and the new
+field pair's names match on both sides of the process boundary, with the zero
+value meaning "not starved" for an older research service.
 
 ## 31. What is NOT verified
 

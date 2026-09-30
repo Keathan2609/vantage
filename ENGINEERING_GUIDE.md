@@ -1,4 +1,4 @@
-# CLAUDE.md — Vantage
+# ENGINEERING_GUIDE.md — Vantage
 
 ## What this is
 
