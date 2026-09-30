@@ -115,12 +115,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip pip-audit
           pip install -e .
-          # --skip-editable: `vantage-quant` is this repository, installed
-          # editable so its dependency tree resolves. It is not on PyPI, so
-          # auditing it fails with "Dependency not found on PyPI" -- which is
-          # correct and is not a vulnerability. Its DEPENDENCIES are still
-          # audited; only the local package itself is skipped.
-          pip-audit --strict --skip-editable --progress-spinner off
+          # `vantage-quant` is this repository. It is installed editable so its
+          # dependency tree resolves, and it is not on PyPI, so pip-audit
+          # cannot audit it -- correctly, and that is not a vulnerability.
+          #
+          # --skip-editable is NOT the answer: under --strict, pip-audit turns
+          # a skip into the error "distribution marked as editable" and fails
+          # anyway. And dropping --strict would silence an unauditable THIRD
+          # PARTY package too, which is the one thing this job exists to catch.
+          #
+          # So the local project is excluded by construction: freeze the
+          # resolved dependency set without editable installs, and audit that
+          # under --strict. Every real dependency is still audited, and one
+          # that cannot be still fails the build.
+          pip freeze --exclude-editable > /tmp/resolved-deps.txt
+          pip-audit --strict --progress-spinner off -r /tmp/resolved-deps.txt
 
   node-vulnerabilities:
     name: Node vulnerabilities (npm audit)
