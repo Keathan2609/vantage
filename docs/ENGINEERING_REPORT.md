@@ -2744,13 +2744,17 @@ Stated plainly, because a report that lists only successes is not useful.
   evidence; moving the threshold would manufacture trades rather than earn
   them.
 
-- **The replay fixtures are too short for the strategies they exercise.** Four
-  of the fourteen are shorter than the 120 bars a PAPER strategy requires plus
-  its 60-instant warm-up, so no strategy can produce a signal on them at any
-  point. They remain useful for the execution and recovery scenarios they were
-  built for, and are NOT evidence about strategy behaviour. Lengthening them is
-  a separate decision with its own constraint: each fixture needs its own date
-  range.
+- **Four replay fixtures are too short for the strategies they exercise, and
+  are now declared so.** `drawdown`, `false_breakout`, `spread_spike` and
+  `test_partial_fill` do not reach the 120 bars the hungriest PAPER strategy
+  requires, so no strategy can signal on them at any point. They remain the
+  right fixtures for the execution and recovery scenarios they were built for
+  and are NOT evidence about strategy behaviour.
+  `services/quant/tests/test_fixture_evidence.py` enforces the distinction: a
+  fixture is either long enough or named with its reason, and the declaration
+  is checked in both directions so an entry cannot outlive the fixture it
+  describes. Lengthening any of them stays a separate decision with its own
+  constraint -- each fixture needs its own date range.
 
 - **Accessibility is not tested at all.** No axe run, no keyboard-navigation
   test, no screen-reader pass. The terminal is a single-operator tool, which is
@@ -3079,7 +3083,7 @@ need real time.
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | this revision | **15 pass, 0 fail, 0 skip** against a running stack and a real venue simulator, on its own fresh seed: the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
 | Market-data acquisition integration | this revision | **16 pass, 0 fail** with `VANTAGE_MARKETDATA_E2E=1` against the development Postgres, driving the real `Syncer` and the real store against a fake Twelve Data server built to the published contract. These are the first tests this project has had for `Backfill`, `Sync`, `Repair` and `Snapshot`; two of them failed on first run and one of those was a real defect |
-| Python unit | this revision | **373 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files. The 25 new ones pin that a strategy starved of history says so machine-readably, at exactly its declared boundary, and that a fed strategy never does |
+| Python unit | this revision | **390 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files. Of the 42 new ones, 25 pin that a strategy starved of history says so machine-readably at exactly its declared boundary and that a fed strategy never does, and 17 pin that every replay fixture is either long enough to carry strategy evidence or declared as carrying none. The second suite was written with the warm-up and the history requirement ADDED rather than overlapping, declared all fourteen fixtures too short, and was corrected before it could send anyone to lengthen them |
 | Web static | this revision | `tsc --noEmit` clean; `eslint` clean. `npm run build` was NOT re-run after the `global-setup.ts` change, because a build replaces `.next` underneath the running server; the change is test-only. The build was clean earlier in this session, 20 routes, with `lightweight-charts@5.2.1` |
 | Playwright | this revision | **57 pass, 0 fail, 0 skip** on Chromium against the live stack, on a freshly reseeded database, with the terminal on :3005. The run before it reported 31 failed / 26 passed because port 3000 is now held by a different project and the suite silently tested THAT application; `global-setup.ts` now refuses to start against anything that is not this terminal. Section 30n |
 | Smoke: trading | this revision | **66 pass, 0 fail** against the live stack on its own fresh seed. It first failed at the first order with `csrf_origin_mismatch`, which is the CSRF control working: moving the terminal to :3005 moved `VANTAGE_PUBLIC_WEB_ORIGIN` with it, and the suite's `Origin` header follows through `VANTAGE_SMOKE_WEB_ORIGIN` |
