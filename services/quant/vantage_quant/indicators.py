@@ -115,8 +115,15 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     if n <= period:
         return pd.Series(out, index=series.index)
 
-    avg_gain = np.nanmean(values_gain[1 : period + 1])
-    avg_loss = np.nanmean(values_loss[1 : period + 1])
+    # float() rather than the numpy scalars these expressions produce.
+    #
+    # np.nanmean returns np.floating, and a newer numpy's stubs say so, which
+    # makes to_rsi's `float` parameters a type error. The conversion is exact --
+    # np.float64 IS an IEEE-754 double, and every operation below is the same
+    # arithmetic either way -- so no indicator value changes. That matters:
+    # altering an indicator would alter every strategy that reads it.
+    avg_gain = float(np.nanmean(values_gain[1 : period + 1]))
+    avg_loss = float(np.nanmean(values_loss[1 : period + 1]))
 
     def to_rsi(g: float, loss_avg: float) -> float:
         if loss_avg == 0.0:
@@ -126,8 +133,8 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
 
     out[period] = to_rsi(avg_gain, avg_loss)
     for i in range(period + 1, n):
-        g = values_gain[i] if not np.isnan(values_gain[i]) else 0.0
-        loss_i = values_loss[i] if not np.isnan(values_loss[i]) else 0.0
+        g = float(values_gain[i]) if not np.isnan(values_gain[i]) else 0.0
+        loss_i = float(values_loss[i]) if not np.isnan(values_loss[i]) else 0.0
         avg_gain = (avg_gain * (period - 1) + g) / period
         avg_loss = (avg_loss * (period - 1) + loss_i) / period
         out[i] = to_rsi(avg_gain, avg_loss)

@@ -180,7 +180,7 @@ jobs:
       - name: Apply migrations
         working-directory: services/control-api
         env:
-          VANTAGE_ENV: local
+          VANTAGE_ENV: test
           VANTAGE_EXECUTION_MODE: paper
           VANTAGE_ENABLED_BROKERS: mock
           VANTAGE_DATABASE_URL: postgres://vantage_app:vantage_app_dev_password@127.0.0.1:5432/vantage?sslmode=disable
@@ -204,7 +204,7 @@ jobs:
       - name: Re-apply migrations (must be a no-op)
         working-directory: services/control-api
         env:
-          VANTAGE_ENV: local
+          VANTAGE_ENV: test
           VANTAGE_EXECUTION_MODE: paper
           VANTAGE_ENABLED_BROKERS: mock
           VANTAGE_DATABASE_URL: postgres://vantage_app:vantage_app_dev_password@127.0.0.1:5432/vantage?sslmode=disable

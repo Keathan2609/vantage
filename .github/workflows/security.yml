@@ -115,7 +115,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip pip-audit
           pip install -e .
-          pip-audit --strict --progress-spinner off
+          # --skip-editable: `vantage-quant` is this repository, installed
+          # editable so its dependency tree resolves. It is not on PyPI, so
+          # auditing it fails with "Dependency not found on PyPI" -- which is
+          # correct and is not a vulnerability. Its DEPENDENCIES are still
+          # audited; only the local package itself is skipped.
+          pip-audit --strict --skip-editable --progress-spinner off
 
   node-vulnerabilities:
     name: Node vulnerabilities (npm audit)
@@ -153,15 +158,16 @@ jobs:
       # not resolve and this job has never run. There was no v1 commit to pin,
       # so keeping the version was not an option.
       #
-      # v2 is interface-compatible with what this step already passes: the
-      # nested osv-scanner-action/ path still exists and still takes a
-      # newline-separated `scan-args`.
+      # v2 keeps the nested osv-scanner-action/ path and the newline-separated
+      # `scan-args`, but it DROPPED --skip-git. The first real CI run exited
+      # 127 printing the usage text, which reads like the action being broken
+      # and is an unrecognised flag. Repository scanning is the default now, so
+      # the flag is simply removed rather than replaced.
       - name: OSV-Scanner
         uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
           scan-args: |-
             --recursive
-            --skip-git
             ./
 
   filesystem-scan:
@@ -171,7 +177,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trivy filesystem
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -214,7 +220,7 @@ jobs:
           tags: vantage/${{ matrix.name }}:scan
 
       - name: Trivy image
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: image
           image-ref: vantage/${{ matrix.name }}:scan

@@ -303,6 +303,22 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   `http://localhost:8080`, so set it to match or every suite fails at start-up
   looking like a dead control plane.
 
+- **The local venv's mypy is NOT the mypy CI runs, and it is weaker.**
+  `pyproject.toml` declares `mypy>=1.13,<2.0`; the venv on this machine holds
+  **2.3.1**, outside that range. CI honours the constraint, so the two tools
+  disagree -- and the first real CI run failed with four errors in
+  `indicators.py` that `python -m mypy vantage_quant` reports as clean here.
+  Neither the Python version (pinned to 3.12 in `[tool.mypy]`) nor numpy
+  (2.5.3 in both) explains it; the tool does.
+
+  `np.nanmean` returns `np.floating`, not `float`, and 1.x says so. The fix is
+  an explicit `float(...)` at the boundary, which is exact -- `np.float64` IS
+  an IEEE-754 double -- so no indicator value moves. Converting is right
+  anyway; silencing it with `Any` would hide the next one.
+
+  Until the venv matches, treat a green local mypy as advisory and the CI job
+  as the gate.
+
 - **Windows locks a running `.exe`** — rebuilds silently fail and you test the
   old binary. `Stop-Process -Name control-api -Force` first. Note that
   `go run` produces a process named `control-api`, not `vantage-api`.
