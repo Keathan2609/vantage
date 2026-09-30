@@ -2142,6 +2142,102 @@ returns an error rather than a synthesised price, because a provider that
 invents a quote to satisfy an interface is how a strategy ends up trading a
 number nobody published.
 
+## 30m. An audit of the market-data work, and why the platform does not trade
+
+The previous milestone shipped a market-data layer. This session audited it and
+then watched the platform run, which found things reading the code had not.
+
+### A leaked credential
+
+Twelve Data takes its API key as a query parameter. `http.Client.Do` returns a
+`*url.Error` carrying the whole request URL, and Go's own redaction strips
+userinfo passwords while leaving the query untouched. Wrapping that error
+verbatim put the key into provider health -- which the market-data status
+endpoint serves -- into the persisted `market_data_segments.failure_reason`,
+and into a log line. A probe against a closed port printed it three times.
+
+`TestTheProviderHealthNeverCarriesTheKey` passed throughout, because it drives
+a 401 whose error is a static string with no URL in it. It tested the path that
+had been thought about rather than the path that leaks. That is the general
+lesson from this audit: every one of the serious findings below was on a path
+whose test existed and exercised a different branch.
+
+Fixed twice over: at the source, where only the transport CAUSE is kept, and at
+the boundary with a scrub that removes the raw and percent-encoded forms. Two
+locks, because the first already failed once. CLAUDE.md rule 13.
+
+### Five more defects in the same layer
+
+- **`Aggregator.Seed` had no production caller.** It exists to carry a forming
+  bar across a restart. Without it the first quote after a restart reopened the
+  current interval from a single tick, the unconditional upsert replaced the
+  accumulated candle, and the boundary marked that truncated bar COMPLETE. A 4h
+  bar restarted three hours in reported the last hour's range as the whole
+  interval's, and every stop or ATR derived from it was wrong by the part
+  discarded. Restarts are routine here -- the documented reseed procedure
+  requires one. Now wired; on the first run it resumed 18 bars. It also reset
+  the tick count, which would have shown a restart in the data as a volume
+  collapse.
+- **`.Add(time.Nanosecond)` is a no-op against Postgres**, which stores
+  microseconds -- a fact CLAUDE.md already records. Two half-open ranges used it
+  to mean "inclusive" and silently dropped their last row. In the coverage
+  endpoint that meant the MOST RECENT gap was never reported: a feed that
+  stopped for three days and resumed showed no gaps at all.
+- **The completeness guard tested `OpenTime`**, which the forming bar satisfies,
+  so it never fired. The seeder wrote one unfinished candle per instrument per
+  timeframe on every fresh database, labelled complete.
+- **The sync watermark was not provider-scoped**, so the live quote
+  aggregator's synthetic bars set it. A real backfill would have reported
+  "already up to date" while the history behind that point was never acquired
+  -- failure that looks like success.
+- **The snapshot wrote its CSV before its manifest**, leaving a window in which
+  generated bars sat in the research directory with no record of what they
+  were, and the importer's default for an unaccompanied file is
+  HISTORICAL_MARKET. Rule 14 exactly. The CSV is now written under a temporary
+  name and renamed into place only after the manifest is down, and the Python
+  importer refuses a file in the export shape that has lost its manifest.
+
+### Watching it decide
+
+With the stack up and autopilot on, the first autonomous decision recorded:
+
+    macd_momentum  sell  confidence 0.618962
+    discarded: declares itself valid in TRENDING, and the regime is UNKNOWN
+    NO TRADE: no strategy offered an actionable opinion that survived the policy
+
+A signal well above the confidence floor, discarded by the regime gate. No
+PAPER-promoted strategy declares itself valid in UNKNOWN, so an UNKNOWN verdict
+is a guaranteed NO TRADE whatever the strategies saw.
+
+`classify_regime` had no branch for ADX between 20 and 25; it fell through to
+UNKNOWN. A census over the sixteen generated market conditions -- 3 648
+classified points -- put that fallthrough at **9.5% of all decision points**,
+matching the band almost exactly (9.6%).
+
+I first read the single live decision as a total trading blackout. The census
+says one bar in ten. The smaller number is the correct one and the earlier
+framing was an overstatement from a sample of one.
+
+The band was also inconsistent with the branch above it: a market going nowhere
+was RANGING at ADX 30 and unclassifiable at ADX 22, the less directional
+reading getting the more conservative treatment. Measured efficiency says which
+population it belongs to -- median 0.203, against 0.154 for RANGING and 0.511
+for TRENDING. The same rule now applies in the band. UNKNOWN fell to 2.7%,
+RANGING rose to 51.8%, and **TRENDING was unchanged at 42.9%**: the trend
+definition was not loosened.
+
+### So why does it not trade?
+
+Not the regime gate, and not the consensus policy. A `trend-clean` replay
+through the real pipeline produced 26 decisions, every one with the regime
+correctly resolved to **TRENDING** -- and 130 strategy signals of which
+**every single one was `no_trade`, mean confidence 0.000**. On the project's own
+clean-trend fixture, not one of the five PAPER-promoted strategies fired.
+
+That is consistent with what the research milestones already found and is the
+open question this platform still has: the strategies, not the plumbing around
+them. The plumbing now works and can be shown to work.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -2476,10 +2572,10 @@ need real time.
 
 | Suite | Run | Result |
 | --- | --- | --- |
-| Go unit | this milestone | **718 pass, 0 fail, 36 skip** across 26 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack |
+| Go unit | this milestone | **723 pass, 0 fail, 36 skip** across 26 packages; `gofmt` and `go vet` clean. The 36 skips are the suites that require a running stack |
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | **carried — not re-run** | **15 pass, 0 fail** against a running stack and a real venue simulator, including the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
-| Python unit | this milestone | **339 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files |
+| Python unit | this milestone | **348 pass, 0 fail**; `ruff` clean; `mypy` clean on 26 source files |
 | Web static | this milestone | `tsc --noEmit` clean; `eslint` clean; `npm run build` clean, 20 routes. `lightweight-charts@5.2.1` added |
 | Playwright | this milestone | **57 pass, 0 fail, 0 skip** on Chromium against the live stack, of which 6 are the new chart tests. Run on a freshly reseeded database |
 | Smoke: trading | this milestone | **66 pass, 0 fail** against the live stack |

@@ -295,7 +295,18 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
 - **PowerShell's `Out-File` writes a BOM** and corrupts `go.mod`. Use the file
   tools, and heredocs rather than `Out-File`.
 - **Nanosecond timestamps break the audit chain.** Postgres stores
-  microseconds.
+  microseconds. The same fact bites a second way: adding `time.Nanosecond` to
+  make a half-open range inclusive is a NO-OP, because it truncates straight
+  back to the same microsecond. Two range queries silently dropped their last
+  row that way, and in the coverage endpoint it meant the most recent gap was
+  never reported at all. Add one BAR, not one nanosecond.
+- **An error from `http.Client.Do` carries the full request URL.** Go's
+  redaction strips userinfo passwords and leaves the query string alone, so any
+  provider taking its credential as a query parameter leaks it into every log
+  line, stored error and health field that wraps such an error. `internal/
+  marketdata` keeps only the transport cause and scrubs it; a test that drives
+  a 401 will NOT catch a regression here, because that path returns a static
+  string. Test the transport path.
 - **`jsonb` re-serialises**; audit metadata is `json` so the hash still matches.
 - **The app role cannot `CREATE TABLE`.** That is correct — treat `42P01` as
   "nothing applied yet".
