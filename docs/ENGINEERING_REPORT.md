@@ -2711,6 +2711,22 @@ That is a research question with a defined shape, and moving the threshold to
 make trades appear would answer it dishonestly. What has changed is that it can
 now be measured: the 266 fabricated abstentions that used to bury it are gone.
 
+### A postscript on how the wrong conclusion survived
+
+Appendix A, row 53h, already said it: "under the default policy nothing clears
+the 0.55 confidence floor, so the platform places no autonomous orders at all".
+That was written two milestones earlier and it was right.
+
+A later milestone then observed 130 signals at confidence 0.000, concluded the
+strategies were the problem, and wrote that into the body of this report --
+where it sat alongside the correct explanation without either noticing the
+other. The newer, louder, wronger statement is the one that got repeated.
+
+The lesson is not about strategies. **A report that contradicts itself in two
+places is worse than one that admits it does not know**, and the only defence
+is the one section 0 now exists to be: a single place where each requirement
+has exactly one current answer, updated rather than appended to.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
