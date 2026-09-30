@@ -1169,3 +1169,35 @@ def test_a_malformed_manifest_is_ignored_rather_than_half_applied(
     )
     assert loaded.provenance.source_type is datasets.SourceType.HISTORICAL_MARKET
     assert loaded.provenance.provider == "declared-by-caller"
+
+
+def test_a_broken_export_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
+    """A CSV in Vantage's export shape with no manifest has LOST its provenance.
+
+    The operator default (HISTORICAL_MARKET) is right for a file somebody
+    placed here deliberately and wrong for an export whose manifest went
+    missing: those bars may be generated, and calling them real market
+    evidence is precisely CLAUDE.md rule 14.
+    """
+    directory = historical.data_directory(tmp_path)
+    _write_csv(directory, "XAUUSD-m_1h_dcb581a9036d1ebf.csv", _clean_rows(60), HEADER)
+
+    with pytest.raises(historical.MalformedDatasetError, match="no readable"):
+        historical.load(
+            "XAUUSD-m_1h_dcb581a9036d1ebf.csv",
+            instrument="XAUUSD.m", timeframe="1h", root=tmp_path,
+        )
+
+
+def test_a_hand_placed_file_is_still_accepted_without_a_manifest(
+    tmp_path: Path,
+) -> None:
+    """The operator workflow is unchanged: only EXPORT-shaped names are gated."""
+    directory = historical.data_directory(tmp_path)
+    _write_csv(directory, "gold_from_my_broker.csv", _clean_rows(60), HEADER)
+
+    loaded = historical.load(
+        "gold_from_my_broker.csv", instrument="XAUUSD", timeframe="1h",
+        root=tmp_path, provider="stated-by-operator",
+    )
+    assert loaded.provenance.source_type is datasets.SourceType.HISTORICAL_MARKET

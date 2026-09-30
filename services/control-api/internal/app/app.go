@@ -225,6 +225,33 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 	// strategy declares starves that strategy permanently.
 	aggregator := marketdata.NewAggregator(a.Provider.Name(),
 		domain.Timeframe("15m"), domain.Timeframe("1h"), domain.Timeframe("4h"))
+
+	// Resume whatever interval was forming when this process last stopped.
+	//
+	// The aggregator's state is in memory, so a restart otherwise begins the
+	// current interval again from a single tick: open, high and low all become
+	// that one mid, the unconditional upsert replaces the accumulated candle
+	// with it, and the interval boundary then marks that truncated bar
+	// COMPLETE. A strategy reads it as a finished 4h candle whose range is the
+	// last few minutes. Restarts are routine here -- the documented reseed
+	// procedure requires one -- so this is a normal path, not an edge case.
+	//
+	// Best-effort: a database that cannot answer must not stop the platform
+	// starting, and the cost of not seeding is one damaged bar rather than an
+	// outage.
+	if forming, ferr := a.Store.Market.FormingBars(ctx); ferr != nil {
+		log.Warn("could not resume forming bars after restart",
+			"error", ferr.Error(),
+			"detail", "the current interval will restart from its next tick")
+	} else {
+		for _, bar := range forming {
+			aggregator.Seed(bar.InstrumentID, bar.Timeframe, bar)
+		}
+		if len(forming) > 0 {
+			log.Info("resumed forming bars after restart", "count", len(forming))
+		}
+	}
+
 	a.Ingestor.SetAggregator(aggregator)
 
 	// The mock venue keeps its own books, which is what makes reconciliation a

@@ -475,7 +475,12 @@ func (m *MockProvider) HistoricalBars(ctx context.Context, inst domain.Instrumen
 	// Walk backwards from the present level so the series ends near the live
 	// price rather than somewhere unrelated to it.
 	var bars []domain.Bar
-	for t := from.UTC().Truncate(dur); t.Before(to); t = t.Add(dur) {
+	// The bucket CONTAINING `to` is excluded: its interval has not ended, so a
+	// bar for it would be a forecast rather than history. Testing the open
+	// time admitted it, and every bar here is labelled Complete, so the
+	// seeder wrote one unfinished candle per instrument per timeframe on every
+	// fresh database.
+	for t := from.UTC().Truncate(dur); !t.Add(dur).After(to); t = t.Add(dur) {
 		if m.market != nil && !m.market.Status(t).Tradable() {
 			continue
 		}
@@ -610,11 +615,19 @@ func (i *Ingestor) BackfillBars(ctx context.Context, lookback time.Duration,
 			if len(bars) == 0 {
 				continue
 			}
-			// Only completed bars. A forming bar written as history would be
-			// read by a strategy as fact and then change underneath it.
+			// Only bars whose interval has actually ENDED.
+			//
+			// The test was on OpenTime, which is satisfied by the bar
+			// containing `now` -- the one still forming. So the guard never
+			// fired, and a 4h bar was written as history up to four hours
+			// before its interval closed. A strategy reads it as a finished
+			// candle whose close is a price that has not happened yet.
+			//
+			// CloseTime is the honest test: a bar is history once the clock
+			// has passed its end.
 			complete := make([]domain.Bar, 0, len(bars))
 			for _, b := range bars {
-				if b.Complete && !b.OpenTime.After(now) {
+				if b.Complete && !b.CloseTime.After(now) {
 					complete = append(complete, b)
 				}
 			}

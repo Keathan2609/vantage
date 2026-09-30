@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -538,5 +539,69 @@ func TestASymbolMapWithAnAmbiguousReverseIsRefused(t *testing.T) {
 		"XAUUSD.m": "XAU/USD",
 	}); err == nil {
 		t.Fatal("an ambiguous reverse mapping was accepted")
+	}
+}
+
+// --- credential hygiene on the paths nobody thought about --------------------
+
+// TestATransportFailureDoesNotCarryTheKey is the test that was missing.
+//
+// TestTheProviderHealthNeverCarriesTheKey above drives a 401, which returns a
+// static string with no URL in it, so it passed while the key was leaking. The
+// leak was on the TRANSPORT path: client.Do returns a *url.Error carrying the
+// full request URL, this API takes its credential as a query parameter, and
+// Go's own redaction strips userinfo passwords only. A probe against a dead
+// port printed the key in the returned error, in provider health, and (through
+// the Syncer) in a log line and a stored database column.
+func TestATransportFailureDoesNotCarryTheKey(t *testing.T) {
+	const secret = "SUPERSECRETKEY123"
+	p := newTestProvider(t, nil, secret)
+	// Port 1: nothing listens, so client.Do fails at the transport layer.
+	p.baseURL = "http://127.0.0.1:1"
+
+	_, err := p.HistoricalBars(context.Background(), testInstrument(),
+		domain.Timeframe("1h"),
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("a request to a dead port produced no error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the API key is in the returned error:\n%v", err)
+	}
+	if reason := p.Health().LastFailureReason; strings.Contains(reason, secret) {
+		t.Errorf("the API key is in provider health, which the status endpoint serves:\n%s", reason)
+	}
+	// The cause must still be useful: a redaction that removed everything
+	// would trade one problem for another.
+	if !strings.Contains(strings.ToLower(err.Error()), "refused") &&
+		!strings.Contains(strings.ToLower(err.Error()), "connect") {
+		t.Errorf("the error no longer says what went wrong: %v", err)
+	}
+}
+
+func TestScrubRemovesBothRawAndEncodedKeyForms(t *testing.T) {
+	// url.Values.Encode percent-escapes the value, so a key containing a
+	// reserved character appears in a URL in a shape a plain replace misses.
+	const secret = "abc/def+ghi=jkl"
+	p := newTestProvider(t, nil, secret)
+
+	raw := "something " + secret + " happened"
+	if got := p.scrub(raw); strings.Contains(got, secret) {
+		t.Errorf("the raw key survived scrubbing: %s", got)
+	}
+	encoded := "url?apikey=" + url.QueryEscape(secret) + "&x=1"
+	if got := p.scrub(encoded); strings.Contains(got, url.QueryEscape(secret)) {
+		t.Errorf("the percent-encoded key survived scrubbing: %s", got)
+	}
+}
+
+func TestScrubIsHarmlessWhenNoKeyIsConfigured(t *testing.T) {
+	// An empty key must not turn every empty substring into a redaction
+	// marker, which is what a naive ReplaceAll("") would do.
+	p := newTestProvider(t, nil, "")
+	const msg = "connection refused"
+	if got := p.scrub(msg); got != msg {
+		t.Fatalf("scrub altered text with no key configured: %q", got)
 	}
 }

@@ -31,7 +31,13 @@ services:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
       # Host-loopback only.
-      - "127.0.0.1:5432:5432"
+      #
+      # The HOST port is configurable because a machine with a native
+      # PostgreSQL service already holds 5432, and Docker then refuses to bind
+      # with a WinError 10013 that names neither the port nor the conflict --
+      # it reads like a permissions problem and is not. The CONTAINER port
+      # never moves, so nothing inside the compose network is affected.
+      - "127.0.0.1:${VANTAGE_POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
@@ -80,7 +86,10 @@ services:
       - --maxmemory-policy
       - allkeys-lru
     ports:
-      - "127.0.0.1:6379:6379"
+      # Same reasoning as postgres above: a native Redis on the host would
+      # otherwise make the stack unstartable for a reason the error does not
+      # name.
+      - "127.0.0.1:${VANTAGE_REDIS_HOST_PORT:-6379}:6379"
     networks:
       - data
     healthcheck:

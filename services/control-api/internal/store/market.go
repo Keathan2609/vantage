@@ -587,3 +587,28 @@ func (s *MarketStore) BarsBefore(
 	}
 	return bars, nil
 }
+
+// FormingBars returns the most recent INCOMPLETE bar per instrument and
+// timeframe.
+//
+// Read once at start-up so the quote aggregator can resume the interval it was
+// part-way through. Without it the first quote after a restart opens a fresh
+// bar whose open, high and low are all that one tick, `UpsertBars` overwrites
+// the accumulated candle with it, and the interval boundary then marks that
+// truncated bar COMPLETE. A 4h bar restarted three hours in reports the last
+// hour's range as the whole interval's, and every stop or ATR derived from it
+// is wrong by the part that was discarded.
+func (s *MarketStore) FormingBars(ctx context.Context) ([]domain.Bar, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (instrument_id, timeframe)
+		       instrument_id, timeframe, open_time, close_time, open, high, low, close,
+		       volume, complete, provider
+		FROM market_bars
+		WHERE complete = FALSE
+		ORDER BY instrument_id, timeframe, open_time DESC`)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+	return scanBars(rows)
+}

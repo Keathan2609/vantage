@@ -43,6 +43,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 from collections.abc import Hashable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -258,6 +259,13 @@ def load(
     # Vantage exported from its own generated bars. A directory is not
     # evidence of a source type; a recorded provenance is.
     manifest = _read_manifest(path)
+    if manifest is None and looks_like_a_vantage_export(path.stem):
+        raise MalformedDatasetError(
+            f"{name!r} is named like a Vantage export but has no readable "
+            f"manifest beside it. Its source type is therefore unknown, and "
+            f"guessing HISTORICAL_MARKET would risk reading generated bars as "
+            f"real market evidence. Re-export it."
+        )
 
     original_hash = hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -554,3 +562,23 @@ def _source_type_of(manifest: dict[str, Any] | None) -> SourceType:
             f"manifest declares source_type {declared!r}, which is not a "
             f"recognised source type; refusing to guess what these bars are"
         ) from exc
+
+
+#: Vantage's own exports are named `<instrument>_<timeframe>_<16 hex>.csv`.
+#: A file in that shape without a manifest is a BROKEN EXPORT, not an
+#: operator-supplied dataset, and must not inherit the operator default.
+_EXPORT_NAME = re.compile(r"^.+_[0-9a-z]+_[0-9a-f]{16}$", re.IGNORECASE)
+
+
+def looks_like_a_vantage_export(stem: str) -> bool:
+    """Whether a filename matches the shape Vantage's exporter produces.
+
+    Used to tell a broken export from a hand-placed file. The two get opposite
+    treatment when no manifest is present: a hand-placed file is what the
+    directory is for and the caller declares its provenance, while an export
+    missing its manifest has LOST the only record of what its bars are. The
+    exporter writes the manifest first and renames the CSV into place last, so
+    this state should be unreachable -- and if it is reached anyway, defaulting
+    to HISTORICAL_MARKET would turn generated bars into real evidence.
+    """
+    return bool(_EXPORT_NAME.match(stem))

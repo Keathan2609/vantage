@@ -228,14 +228,24 @@ func (s *MarketStore) Coverage(
 //
 // Incremental sync is built on this: fetch from here forward rather than
 // re-downloading a decade every time.
+//
+// SCOPED TO THE PROVIDER, and that scope is the point. The live quote
+// aggregator writes bars for the same instrument and timeframe, so an
+// unscoped high-water mark is set by synthetic bars: `Sync` then reports
+// "already up to date with the newest completed bar" while the real history
+// behind that point was never acquired, and the failure looks like success.
+//
+// An empty provider means "any", for callers asking what the platform holds
+// overall rather than what one source has supplied.
 func (s *MarketStore) LatestBarTime(
-	ctx context.Context, instrumentID string, tf domain.Timeframe,
+	ctx context.Context, instrumentID string, tf domain.Timeframe, provider string,
 ) (time.Time, bool, error) {
 	var t *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT max(open_time) FROM market_bars
-		WHERE instrument_id = $1 AND timeframe = $2 AND complete = TRUE`,
-		instrumentID, string(tf)).Scan(&t)
+		WHERE instrument_id = $1 AND timeframe = $2 AND complete = TRUE
+		  AND ($3 = '' OR provider = $3)`,
+		instrumentID, string(tf), provider).Scan(&t)
 	if err != nil {
 		return time.Time{}, false, mapError(err)
 	}

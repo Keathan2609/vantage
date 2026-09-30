@@ -457,9 +457,18 @@ func (p *TwelveDataProvider) doRequest(
 	resp, err := p.client.Do(req)
 	if err != nil {
 		metrics.MarketDataProviderFailures.WithLabelValues(p.Name(), "network").Inc()
-		// A network error is worth one more try; a DNS failure is not
+		// The error from client.Do is a *url.Error carrying the FULL request
+		// URL, and this API takes its credential as a QUERY PARAMETER. Go's
+		// own redaction strips userinfo passwords and leaves the query
+		// untouched, so wrapping this verbatim put the key into the health
+		// endpoint, the stored segment record and the log line. It did: a
+		// probe against a dead port printed the key three times.
+		//
+		// Only the transport CAUSE is kept, and it is scrubbed as well. A
+		// network error is worth one more try; a DNS failure is not
 		// distinguishable here, so the retry ceiling is what bounds it.
-		return nil, true, fmt.Errorf("marketdata: twelve data request failed: %w", err)
+		return nil, true, fmt.Errorf("marketdata: twelve data request failed: %s",
+			p.scrub(transportCause(err)))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -566,7 +575,10 @@ func (p *TwelveDataProvider) recordFailure(err error) {
 	defer p.mu.Unlock()
 	p.health.LastFailureAt = &now
 	// The error text is ours, not the provider's raw body, and never the key.
-	p.health.LastFailureReason = sanitiseProviderMessage(err.Error())
+	// Scrubbed as well as sanitised. sanitiseProviderMessage bounds the length
+	// and strips newlines; it does not know what a credential looks like, and
+	// this field is served by the market-data status endpoint.
+	p.health.LastFailureReason = p.scrub(sanitiseProviderMessage(err.Error()))
 	if p.health.State != ProviderRateLimited {
 		p.health.State = ProviderDegraded
 	}
@@ -639,3 +651,52 @@ func (r *rateLimiter) wait(ctx context.Context, clock domain.Clock) error {
 }
 
 var _ Provider = (*TwelveDataProvider)(nil)
+
+// ---------------------------------------------------------------------------
+// Credential hygiene
+// ---------------------------------------------------------------------------
+
+// scrub removes the API key from any text on its way out of this package.
+//
+// The SECOND lock. The first is not putting the key into an error at all --
+// see the client.Do path in doRequest -- and this exists because that lock
+// already failed once. Twelve Data takes its credential as a query parameter,
+// so every error, log line and status field that can carry a URL can carry the
+// key, and there are more of those than anyone enumerates correctly the first
+// time: a redirect error, a TLS error, a proxy error, a future code path
+// nobody has written yet.
+//
+// Applied at the boundary rather than at each call site, for the same reason.
+func (p *TwelveDataProvider) scrub(s string) string {
+	if p.apiKey == "" {
+		return s
+	}
+	// Both the raw key and its percent-encoded form: url.Values.Encode escapes
+	// the value, so a key containing a reserved character appears in the URL in
+	// a shape that a plain replace of the raw key would miss entirely.
+	s = strings.ReplaceAll(s, p.apiKey, redactedKey)
+	if encoded := url.QueryEscape(p.apiKey); encoded != p.apiKey {
+		s = strings.ReplaceAll(s, encoded, redactedKey)
+	}
+	return s
+}
+
+// redactedKey is what replaces a credential in outgoing text. Deliberately
+// obvious: a reader seeing it should know a value was removed rather than
+// wonder whether the field was empty.
+const redactedKey = "«api key redacted»"
+
+// transportCause unwraps a *url.Error down to the error that actually
+// happened, discarding the URL the wrapper carries.
+//
+// url.Error.Error() renders as `Get "<full url>": <cause>`, and the URL is the
+// part that holds the credential. The cause alone -- "connection refused",
+// "context deadline exceeded", "no such host" -- is what an operator needs and
+// carries nothing secret.
+func transportCause(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
+}

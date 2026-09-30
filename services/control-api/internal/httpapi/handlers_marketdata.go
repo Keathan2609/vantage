@@ -110,8 +110,20 @@ func (s *Server) handleMarketDataCoverage(w http.ResponseWriter, r *http.Request
 	gaps := []map[string]any{}
 	closedMarketGaps := 0
 	if coverage.EarliestBar != nil && coverage.LatestBar != nil {
+		// Plus ONE BAR, not one nanosecond. FindGaps is half-open and Postgres
+		// stores microseconds, so a nanosecond truncates back to the same
+		// instant and the newest bar was excluded from the scan -- which meant
+		// the MOST RECENT gap, the one immediately before the latest bar, was
+		// never reported. A feed that stopped for three days and resumed showed
+		// no gaps at all.
+		barDur, derr := tf.Duration()
+		if derr != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_timeframe",
+				"timeframe must be one of 1m, 5m, 15m, 1h, 4h, 1d.")
+			return
+		}
 		found, gerr := s.store.Market.FindGaps(
-			r.Context(), instrumentID, tf, *coverage.EarliestBar, coverage.LatestBar.Add(time.Nanosecond))
+			r.Context(), instrumentID, tf, *coverage.EarliestBar, coverage.LatestBar.Add(barDur))
 		if gerr != nil {
 			writeStoreError(w, r, gerr, "Gap detection failed.")
 			return

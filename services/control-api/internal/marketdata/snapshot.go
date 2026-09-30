@@ -88,6 +88,17 @@ var ErrMixedSourceTypes = errors.New(
 // discard real observations. Neither label is true, and a dataset whose source
 // type is a compromise is worse than no dataset -- every conclusion drawn from
 // it would inherit the compromise silently.
+// sourceTypeFor classifies ONE provider by name.
+//
+// The single-provider case of classifySource, for the acquisition path where
+// only one provider is ever involved.
+func sourceTypeFor(p Provider) string {
+	if _, ok := SyntheticProviders[p.Name()]; ok {
+		return "SYNTHETIC_CONTROLLED"
+	}
+	return "HISTORICAL_MARKET"
+}
+
 func classifySource(providers []string) (string, error) {
 	if len(providers) == 0 {
 		return "", errors.New("marketdata: bars carry no provider attribution")
@@ -194,7 +205,11 @@ func (s *Syncer) Snapshot(
 
 	result := SnapshotResult{Dataset: saved, Warnings: warnings}
 	if req.ResearchDir != "" {
-		path, werr := writeSnapshotFile(req.ResearchDir, saved, bars)
+		// The clock is injected rather than read from the wall: during a
+		// replay every other timestamp in the record is dataset time, and a
+		// real-time export stamp beside them is a contradiction nobody
+		// re-checks.
+		path, werr := writeSnapshotFile(req.ResearchDir, saved, bars, s.clock.Now())
 		if werr != nil {
 			return result, werr
 		}
@@ -300,7 +315,7 @@ func assessSeries(
 // directory is the allowlisted one the importer already refuses to read
 // outside of. Nothing here takes a path from a request.
 func writeSnapshotFile(
-	dir string, dataset store.ResearchDataset, bars []domain.Bar,
+	dir string, dataset store.ResearchDataset, bars []domain.Bar, exportedAt time.Time,
 ) (string, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("marketdata: create research directory: %w", err)
@@ -313,11 +328,32 @@ func writeSnapshotFile(
 		dataset.DatasetHash[:16])
 	path := filepath.Join(dir, name)
 
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
+	// The CSV is written to a TEMPORARY name and only renamed into place after
+	// its manifest is safely on disk.
+	//
+	// The research plane globs for *.csv and reads the manifest beside it to
+	// learn what the bars ARE. Writing the CSV first left a window -- a failed
+	// manifest write, a crash, a full disk -- in which a CSV of generated bars
+	// sat in the research directory with no manifest, and the importer's
+	// documented default for an unaccompanied file is HISTORICAL_MARKET. That
+	// is CLAUDE.md rule 14 exactly: generated bars entering research as real
+	// evidence, with nothing downstream re-checking.
+	//
+	// Ordering the writes this way means a visible CSV always has its manifest.
+	temp := path + ".partial"
+	file, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
 	if err != nil {
 		return "", fmt.Errorf("marketdata: write snapshot: %w", err)
 	}
-	defer func() { _ = file.Close() }()
+	// Closed explicitly rather than only deferred: Windows refuses to rename a
+	// file that is still open, so the deferred close would turn every export
+	// into a publish failure.
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
 
 	w := csv.NewWriter(file)
 	if err := w.Write([]string{"timestamp", "open", "high", "low", "close", "volume"}); err != nil {
@@ -339,6 +375,10 @@ func writeSnapshotFile(
 	if err := w.Error(); err != nil {
 		return "", fmt.Errorf("marketdata: flush snapshot: %w", err)
 	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("marketdata: close snapshot: %w", err)
+	}
+	closed = true
 
 	// A MANIFEST beside the bars, carrying what the bars cannot say about
 	// themselves.
@@ -386,7 +426,7 @@ func writeSnapshotFile(
 		// assumption. Saying so is the difference between an estimate and a
 		// backtest reporting costs it never paid.
 		CostBasis:  "ESTIMATED_COSTS",
-		ExportedAt: time.Now().UTC(),
+		ExportedAt: exportedAt.UTC(),
 	}
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -394,7 +434,18 @@ func writeSnapshotFile(
 	}
 	manifestPath := strings.TrimSuffix(path, ".csv") + ".manifest.json"
 	if err := os.WriteFile(manifestPath, encoded, 0o640); err != nil {
+		// The CSV is still under its temporary name, so nothing in the
+		// research directory is readable as a dataset. Removed so a retry does
+		// not accumulate partials.
+		_ = os.Remove(temp)
 		return "", fmt.Errorf("marketdata: write manifest: %w", err)
+	}
+
+	// Manifest is down. NOW the CSV becomes visible.
+	if err := os.Rename(temp, path); err != nil {
+		_ = os.Remove(temp)
+		_ = os.Remove(manifestPath)
+		return "", fmt.Errorf("marketdata: publish snapshot: %w", err)
 	}
 	return path, nil
 }

@@ -434,3 +434,92 @@ func TestTheProviderNameIsStampedOnEveryBar(t *testing.T) {
 		t.Errorf("provider = %q, want replay", bars[0].Provider)
 	}
 }
+
+// --- surviving a restart -----------------------------------------------------
+
+// TestARestartMidIntervalDoesNotTruncateTheBar is the behaviour Seed exists
+// for, and which nothing called until it was wired.
+//
+// The aggregator's state is in memory. A restart part-way through an interval
+// used to begin that interval again from one tick -- open, high and low all
+// that single mid -- and because UpsertBars overwrites unconditionally, the
+// accumulated candle in the database was replaced by it. The interval boundary
+// then marked the truncated bar COMPLETE and a strategy read it as fact.
+func TestARestartMidIntervalDoesNotTruncateTheBar(t *testing.T) {
+	start := time.Date(2026, 3, 3, 14, 0, 0, 0, time.UTC)
+
+	// A process accumulates most of an hour.
+	before := NewAggregator("test", tf1h)
+	for i, mid := range []string{"2000", "2050", "1980", "2010"} {
+		if _, err := before.Observe(quoteAt(start.Add(time.Duration(i)*time.Minute), mid), tf1h); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+	}
+	partial, err := before.Observe(quoteAt(start.Add(5*time.Minute), "2020"), tf1h)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	stored := partial[len(partial)-1]
+	if stored.High.String() != "2050" || stored.Low.String() != "1980" {
+		t.Fatalf("precondition: accumulated bar is H=%s L=%s, want 2050/1980",
+			stored.High, stored.Low)
+	}
+
+	// The process restarts and resumes from what was stored.
+	after := NewAggregator("test", tf1h)
+	after.Seed(stored.InstrumentID, tf1h, stored)
+
+	resumed, err := after.Observe(quoteAt(start.Add(30*time.Minute), "2015"), tf1h)
+	if err != nil {
+		t.Fatalf("observe after restart: %v", err)
+	}
+	got := resumed[len(resumed)-1]
+
+	if got.Open.String() != "2000" {
+		t.Errorf("open = %s after restart, want the interval's original open 2000", got.Open)
+	}
+	if got.High.String() != "2050" {
+		t.Errorf("high = %s after restart, want 2050; the interval's high was discarded", got.High)
+	}
+	if got.Low.String() != "1980" {
+		t.Errorf("low = %s after restart, want 1980; the interval's low was discarded", got.Low)
+	}
+	if !got.OpenTime.Equal(stored.OpenTime) {
+		t.Errorf("open time moved across the restart: %s vs %s", got.OpenTime, stored.OpenTime)
+	}
+}
+
+func TestSeedContinuesTheVolumeRatherThanResettingIt(t *testing.T) {
+	// Volume is written as the tick count, so seeding at 1 would make the next
+	// tick report volume 2 after an interval that had accumulated hundreds --
+	// a restart visible in the data as a liquidity collapse.
+	start := time.Date(2026, 3, 3, 14, 0, 0, 0, time.UTC)
+
+	before := NewAggregator("test", tf1h)
+	var last domain.Bar
+	for i, mid := range []string{"2000", "2001", "2002", "2003", "2004", "2005"} {
+		out, err := before.Observe(quoteAt(start.Add(time.Duration(i)*time.Minute), mid), tf1h)
+		if err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+		if len(out) > 0 {
+			last = out[len(out)-1]
+		}
+	}
+	if last.Volume.IntPart() < 5 {
+		t.Fatalf("precondition: volume is %s, expected the tick count", last.Volume)
+	}
+
+	after := NewAggregator("test", tf1h)
+	after.Seed(last.InstrumentID, tf1h, last)
+	resumed, err := after.Observe(quoteAt(start.Add(10*time.Minute), "2006"), tf1h)
+	if err != nil {
+		t.Fatalf("observe after restart: %v", err)
+	}
+	got := resumed[len(resumed)-1]
+
+	if got.Volume.IntPart() <= last.Volume.IntPart() {
+		t.Errorf("volume went from %s to %s across a restart; it must continue, not reset",
+			last.Volume, got.Volume)
+	}
+}

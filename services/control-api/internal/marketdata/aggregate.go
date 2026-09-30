@@ -204,18 +204,28 @@ func (a *Aggregator) Seed(instrumentID string, tf domain.Timeframe, bar domain.B
 		// interval.
 		return
 	}
-	dur, err := tf.Duration()
-	if err != nil {
+	if _, err := tf.Duration(); err != nil {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// Ticks continue from the stored VOLUME, not from 1.
+	//
+	// Volume is written as the tick count on every update, so seeding with 1
+	// would make the next tick report a bar of volume 2 after an interval that
+	// had accumulated hundreds -- the restart would be visible in the data as
+	// a volume collapse, which is the kind of artefact a strategy reads as a
+	// liquidity event.
+	ticks := 1
+	if v := bar.Volume.IntPart(); v > 1 {
+		ticks = int(v)
+	}
 	a.current[instrumentID+"|"+string(tf)] = &formingBar{
 		bar:     bar,
 		lastMid: bar.Close,
-		ticks:   1,
+		ticks:   ticks,
 	}
-	_ = dur
 }
 
 // AggregateInto folds a quote into every configured timeframe and persists the

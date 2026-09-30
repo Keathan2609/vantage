@@ -120,15 +120,17 @@ func (s *Syncer) Backfill(
 func (s *Syncer) Sync(
 	ctx context.Context, instrumentID string, tf domain.Timeframe,
 ) (Result, error) {
-	latest, ok, err := s.store.Market.LatestBarTime(ctx, instrumentID, tf)
+	latest, ok, err := s.store.Market.LatestBarTime(ctx, instrumentID, tf, s.provider.Name())
 	if err != nil {
 		return Result{}, err
 	}
 	if !ok {
 		return Result{}, fmt.Errorf(
-			"marketdata: nothing stored for %s %s yet; run a backfill first so the "+
-				"starting point is chosen deliberately rather than guessed",
-			instrumentID, tf)
+			"marketdata: %s has supplied no bars for %s %s yet; run a backfill "+
+				"first so the starting point is chosen deliberately rather than "+
+				"guessed. Bars from another source do not count -- syncing "+
+				"forward from them would skip the history this provider has",
+			s.provider.Name(), instrumentID, tf)
 	}
 	dur, err := tf.Duration()
 	if err != nil {
@@ -231,16 +233,21 @@ func (s *Syncer) acquire(
 
 	for _, c := range chunks {
 		seg := store.MarketDataSegment{
-			ID:                   uuid.NewString(),
-			InstrumentID:         instrumentID,
-			Timeframe:            string(tf),
-			Provider:             s.provider.Name(),
-			ProviderSymbol:       vendorSymbol,
-			Kind:                 kind,
-			RequestedStart:       c.from,
-			RequestedEnd:         c.to,
-			Status:               store.SegmentPending,
-			SourceType:           "HISTORICAL_MARKET",
+			ID:             uuid.NewString(),
+			InstrumentID:   instrumentID,
+			Timeframe:      string(tf),
+			Provider:       s.provider.Name(),
+			ProviderSymbol: vendorSymbol,
+			Kind:           kind,
+			RequestedStart: c.from,
+			RequestedEnd:   c.to,
+			Status:         store.SegmentPending,
+			// DERIVED from the provider, never hard-coded. The Syncer takes any
+			// Provider and is exported, so a synthetic one would otherwise
+			// stamp HISTORICAL_MARKET onto generated bars -- the exact mistake
+			// CLAUDE.md rule 14 records, which this file's own snapshot path
+			// already had to have corrected once.
+			SourceType:           sourceTypeFor(s.provider),
 			NormalizationVersion: NormalizationVersion,
 			IngestionVersion:     IngestionVersion,
 			CodeSHA:              s.codeSHA,
@@ -251,7 +258,11 @@ func (s *Syncer) acquire(
 		bars, ferr := s.provider.HistoricalBars(ctx, inst, tf, c.from, c.to)
 		if ferr != nil {
 			seg.Status = store.SegmentFailed
-			seg.FailureReason = truncate(ferr.Error(), 400)
+			// The provider scrubs its own errors, but this record is PERSISTED
+			// and served by the coverage endpoint, so it does not rely on that
+			// alone: a future provider that forgets would write a credential
+			// into the database, where it outlives the process that leaked it.
+			seg.FailureReason = truncate(scrubProviderError(s.provider, ferr), 400)
 			completed := s.clock.Now()
 			seg.CompletedAt = &completed
 			_ = s.store.Market.RecordSegment(ctx, seg)
@@ -267,7 +278,8 @@ func (s *Syncer) acquire(
 			}
 			log.Warn("market data chunk failed",
 				"instrument", instrumentID, "timeframe", string(tf),
-				"from", c.from.Format(time.RFC3339), "error", ferr.Error())
+				"from", c.from.Format(time.RFC3339),
+				"error", scrubProviderError(s.provider, ferr))
 			continue
 		}
 
@@ -330,8 +342,21 @@ func (s *Syncer) persist(
 	// "ingested" means new rather than "the upsert ran". A backfill reporting
 	// thousands ingested when it re-fetched an existing range would hide that
 	// it did no work.
+	//
+	// The upper bound is the last bar's open time plus ONE BAR, not plus one
+	// nanosecond. BarsInRange is half-open (`open_time < $4`), and Postgres
+	// stores microseconds -- so a nanosecond added to a microsecond-aligned
+	// timestamp truncates straight back to it, the bound stays exclusive, and
+	// the last bar of every chunk was never found in `existing`. It was then
+	// counted as newly stored on every re-fetch, which is exactly the false
+	// reassurance this block exists to prevent.
+	dur, derr := tf.Duration()
+	if derr != nil {
+		log.Warn("unknown timeframe while de-duplicating", "timeframe", string(tf))
+		return 0, 0, 0, ""
+	}
 	existing, err := s.store.Market.BarsInRange(
-		ctx, instrumentID, tf, bars[0].OpenTime, bars[len(bars)-1].OpenTime.Add(time.Nanosecond))
+		ctx, instrumentID, tf, bars[0].OpenTime, bars[len(bars)-1].OpenTime.Add(dur))
 	if err != nil {
 		log.Warn("could not read existing bars before ingest", "error", err.Error())
 	}
@@ -491,4 +516,24 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// scrubProviderError renders a provider error as text with any credential removed.
+//
+// The Syncer does not know what a given provider treats as secret, so it asks.
+// A provider that can redact itself does; one that cannot is rendered plainly,
+// which is correct for the mock and replay providers because they have no
+// credential to leak.
+//
+// This exists because the error text from here is PERSISTED to
+// market_data_segments and served by the coverage endpoint, so a leak at this
+// point outlives the process that produced it.
+func scrubProviderError(p Provider, err error) string {
+	if err == nil {
+		return ""
+	}
+	if s, ok := p.(interface{ scrub(string) string }); ok {
+		return s.scrub(err.Error())
+	}
+	return err.Error()
 }
