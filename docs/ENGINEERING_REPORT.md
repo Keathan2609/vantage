@@ -167,7 +167,7 @@ result names a run recorded in §0.12.
 | SC-5 | CSRF, CORS and security headers | VERIFIED | `internal/httpapi`. CORS allows exactly one origin. |
 | SC-6 | Dependency and container scanning | VERIFIED | govulncheck 0 reachable, trivy 0, npm audit 0, semgrep 0 across 247 files. |
 | SC-7 | SSRF: no outbound URL a caller could steer | VERIFIED | MD-12. |
-| SC-8 | CI enforces all of the above on every push | UNVERIFIED | `.github/workflows/ci.yml` and `security.yml` exist and pass `actionlint`. **The repository has no remote and GitHub Actions have never executed.** Every result in this report came from a local run. |
+| SC-8 | CI enforces all of the above on every push | VERIFIED | **GitHub Actions has now executed.** The repository was published on 2026-09-30 and both workflows are green: CI run `36718123184` (5 jobs -- Go, Python, web, migrations, images) and Security run `36718123066` (11 jobs -- govulncheck, npm audit, OSV-Scanner, Gitleaks, Semgrep, pip-audit, Trivy filesystem and three Trivy images, repository policy). Reaching green took two rounds of fixes for six defects that `actionlint` cannot see -- section 30q. |
 
 ### 0.11 Where three of these classifications came from
 
@@ -213,6 +213,7 @@ Every command below was run on this machine on 2026-09-30 and its output read.
 | `./scripts/dev-up.ps1 -Reset -Seed`, four times | 20 migrations applied each time; 11 790 bars, 12 strategies, 5 at PAPER. One seed per stack-dependent suite, because the daily-loss budget and the exposure ceilings are finite fixture resources |
 | `GET /health/ready` | `ready`, `paper`, quant `ok`, reconciliation `HEALTHY` |
 | A full `trend-clean` replay through the real pipeline, both planes rebuilt | 140/140 rows, 81 evaluation instants, 0 errors. `strategy_runs`: 551 skipped (266 of them insufficient history, naming both numbers), 73 no_signal, **46 succeeded**. 39 decisions, all TRENDING, no order |
+| `git push` to a public GitHub repository, then three CI rounds | First run: **both workflows red**, six defects `actionlint` cannot see. Third run: **both green** — CI 5/5 jobs, Security 11/11. Section 30q |
 
 Not executed, and therefore not claimed:
 
@@ -2789,6 +2790,83 @@ preserves the mutable defaults and cannot bypass `__post_init__`; and the new
 field pair's names match on both sides of the process boundary, with the zero
 value meaning "not starved" for an older research service.
 
+## 30q. CI ran for the first time, and failed
+
+Every revision of this report has carried the same warning: `actionlint` passes
+with 0 findings, every command the workflows run has been executed by hand, and
+that is not the same thing as CI passing. The repository was published on
+2026-09-30. The first run failed **both** workflows.
+
+`actionlint` had reported 0 findings before, during and after. It still does.
+It validates workflow syntax, expressions and shell — it cannot know that an
+environment value will be rejected at run time, that a pinned action's own
+dependency has been deleted upstream, or that a CLI has dropped a flag.
+
+### What it found
+
+**`VANTAGE_ENV: local` is not an environment.** Both migration jobs set it.
+`config.Load` accepts `development`, `test`, `staging`, `production` and
+nothing else, so every migration job died at start-up with "not a recognised
+environment". A value that exists nowhere in the codebase had been sitting in
+the workflow since it was written, and no local run of the migration command
+uses those env vars.
+
+**mypy found four errors that pass locally.** `np.nanmean` returns
+`np.floating`, not `float`, and `indicators.py` passed the result straight into
+a function annotated `float`. Not the Python version — `[tool.mypy]` pins 3.12
+— and not numpy, which is 2.5.3 on both sides. **The venv on the development
+machine holds mypy 2.3.1, outside the declared `>=1.13,<2.0`.** CI honours the
+constraint and installs 1.x, which is stricter here. So every "mypy clean" in
+this report's history was produced by a tool the project does not declare.
+
+The fix is `float(...)` at the boundary. It is exact — `np.float64` *is* an
+IEEE-754 double — so no indicator value moves, which matters because altering
+an indicator alters every strategy that reads it.
+
+**Every Trivy job died in "Set up job".** `trivy-action@v0.28.0`, correctly
+pinned by SHA, internally resolves `setup-trivy@v0.2.1` — and that tag no
+longer exists upstream; its tags now start at v0.2.6. Pinning your own
+dependency does not pin its dependencies. The error names neither the nested
+action nor the deleted tag. Moved to v0.36.0.
+
+**OSV-Scanner exited 127 printing its usage text.** v2 dropped `--skip-git`.
+The previous revision recorded that this job had referenced a tag which never
+existed and that pinning it to a real commit was a version change; this is the
+rest of that bill. Repository scanning is the default now, so the flag is gone.
+
+**pip-audit failed on the repository itself, twice.** `vantage-quant` is
+installed editable so its dependency tree resolves, and it is not on PyPI, so
+it cannot be audited — correctly, and not a vulnerability. `--skip-editable`
+failed differently: under `--strict`, pip-audit turns a skip into an error.
+Dropping `--strict` would have gone green and would have been the wrong fix,
+because it silences an unauditable *third-party* package too — the one thing
+the job exists to catch. The job now freezes the resolved dependency set
+without editable installs and audits that.
+
+### Where it stands
+
+Both workflows are green: CI run `36718123184`, five jobs — control plane,
+research plane, terminal, migrations applied twice, images built. Security run
+`36718123066`, eleven jobs — govulncheck, npm audit, OSV-Scanner, Gitleaks,
+Semgrep, pip-audit, Trivy filesystem and three Trivy images, repository policy.
+OSV-Scanner and pip-audit have produced a result for the first time; both are 0
+findings, and neither has ever been run locally, so the CI job is the only
+evidence for them and is cited as such.
+
+### The honest summary
+
+Six defects, in workflows that had been reviewed, pinned by SHA, linted clean
+and described in this report as ready. Four of them are in the same category as
+everything else this milestone found: a check that existed, passed, and was
+looking at the wrong thing. Two are the specific failure mode of a config file
+nothing executes — it cannot be wrong until something runs it, and then it is
+wrong all at once.
+
+There is a temptation to record this as "CI configuration issues, now fixed".
+It is more useful recorded as what it is: **the gap between a green local
+checklist and a green pipeline was six defects wide, and nothing available
+before publication could measure it.**
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -2842,9 +2920,13 @@ Stated plainly, because a report that lists only successes is not useful.
 This list is shorter than it was — six items from the previous revision have since
 been executed and moved into the tally — and what remains is what remains.
 
-- **The CI workflows have never run.** There is no remote. `actionlint` passes
-  with 0 findings and every command the workflows run has been executed by
-  hand, which is not the same thing and must not be reported as if it were.
+- ~~**The CI workflows have never run.**~~ **Closed on 2026-09-30.** The
+  repository was published and both workflows are green. What the entry always
+  warned about turned out to be exactly right: `actionlint` passed with 0
+  findings throughout, and the first real run failed with six defects it cannot
+  see -- an unrecognised environment value, a stricter mypy, a deleted upstream
+  tag, a removed CLI flag, and two ways of mis-auditing a local package.
+  Section 30q.
 - **OSV-Scanner and pip-audit were not run.** Neither is installed on this
   machine. Both are configured in CI, and CI has never run -- see the note
   below on what pinning the workflows revealed about that configuration.
@@ -3180,9 +3262,9 @@ need real time.
 | ZAP baseline — terminal (production build) | this milestone | **0 FAIL, 3 WARN, 64 PASS** (`-I -s`, unauthenticated). The substantive WARN is the documented `script-src 'unsafe-inline'` acceptance; the others are Non-Storable Content and Modern Web Application, both informational |
 | actionlint | this milestone | 0 findings, after fixing the 8 shellcheck issues it reported |
 | Restore drill | **carried — not re-run** | PASSED — backup, restore into a scratch database, and financial-integrity verification |
-| OSV-Scanner | not run | **NOT RUN — not installed, and until now not runnable in CI either.** `osv-scanner --version` reports `command not found`. The CI job referenced `google/osv-scanner-action@v1`, a tag that has never existed in that repository, so the step could not have resolved its action; pinning the workflows found it. The reference now points at a real commit (v2.5.1), but CI still has not run, so this remains NOT RUN. No other scanner was substituted and no OSV result is claimed anywhere in this report |
-| pip-audit | not run | **NOT RUN — not installed**, in the project venv or on PATH. Configured in CI |
-| GitHub Actions | not run | **NEVER RUN.** This repository has no remote. `actionlint` passing is not CI passing, and nothing in this report should be read as if it were |
+| OSV-Scanner | this revision | **RUN IN CI, 0 findings.** Never runnable before: the job referenced `google/osv-scanner-action@v1`, a tag that has never existed there, and pinning the workflows found that. Pinned to v2.5.1 — and the first real run then exited 127 printing its usage text, because v2 dropped `--skip-git`. Removed; repository scanning is the default now. It has never been run locally (`osv-scanner --version` still reports `command not found`), so the CI job is the only evidence and is cited as such |
+| pip-audit | this revision | **RUN IN CI, 0 findings.** Never run before, and it took two attempts. It first failed on `vantage-quant` itself — the local package, installed editable so its dependencies resolve, is not on PyPI. `--skip-editable` then failed differently, because `--strict` turns a skip into an error. Dropping `--strict` would have passed and would have been worse: it silences an unauditable THIRD PARTY package too. The job now freezes the resolved dependency set without editable installs and audits that, so `--strict` still means what it says |
+| GitHub Actions | this revision | **RUN, AND GREEN.** Published 2026-09-30; CI run `36718123184` 5/5 jobs and Security run `36718123066` 11/11 jobs. The first run failed both workflows; six defects and two rounds of fixes later, both pass. `actionlint` reported 0 findings before, during and after, which is the point |
 
 ### On the number of reseeds behind that table
 
