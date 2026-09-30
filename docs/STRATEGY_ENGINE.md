@@ -158,3 +158,62 @@ API even if it wanted to.
 - Widen a limit: those endpoints require a session and a role the scheduler
   does not have.
 - Promote itself: lifecycle changes are an authenticated operator action.
+
+
+## The regime is a gate, not a label
+
+Every strategy version declares `valid_regimes`, and the consensus policy
+DISCARDS any strategy whose declared set excludes the current regime. Nothing
+downstream re-examines that: a discarded opinion never reaches the vote, never
+reaches risk, and never becomes an order.
+
+No PAPER-promoted strategy declares itself valid in `UNKNOWN`. An UNKNOWN
+verdict is therefore not a soft outcome — it is a guaranteed NO TRADE for that
+bar, whatever the strategies saw. A live decision snapshot showed exactly that:
+`macd_momentum` produced a `sell` at confidence 0.619, comfortably above the
+policy floor, and the record read
+
+    discarded: declares itself valid in TRENDING, and the regime is UNKNOWN
+
+with the outcome `NO TRADE: no strategy offered an actionable opinion that
+survived the policy`.
+
+### The band that had no branch
+
+`classify_regime` decided TRENDING (ADX above 25 **and** displacement), RANGING
+(ADX below 20), and RANGING again for ADX above 25 that was going nowhere — on
+the stated reasoning that displacement, not ADX, is what separates a trend from
+an oscillation.
+
+ADX between 20 and 25 had no branch and fell through to UNKNOWN. Measured
+across the sixteen generated market conditions, that fallthrough took **9.5% of
+all decision points**, and the band matched ADX 20–25 almost exactly (9.6%).
+
+It was also inconsistent. The same market going nowhere was called RANGING at
+ADX 30 and unclassifiable at ADX 22 — the *less* directional reading getting
+the more conservative treatment. The band's measured efficiency confirms which
+population it belongs to:
+
+| label | n | median efficiency | share ≥ 0.30 |
+|---|---|---|---|
+| UNKNOWN band (ADX 20–25) | 248 | 0.203 | 29.4% |
+| RANGING | 1188 | 0.154 | 3.7% |
+| TRENDING | 1109 | 0.511 | 100% |
+
+The same rule now applies in the band: going nowhere is a range. What remains
+UNKNOWN is the genuinely ambiguous part — price getting somewhere while ADX has
+not confirmed it, which an emerging trend and a false start look like alike,
+and which is exactly when a mean-reversion strategy must not be told it is safe.
+
+Effect, measured on the same data: UNKNOWN 9.5% → 2.7%, RANGING 45.0% → 51.8%,
+**TRENDING unchanged at 42.9%** — the trend definition was not loosened.
+
+### What this does and does not claim
+
+It makes the classifier self-consistent and is evidenced on the classifier's
+own behaviour, which is a property of the code. It is **not** evidence that
+trading those bars is profitable. The strategies it newly admits are the
+mean-reversion pair, and `docs/SIGNAL_RESEARCH.md` records that
+`rsi_mean_reversion`'s score ordering runs backwards and
+`bollinger_zscore_reversion` is cost-negative on synthetic data. Fixing a
+classifier gap is not an endorsement of the strategies behind it.

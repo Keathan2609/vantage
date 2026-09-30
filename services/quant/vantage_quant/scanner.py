@@ -121,6 +121,34 @@ def classify_regime(
     # and what a trend strategy must sit out.
     if adx_now > 25:
         return "RANGING", measures
+
+    # ADX between 20 and 25 -- the only band with no branch of its own, which
+    # used to fall through to UNKNOWN.
+    #
+    # That mattered more than it looked. No PAPER-promoted strategy declares
+    # itself valid in UNKNOWN, so the consensus policy discards every opinion
+    # and the bar is a guaranteed NO TRADE. Measured across the sixteen
+    # generated market conditions, the fallthrough took 9.5% of all decision
+    # points -- about one in ten -- and the band matched ADX 20-25 almost
+    # exactly (9.6%).
+    #
+    # It was also INCONSISTENT with the branch directly above. A market going
+    # nowhere is called RANGING at ADX 30 on the stated reasoning that
+    # displacement, not ADX, decides whether something is a trend. At ADX 22 --
+    # LESS directional by the same measure -- it was called unclassifiable.
+    # The same market got two different labels, and the weaker reading got the
+    # more conservative one.
+    #
+    # Measured efficiency in the band: median 0.203, against 0.154 for RANGING
+    # and 0.511 for TRENDING. It is a range population, not a trend one.
+    #
+    # So the same rule applies here: going nowhere is a range. What stays
+    # UNKNOWN is the genuinely ambiguous remainder -- price IS getting
+    # somewhere while ADX has not confirmed it, which is what an emerging trend
+    # and a false start look like alike, and is exactly when a mean-reversion
+    # strategy should not be told it is safe.
+    if efficiency < TREND_EFFICIENCY_MIN:
+        return "RANGING", measures
     return "UNKNOWN", measures
 
 
