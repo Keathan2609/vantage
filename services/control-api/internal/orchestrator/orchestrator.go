@@ -350,7 +350,13 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		return Outcome{}, fmt.Errorf("orchestrator: load bars: %w", err)
 	}
 	if len(bars) < 50 {
-		return skip(fmt.Sprintf("only %d complete bars available; the strategy needs more history", len(bars)))
+		// Keyed on the bar when there is one. This condition persists for as
+		// long as the series is short, and an unkeyed skip writes a fresh row
+		// on every 30-second tick because the per-bar unique index is partial
+		// on `bar_time IS NOT NULL`. With no bars at all there is nothing to
+		// key on and the nil is the honest answer.
+		return skipAtNewestBar(skip, skipAtBar, bars, fmt.Sprintf(
+			"only %d complete bars available; the strategy needs more history", len(bars)))
 	}
 
 	// ---- Warm-up ----------------------------------------------------------
@@ -364,12 +370,16 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 	// run's warm-up is visible in strategy_runs and cannot be mistaken for a
 	// strategy that found nothing.
 	if window.InWarmup(now) {
-		return skip(fmt.Sprintf(
+		// Keyed on the bar: a warm-up lasts sixty instants and the scheduler
+		// ticks twice a minute throughout, so an unkeyed skip records this
+		// reason hundreds of times for the same sixty bars.
+		warmupBar := bars[len(bars)-1].OpenTime
+		return skipAtBar(fmt.Sprintf(
 			"replay warm-up: evaluation begins at %s and this instant is %s; "+
 				"indicators, regime and correlation are being built and no "+
 				"executable intent is permitted yet",
 			window.EvaluationStart.UTC().Format(time.RFC3339),
-			now.UTC().Format(time.RFC3339)))
+			now.UTC().Format(time.RFC3339)), &warmupBar)
 	}
 
 	sessions := s.marketClock.ActiveSessions(now)
@@ -418,7 +428,11 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		},
 	})
 	if err != nil {
-		if _, rerr := s.recordRun(ctx, req, version, domain.RunFailed, "", err.Error(), start, nil); rerr != nil {
+		// Keyed on the bar. The quant circuit breaker opens for 30 seconds and
+		// the scheduler ticks every 30 seconds, so a research service that is
+		// down records a failure per strategy per instrument indefinitely.
+		failedAt := bars[len(bars)-1].OpenTime
+		if _, rerr := s.recordRun(ctx, req, version, domain.RunFailed, "", err.Error(), start, &failedAt); rerr != nil {
 			log.Error("could not record failed run", "error", rerr.Error())
 		}
 		metrics.StrategyRuns.WithLabelValues(strategy.Key, string(domain.RunFailed)).Inc()

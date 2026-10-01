@@ -562,11 +562,26 @@ func (s *Scheduler) cleanup(ctx context.Context) error {
 			s.deps.Log.Info("pruned expired sessions", "count", removed)
 		}
 
+		s.pruneTelemetry(ctx)
+
 		accounts, err := s.deps.Store.Accounts.ListAllAccounts(ctx)
 		if err != nil {
 			return err
 		}
 		for _, account := range accounts {
+			// The daily roll comes FIRST, and deliberately.
+			//
+			// It used to sit after Compute, behind a `continue` on Compute's
+			// error — so any persistent failure to compute a snapshot would
+			// freeze the daily-loss reference point indefinitely while the
+			// risk engine kept measuring against it. The roll needs the
+			// account and the clock, nothing else; it has no reason to depend
+			// on whether a metric could be gathered.
+			if rolled, err := s.deps.Portfolio.RollTradingDayIfNeeded(ctx, account,
+				tradingDayBoundary(s.deps.Clock.Now())); err == nil && rolled {
+				s.deps.Log.Info("trading day rolled", "account_id", account.ID.String())
+			}
+
 			snapshot, err := s.deps.Portfolio.Compute(ctx, account)
 			if err != nil {
 				continue
@@ -576,13 +591,6 @@ func (s *Scheduler) cleanup(ctx context.Context) error {
 			metrics.AccountEquity.WithLabelValues(account.ID.String(),
 				string(account.Currency)).Set(equity)
 			metrics.AccountDrawdown.WithLabelValues(account.ID.String()).Set(drawdown)
-
-			// Roll the daily-loss reference point at the venue's own day
-			// boundary, not local midnight.
-			if rolled, err := s.deps.Portfolio.RollTradingDayIfNeeded(ctx, account,
-				tradingDayBoundary(s.deps.Clock.Now())); err == nil && rolled {
-				s.deps.Log.Info("trading day rolled", "account_id", account.ID.String())
-			}
 		}
 		return nil
 	})

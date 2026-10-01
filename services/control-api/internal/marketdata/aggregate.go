@@ -11,6 +11,7 @@ import (
 
 	"github.com/vantage/control-api/internal/domain"
 	"github.com/vantage/control-api/internal/logging"
+	"github.com/vantage/control-api/internal/metrics"
 )
 
 // Aggregator builds bars from the live quote stream.
@@ -248,7 +249,27 @@ func (a *Aggregator) AggregateInto(ctx context.Context, s barWriter, q domain.Qu
 		if err := s.UpsertBars(ctx, bars); err != nil {
 			log.Error("could not persist aggregated bars",
 				"instrument", q.InstrumentID, "timeframe", string(tf), "error", err.Error())
+			continue
 		}
+
+		// The age of the newest bar this instrument and timeframe has.
+		//
+		// This gauge was declared and never set by anything, which is the one
+		// measurement that would catch rule 9 recurring. The series froze at
+		// seed time once: every strategy re-evaluated a single bar for ever,
+		// the per-bar guard jammed shut, the live quote drifted 79 dollars from
+		// the newest bar, and nothing reported unhealthy. A frozen series is
+		// invisible in every other signal — ingestion still succeeds, the
+		// quote is still fresh, the feed is still "ok" — and shows up here
+		// immediately as an age that climbs and never resets.
+		//
+		// Set from the bar's own close time against the quote's clock rather
+		// than from time.Now(), so a replay measures dataset time like
+		// everything else on this path.
+		newest := bars[len(bars)-1]
+		metrics.MarketDataLatestAge.
+			WithLabelValues(q.InstrumentID, string(tf)).
+			Set(q.SourceTime.Sub(newest.CloseTime).Seconds())
 	}
 }
 

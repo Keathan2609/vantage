@@ -3055,6 +3055,98 @@ implements the spoofing defence and runs after the middleware that defeats it.
 
 In three of the four, a test existed and passed.
 
+## 30s. Bounding the growth, and setting the gauge that was never set
+
+Continuing from the longevity audit in section 30r. Four of its findings are
+closed here; what remains is listed in section 31.
+
+### `market_quotes` is write-only, and nothing had ever noticed
+
+The tree contains exactly one `INSERT INTO market_quotes`, one replay-scoped
+`DELETE`, and **no `SELECT` at all**. It gains roughly 179 000 rows a day — six
+instruments at the 2-second ingest interval — about 27 MB a day and 10 GB a
+year, and no decision has ever read a row of it. The hot path for a price is
+`market_quotes_latest`, which is a different table.
+
+That was verified rather than inferred. On a development database holding
+39 714 quote rows, the retention statement removed all of them while
+`market_quotes_latest` stayed at six, and the platform did not notice: ingestion
+refilled 150 rows within the next few minutes, `/health/ready` reported
+`database: ok` and `quant: ok` throughout, and both smoke suites pass afterwards
+(66/0 and 35/0). Deleting the entire quote history had no operational effect,
+which is the strongest available statement of what "write-only" means.
+
+The hourly `cleanup` job — which already held a lease and already pruned
+sessions — now also trims `market_quotes` and `market_data_health` at 30 days,
+`strategy_runs` at 14, and **published** outbox rows at 7.
+
+Each window is a separate constant with its reason beside it, because the
+consequence of being wrong differs per table. The outbox sweep touches
+`published_at IS NOT NULL` only: an unpublished row is still owed to a
+consumer, and the dispatcher selects exactly those. That guard was proved
+empirically rather than read — two rows inserted, one published thirty days
+ago and one never, the sweep run, the delivered row gone and the undelivered
+one still there.
+
+Every sweep is capped at 50 000 rows per run. The first pass against a database
+that has been up for months would otherwise issue a single DELETE over millions
+of rows and hold locks for as long as it took; the job returns and takes the
+next slice an hour later. A sweep that hits its cap every hour logs its count,
+so a backlog that is not shrinking is visible rather than silent.
+
+**The append-only tables are deliberately absent.** Ten of them carry a trigger
+that raises on DELETE — `transactions`, `fills`, `order_state_transitions`,
+`audit_events`, `decision_snapshots`, `reconciliation_issue_events` and the four
+`*_history` tables. They are the financial and evidentiary record and the
+database itself refuses to let a cleanup job touch them. They need an archive
+design, which is a decision rather than a line in a function, and it is not
+made here. `command_idempotency` is also left alone: it is a correctness guard
+against double execution, and the growth is per command rather than per tick.
+
+### The gauge that would have caught rule 9
+
+`vantage_marketdata_latest_bar_age_seconds` was declared in `internal/metrics`
+and **set by nothing**. Grepping the tree for a setter returned the declaration
+and no other line.
+
+Rule 9 exists because the bar series froze at seed time once: every strategy
+re-evaluated a single bar for ever, the per-bar guard jammed shut, the live
+quote drifted 79 dollars away from the newest bar, and nothing reported
+unhealthy. A frozen series is invisible in every other signal — ingestion
+succeeds, the quote is fresh, the feed is `ok` — and shows up in this one
+measurement immediately, as an age that climbs and never resets.
+
+It is now set in `Aggregator.AggregateInto`, from the bar's close against the
+quote's own source time rather than `time.Now()`, so a replay measures dataset
+time like everything else on that path.
+
+### Finishing the bar-keying
+
+Section 30p fixed one refusal path and left the rest. The per-bar unique
+indexes on `strategy_runs` are partial — `WHERE bar_time IS NOT NULL` — so a
+refusal recorded without a bar is inserted afresh on every 30-second tick, and
+`PurgeStrategyRunsInRange` cannot delete it either, because that only matches
+rows which have one.
+
+The three refusals that happen *after* the bars are loaded now key on the
+newest bar in hand: too little history, replay warm-up, and a research-service
+failure. The last matters most — the quant circuit breaker opens for 30 seconds
+and the scheduler ticks every 30 seconds, so a research service that is down
+used to record a failure per strategy per instrument indefinitely.
+
+The genuine pre-flight refusals keep their nil. They run before any bar is
+fetched and inventing a key for them would be worse than the duplication; the
+retention sweep above is what bounds those.
+
+### And a reordering
+
+The hourly cleanup computed a portfolio snapshot for its metrics and then
+rolled the trading day, with a `continue` on the snapshot's error in between.
+Any persistent failure to compute would therefore have frozen the daily-loss
+reference point indefinitely while the risk engine kept measuring against it.
+The roll needs the account and the clock and nothing else, so it now happens
+first.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -3107,7 +3199,10 @@ Stated plainly, because a report that lists only successes is not useful.
   build may not contact a third party. Re-stamping a held rate would make the
   symptom vanish by fabricating data.
 
-- **There is no retention anywhere except the session sweep.** `market_quotes`
+- ~~**There is no retention anywhere except the session sweep.**~~ **Closed
+  for the prunable tables** (section 30s): `market_quotes` and
+  `market_data_health` at 30 days, `strategy_runs` at 14, published outbox rows
+  at 7, batched at 50 000 per run. What REMAINS open is the append-only set — `market_quotes`
   gains roughly 179,000 rows a day — about 27 MB, 10 GB a year — at the 2-second
   ingest interval across six instruments. `reconciliation_runs` gains 288 a day
   per account. `outbox` and `command_idempotency` are never pruned, the latter
@@ -3117,7 +3212,10 @@ Stated plainly, because a report that lists only successes is not useful.
   need an archive design rather than a cleanup job. `docs/COMPLIANCE_READINESS.md`
   already records retention as Not built; this quantifies it.
 
-- **`strategy_runs` still grows unbounded under a persistent refusal.** Only
+- ~~**`strategy_runs` still grows unbounded under a persistent refusal.**~~
+  **Closed** (section 30s): the three post-bar-load refusals now key on a bar,
+  and the retention sweep bounds the pre-flight ones that genuinely cannot.
+  Formerly: Only
   the history-refusal path was given a bar time, so the per-bar unique index
   deduplicates that one. Every other pre-flight refusal — reconciliation
   blocked, feed unhealthy, authority expired, kill switch active, research
@@ -3125,7 +3223,9 @@ Stated plainly, because a report that lists only successes is not useful.
   cannot dedupe and `PurgeStrategyRunsInRange` cannot delete. A halted account
   writes about 23,900 rows a day.
 
-- **`vantage_marketdata_latest_bar_age_seconds` is defined and never set.**
+- ~~**`vantage_marketdata_latest_bar_age_seconds` is defined and never
+  set.**~~ **Closed** (section 30s): set in `Aggregator.AggregateInto` from the
+  bar's close against the quote's source time. Still open from the same entry:
   Rule 9 exists because the bar series silently froze once; the one gauge that
   would catch it recurring has no setter in production code. There is also no
   gauge for FX rate age and no heartbeat for "last successful strategy pass",
