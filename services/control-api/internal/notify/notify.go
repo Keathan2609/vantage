@@ -71,6 +71,14 @@ const (
 	KindOrderFailed         Kind = "order_outcome_unknown"
 	KindAuditChainBroken    Kind = "audit_chain_broken"
 	KindAutomationSuspended Kind = "automation_suspended"
+	// KindAuthorityExpiring warns BEFORE a trading authority lapses.
+	//
+	// Expiry is otherwise completely silent. ActiveAuthorityForAccount does not
+	// filter on valid_until, so the row is still returned; Effective refuses;
+	// and the scheduler's strategy loop treats the refusal as an ordinary skip
+	// and continues without logging. The platform simply stops trading one day,
+	// with no alert, no readiness signal and no log line naming the cause.
+	KindAuthorityExpiring Kind = "trading_authority_expiring"
 	// KindReconciliationIssue is one newly raised divergence. Distinct from
 	// KindReconciliation, which is the per-run summary: a run that finds the
 	// same three issues every minute should announce them once, not announce

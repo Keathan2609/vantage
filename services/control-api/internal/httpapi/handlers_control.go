@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -972,32 +973,98 @@ func (s *Server) handleAdminSetDisabled(w http.ResponseWriter, r *http.Request) 
 // deletion or reordering after the fact. It reports the first broken link
 // rather than only a boolean, so an investigation has somewhere to start.
 func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) {
-	events, err := s.store.Control.AuditChainSlice(r.Context(), 1, 10000)
-	if err != nil {
-		writeStoreError(w, r, err, "Audit chain unavailable.")
-		return
-	}
-	ok, brokenAt := domain.VerifyChain(events)
 	headHash, headSeq, herr := s.store.Control.AuditHead(r.Context())
 	if herr != nil {
 		writeStoreError(w, r, herr, "Audit chain unavailable.")
 		return
 	}
 
+	// Walk the WHOLE chain, in pages.
+	//
+	// This used to fetch sequences 1..10000 and report a verdict for the chain.
+	// Past ten thousand events it verified the oldest ten thousand, never
+	// examined the recent end -- which is where tampering would be -- and still
+	// answered `verified: true`. A partial check reported as a complete one is
+	// worse than no check, because it is believed.
+	//
+	// Each page is verified against the previous page's final hash, so the link
+	// across a page boundary is checked like any other.
+	const pageSize = 10000
+	var (
+		events     []domain.AuditEvent
+		prev       = domain.GenesisHash
+		checked    int
+		ok         = true
+		brokenAt   = -1
+		brokenSeq  int64
+		nextSeq    = int64(1)
+		complete   = true
+		pagesRead  int
+		lastEvents []domain.AuditEvent
+	)
+	for {
+		// A chain of millions cannot be walked inside one request, and the
+		// router's 30-second timeout would cut it mid-page. Stop at the cap and
+		// SAY the check was partial rather than letting a truncated walk
+		// masquerade as a clean one.
+		if pagesRead >= maxAuditVerifyPages {
+			complete = false
+			break
+		}
+		page, err := s.store.Control.AuditChainSlice(r.Context(), nextSeq, pageSize)
+		if err != nil {
+			writeStoreError(w, r, err, "Audit chain unavailable.")
+			return
+		}
+		if len(page) == 0 {
+			break
+		}
+		pagesRead++
+		pageOK, pageBroken := domain.VerifyChainFrom(page, prev)
+		checked += len(page)
+		if !pageOK {
+			ok = false
+			brokenAt = checked - len(page) + pageBroken
+			if pageBroken >= 0 && pageBroken < len(page) {
+				brokenSeq = page[pageBroken].Sequence
+			}
+			lastEvents = page
+			break
+		}
+		prev = page[len(page)-1].Hash
+		nextSeq = page[len(page)-1].Sequence + 1
+		if len(page) < pageSize {
+			break
+		}
+	}
+	events = lastEvents
+
+	// `verified` is a claim about the WHOLE chain, so it may only be true when
+	// the whole chain was walked. A head that moved while this ran, or a cap
+	// that was hit, both mean the answer is "not fully checked".
+	fullyWalked := complete && int64(checked) >= headSeq
 	resp := map[string]any{
-		"verified":       ok,
-		"events_checked": len(events),
+		"verified":       ok && fullyWalked,
+		"links_intact":   ok,
+		"fully_verified": fullyWalked,
+		"events_checked": checked,
 		"head_sequence":  headSeq,
 		"head_hash":      headHash,
 		"note": "Hash chaining provides tamper EVIDENCE, not immutability. " +
 			"A party with database write access can rewrite history, but cannot do so " +
 			"without breaking this chain.",
 	}
+	if !fullyWalked && ok {
+		resp["note_partial"] = fmt.Sprintf(
+			"Only %d of %d events were examined, so this is NOT a verification of "+
+				"the whole chain. Every link checked was intact.", checked, headSeq)
+	}
 	if !ok {
 		resp["broken_at_index"] = brokenAt
-		if brokenAt >= 0 && brokenAt < len(events) {
-			resp["broken_at_sequence"] = events[brokenAt].Sequence
+		if brokenSeq > 0 {
+			resp["broken_at_sequence"] = brokenSeq
 		}
+		_ = events
 		logging.FromContext(r.Context()).Error("AUDIT CHAIN VERIFICATION FAILED",
 			"broken_at_index", brokenAt)
 		writeJSON(w, r, http.StatusConflict, resp)
@@ -1005,6 +1072,10 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, r, http.StatusOK, resp)
 }
+
+// maxAuditVerifyPages bounds one verification request at 500 000 events.
+// Beyond that the walk is reported as partial rather than silently truncated.
+const maxAuditVerifyPages = 50
 
 func mustFloat(d decimal.Decimal) float64 {
 	f, _ := d.Float64()

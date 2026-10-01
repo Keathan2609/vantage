@@ -164,7 +164,20 @@ const GenesisHash = "00000000000000000000000000000000000000000000000000000000000
 // VerifyChain recomputes hashes over an ordered slice and reports the first
 // index whose stored hash disagrees with its recomputed value.
 func VerifyChain(events []AuditEvent) (ok bool, brokenAt int) {
-	prev := GenesisHash
+	return VerifyChainFrom(events, GenesisHash)
+}
+
+// VerifyChainFrom verifies a contiguous slice that follows a known hash.
+//
+// Needed to walk a chain in pages. Verifying only the first page and reporting
+// a verdict for the whole chain is worse than not checking: the recent end,
+// which is where tampering would be, is the part not examined, and the answer
+// still reads "verified".
+//
+// The caller is responsible for passing the PREVIOUS page's final hash. Pass
+// GenesisHash to verify from the start, which is what VerifyChain does.
+func VerifyChainFrom(events []AuditEvent, prevHash string) (ok bool, brokenAt int) {
+	prev := prevHash
 	for i, e := range events {
 		if e.PrevHash != prev {
 			return false, i

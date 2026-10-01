@@ -84,6 +84,13 @@ type Deps struct {
 	Clock       domain.Clock
 	MarketClock *domain.MarketClock
 	Log         *logging.Logger
+	// Alerter raises operator notifications.
+	//
+	// A NARROW interface declared here rather than *notify.Alerter, because
+	// internal/notify must stay a leaf -- TestNoPackageDependsOnNotify
+	// enforces it, and caught this when it was written the other way. Optional:
+	// nil disables the warnings that use it rather than panicking.
+	Alerter Alerter
 }
 
 // Scheduler runs periodic work.
@@ -581,6 +588,8 @@ func (s *Scheduler) cleanup(ctx context.Context) error {
 				tradingDayBoundary(s.deps.Clock.Now())); err == nil && rolled {
 				s.deps.Log.Info("trading day rolled", "account_id", account.ID.String())
 			}
+
+			s.warnOnExpiringAuthority(ctx, account)
 
 			snapshot, err := s.deps.Portfolio.Compute(ctx, account)
 			if err != nil {

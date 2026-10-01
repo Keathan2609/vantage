@@ -357,6 +357,7 @@ func Build(ctx context.Context, cfg config.Config, log *logging.Logger) (*App, e
 		Clock:       a.Clock,
 		MarketClock: a.MarketClock,
 		Log:         log,
+		Alerter:     a.Alerter,
 	})
 
 	// The replay engine, after the scheduler because it drives it.

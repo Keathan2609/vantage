@@ -3147,6 +3147,101 @@ reference point indefinitely while the risk engine kept measuring against it.
 The roll needs the account and the clock and nothing else, so it now happens
 first.
 
+## 30t. Three silences, and a dependency nobody can upgrade
+
+Closing the rest of the longevity list from section 30r.
+
+### Audit verification stopped at ten thousand events and still said "verified"
+
+`GET /admin/audit/verify` fetched sequences 1 to 10 000 and reported a verdict
+for the chain. Past that length it verified the OLDEST ten thousand events,
+never examined the recent end — which is where tampering would be — and still
+answered `verified: true`. `head_sequence` was in the response beside it, so
+the contradiction was visible to anyone who compared two numbers, and nothing
+said the check had been partial.
+
+A partial check reported as a complete one is worse than no check, because it
+is believed.
+
+It now walks the whole chain in pages, each page verified against the previous
+page's final hash so the link across a boundary is checked like any other.
+`VerifyChainFrom` is the new entry point; `VerifyChain` delegates to it with the
+genesis hash and keeps its meaning.
+
+Paging only helps if the boundary is checked, and that is what the tests pin.
+`TestASeveredLinkAtAPageBoundaryIsCaught` builds two separately valid chains and
+splices them: each half verifies from genesis on its own, and only the boundary
+check sees that the second does not follow the first. A pager that verified
+each page independently would accept a cut-and-respliced history.
+
+The response now carries three fields rather than one. `links_intact` is what
+the hashes said; `fully_verified` is whether the whole chain was reached; and
+`verified` is true only when both hold. A walk that hits the 500 000-event cap
+says so in `note_partial` and does not claim a verdict it did not earn.
+
+### Nothing warned before a trading authority expired
+
+The development seed grants three years, so the condition is far away and
+completely invisible until the day it arrives. On that day:
+`ActiveAuthorityForAccount` still returns the row, because it does not filter on
+`valid_until`; `Effective` refuses; and the scheduler's strategy loop treats the
+refusal as an ordinary skip and `continue`s **without a log line**. The platform
+stops placing orders, and the symptom — every strategy skipping — is
+indistinguishable from a quiet market.
+
+There is now a warning at thirty days, seven days and one day, and a critical
+alert once it has lapsed that names the expiry as the reason nothing is
+trading. It runs in the hourly cleanup, so a horizon is crossed many times
+inside the day it names; the alerter's cooldown, keyed on the account, is what
+stops that becoming a notification an hour.
+
+The horizons are sorted at the point of use rather than trusted in declaration
+order, and a test pins it. Declared out of order, a thirty-day horizon would
+match first with one day remaining and the operator would be told "expires in
+30 days" on the day it expires.
+
+**The architecture test caught the first attempt.** The warning was written with
+`*notify.Alerter` on the scheduler's dependencies, and
+`TestNoPackageDependsOnNotify` failed the build: `internal/notify` is a leaf by
+rule, and a consumer declares its own narrow interface for `internal/app` to
+wire. That is the rule doing exactly its job, on the same day as a section about
+rules that were documented and not enforced.
+
+### A dependency with no upgrade path
+
+Trivy failed the quant image on two newly published HIGH findings in urllib3
+2.7.0 — CVE-2026-97687 and CVE-2026-97689, both fixed in 2.8.0.
+
+urllib3 is not a dependency of this service. It is not in `pyproject.toml`, it
+is not installed as a package, and it exists in the image at exactly two paths,
+both inside pip's own vendor directory. Verified in the built image rather than
+assumed:
+
+    $ docker run --rm --entrypoint sh <image> -c "python -c 'import urllib3'"
+    ModuleNotFoundError: No module named 'urllib3'
+
+It is not importable. The research service cannot execute it under any code
+path; the only program that can is pip, which runs at image build time.
+
+Nor can it be upgraded away. The Dockerfile already runs
+`pip install --upgrade pip`, the image carries **pip 26.2.1**, and
+`pip index versions pip` confirms that is the newest release in existence. It
+still vendors `urllib3==2.7.0`.
+
+So it is recorded in `.trivyignore` with that evidence, scoped to those two ids,
+and with what would change it: a pip release vendoring urllib3 >= 2.8.0, at
+which point the existing upgrade line picks it up and the entry should be
+deleted. This is the same shape as the setuptools 70.3.0 finding already
+recorded there — a scanner reading vendored metadata as installed code — and is
+kept separate so either can be removed without reasoning about the other.
+
+### What CI is now worth
+
+Two of this session's findings came from CI and could not have come from
+anywhere else: a critical RCE in Next published between a clean local `npm
+audit` and the push, and these two urllib3 advisories. Both were hours old. The
+local checklist was green for both.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -3232,13 +3327,18 @@ Stated plainly, because a report that lists only successes is not useful.
   and readiness checks database, brokers, quant and the reconciliation verdict
   but not market-data freshness.
 
-- **Nothing warns before a trading authority expires.** The dev seed grants
+- ~~**Nothing warns before a trading authority expires.**~~ **Closed**
+  (section 30t): warnings at 30, 7 and 1 day, and a critical alert once lapsed
+  that names the expiry as the reason nothing is trading. Formerly: The dev seed grants
   three years. On the day it lapses, `ActiveAuthorityForAccount` still returns
   the row, `Effective` refuses, the scheduler's strategy loop silently
   `continue`s without logging, and the platform stops trading with no alert and
   no readiness signal.
 
-- **`GET /admin/audit/verify` stops verifying past 10,000 events.** It checks
+- ~~**`GET /admin/audit/verify` stops verifying past 10,000 events.**~~
+  **Closed** (section 30t): it pages the whole chain, checks the link across
+  each page boundary, and reports `verified` only when the walk was complete.
+  Formerly: It checks
   sequences 1…10000 and reports `verified: true` whatever `head_sequence` says,
   so the most recent history — where tampering would be — is never examined.
 

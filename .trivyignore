@@ -116,3 +116,47 @@ GO-2026-5932
 #      already doing.
 #
 # Option 1 is the recommended next step and is recorded as remaining work.
+
+# ---------------------------------------------------------------------------
+# urllib3 2.7.0, two HIGH findings in the quant image. Suppressed with the
+# evidence below, and ONLY these two ids.
+#
+#   CVE-2026-97687  traffic interception via HTTPS proxy TLS config override
+#   CVE-2026-97689  denial of service via unbounded allocation in the chunk
+#                   parser
+#
+# Why not fixed: there is nothing here to upgrade.
+#
+# urllib3 is not a dependency of this service. It does not appear in
+# pyproject.toml, it is not installed as a package, and it exists in the image
+# at exactly two paths, both inside pip's own vendor directory:
+#
+#   /opt/venv/lib/python3.12/site-packages/pip/_vendor/urllib3
+#   /usr/local/lib/python3.12/site-packages/pip/_vendor/urllib3
+#
+# Verified in the built image rather than assumed:
+#
+#   $ docker run --rm --entrypoint sh <image> -c "python -c 'import urllib3'"
+#   ModuleNotFoundError: No module named 'urllib3'
+#
+# It is not importable. The research service cannot execute it under any code
+# path. The only program that can is pip, and pip runs at image BUILD time, not
+# at runtime -- the final stage does not install packages.
+#
+# Why not upgrade pip instead: the Dockerfile already does
+# `pip install --upgrade pip`, the image carries **pip 26.2.1**, and
+# `pip index versions pip` confirms that is the newest release in existence.
+# It still vendors urllib3==2.7.0 (pip/_vendor/vendor.txt). There is no pip to
+# move to.
+#
+# What would change this: a pip release vendoring urllib3 >= 2.8.0. At that
+# point the existing `pip install --upgrade pip` picks it up with no change
+# here, and these two lines should be deleted. Check on the next image rebuild
+# that reports them as fixed.
+#
+# This is the same shape as the setuptools 70.3.0 finding recorded above: a
+# scanner reading vendored metadata as though it were installed code. It is
+# recorded separately rather than folded in, because the next person needs to
+# be able to delete one without reasoning about the other.
+CVE-2026-97687
+CVE-2026-97689
