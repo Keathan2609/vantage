@@ -365,3 +365,18 @@ func (s *UserStore) DeleteExpiredSessions(ctx context.Context, olderThan time.Du
 	}
 	return tag.RowsAffected(), nil
 }
+
+// CountByRole reports how many users hold a role.
+//
+// Used by the bootstrap command to refuse once an administrator exists. That
+// check belongs in a query rather than in a "list everyone and count" loop,
+// because the answer is needed before any user is trusted to be loaded.
+func (s *UserStore) CountByRole(ctx context.Context, role domain.Role) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE role = $1`, string(role)).Scan(&n)
+	if err != nil {
+		return 0, mapError(err)
+	}
+	return n, nil
+}

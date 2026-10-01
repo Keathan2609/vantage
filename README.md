@@ -99,7 +99,10 @@ cd services/quant && python -m uvicorn vantage_quant.main:app --host 127.0.0.1 -
 cd apps/web && npm install && npm run dev
 ```
 
-The terminal is at http://localhost:3000. If something else on your machine
+The terminal is at http://localhost:3000.
+
+That is the local setup. To run it somewhere you can reach from a phone or
+another machine, see [DEPLOYMENT](docs/DEPLOYMENT.md). If something else on your machine
 already has that port, set `VANTAGE_PUBLIC_WEB_ORIGIN` to the port you actually
 get and restart the control plane, or CORS will refuse the browser.
 
@@ -168,6 +171,7 @@ the control plane logs its mode at startup.
 | [GOLD_RESEARCH_PROFILE](docs/GOLD_RESEARCH_PROFILE.md) | What is specific about XAUUSD, and why none of it belongs in generic infrastructure |
 | [OBSERVABILITY](docs/OBSERVABILITY.md) | Logs, metrics, audit, and what to alert on |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Environments, workflows, testing, migrations, conventions |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | Running it somewhere you can reach from any device, and why serverless cannot host the control plane |
 | [DISASTER_RECOVERY](docs/DISASTER_RECOVERY.md) | Failure modes, backups, restore, and recovering a broken position view |
 | [ENGINEERING_REPORT](docs/ENGINEERING_REPORT.md) | What was built, what was verified and how, and what was not |
 

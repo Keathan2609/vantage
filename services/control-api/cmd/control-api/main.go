@@ -45,7 +45,8 @@ Usage:
   control-api serve         Run the HTTP API (default)
   control-api migrate       Apply pending schema migrations, then exit
   control-api migrate-status Show applied and pending migrations
-  control-api seed          Load deterministic development data
+  control-api seed          Load deterministic development data (development only)
+  control-api create-admin  Create the first administrator in a deployed environment
   control-api verify-audit  Recompute and verify the audit hash chain
   control-api healthcheck   Probe the local server (used by the container healthcheck)
 `
@@ -69,6 +70,8 @@ func main() {
 		err = runMigrateStatus(ctx)
 	case "seed":
 		err = runSeed(ctx)
+	case "create-admin":
+		err = runCreateAdmin(ctx)
 	case "verify-audit":
 		err = runVerifyAudit(ctx)
 	case "healthcheck":

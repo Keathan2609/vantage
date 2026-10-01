@@ -64,4 +64,23 @@ tags = ["database", "credential"]
     '''ci_only_password''',
     # Placeholders in documentation and tests, e.g. postgres://u:p@localhost.
     '''postgres(?:ql)?://u:p@''',
+
+    # A VARIABLE REFERENCE in the password position, not a value.
+    #
+    # The production compose overlay and the deployment guide both build
+    # connection strings from environment variables. The rule's pattern is
+    # `[^@\s]{4,}` for the password, which a `${NAME}` interpolation matches,
+    # and RE2 has no negative lookahead to exclude it.
+    #
+    # This is deliberately narrow: it matches ONLY when the password position
+    # is exactly a `${UPPER_CASE}` reference. A literal password cannot take
+    # that shape, so this cannot hide a real one. The first draft of the
+    # overlay was restructured to pass whole URLs from the environment
+    # precisely so that no credential-shaped literal exists in the repository;
+    # this covers the two remaining places where the SHAPE is unavoidable
+    # because the command being documented is the one that builds the URL.
+    #
+    # What would change it: a gitleaks that understands interpolation, or a
+    # rule pattern that excludes `${...}` directly.
+    '''postgres(?:ql)?://[a-zA-Z0-9_]+:\$\{[A-Z_]+\}@''',
   ]

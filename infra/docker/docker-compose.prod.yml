@@ -1,0 +1,115 @@
+# Production overlay. Use it WITH the base file, never instead of it:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# The base file defines the services and their hardening. This changes only what
+# must differ when the stack is reachable from outside the machine.
+#
+# # What this does not do
+#
+# It does not publish anything to the internet. Every port in the base file is
+# bound to 127.0.0.1 and stays that way, so nothing is reachable from the
+# network even with the host's firewall open. The only route in is the
+# cloudflared tunnel below, which makes an OUTBOUND connection to Cloudflare and
+# needs no inbound port, no public IP and no port forwarding.
+#
+# It does not seed. `seed` writes accounts whose passwords are published in this
+# repository and refuses to run outside development. Bootstrap with
+# `create-admin`, which reads a password you choose. See docs/DEPLOYMENT.md.
+#
+# # Secrets
+#
+# Every value below comes from the environment with NO default. A missing one
+# fails the compose command rather than starting the stack with a blank or a
+# guessable value. `config.Load` refuses to start in production if the example
+# development keys are still in use, so a half-finished .env stops the process
+# rather than running insecurely.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${VANTAGE_POSTGRES_SUPERUSER_PASSWORD:?set it in .env.production}
+      VANTAGE_APP_PASSWORD: ${VANTAGE_POSTGRES_APP_PASSWORD:?set it in .env.production}
+      VANTAGE_OWNER_PASSWORD: ${VANTAGE_POSTGRES_OWNER_PASSWORD:?set it in .env.production}
+      VANTAGE_RESEARCH_PASSWORD: ${VANTAGE_POSTGRES_RESEARCH_PASSWORD:?set it in .env.production}
+
+  control-api:
+    environment:
+      # This is the switch that makes the platform refuse the development keys,
+      # use __Host- prefixed Secure cookies, and reject `seed`.
+      VANTAGE_ENV: production
+
+      # Must be the EXACT public origin of the terminal, scheme and all. CORS
+      # allows one origin and compares it exactly, so a mismatch here shows up
+      # in the browser as a CORS failure that reads like an application bug.
+      VANTAGE_PUBLIC_WEB_ORIGIN: ${VANTAGE_PUBLIC_WEB_ORIGIN:?the https origin of the terminal}
+
+      # Passed whole from the environment rather than assembled here.
+      #
+      # Assembling them inline left a connection string with an embedded
+      # credential field in this file, which the project's own gitleaks rule
+      # flags -- correctly, because that is the exact shape a real credential
+      # takes and the next person to edit the line might paste one in. Taking
+      # the whole URL as one value means no credential-shaped string exists in
+      # the repository at all, and no scanner rule has to be suppressed to keep
+      # it that way. (This comment avoids writing the shape out for the same
+      # reason: the first version of it tripped the rule by itself.)
+      VANTAGE_DATABASE_URL: ${VANTAGE_DATABASE_URL:?the app role connection string}
+      VANTAGE_MIGRATION_DATABASE_URL: ${VANTAGE_MIGRATION_DATABASE_URL:?the owner role connection string}
+
+      VANTAGE_DATA_ENCRYPTION_KEY: ${VANTAGE_DATA_ENCRYPTION_KEY:?generate with openssl rand -base64 32}
+      VANTAGE_SESSION_SIGNING_KEY: ${VANTAGE_SESSION_SIGNING_KEY:?generate with openssl rand -base64 32}
+      VANTAGE_QUANT_SERVICE_TOKEN: ${VANTAGE_QUANT_SERVICE_TOKEN:?generate with openssl rand -base64 32}
+
+  quant:
+    environment:
+      VANTAGE_QUANT_SERVICE_TOKEN: ${VANTAGE_QUANT_SERVICE_TOKEN:?}
+      VANTAGE_QUANT_READONLY_DATABASE_URL: ${VANTAGE_QUANT_READONLY_DATABASE_URL:?the read-only research connection string}
+
+  web:
+    build:
+      args:
+        # Baked at BUILD time, not read at runtime. Next inlines every
+        # NEXT_PUBLIC_ value into the client bundle, so changing this later
+        # means rebuilding the image, not restarting the container.
+        NEXT_PUBLIC_VANTAGE_API_BASE_URL: ${VANTAGE_PUBLIC_API_ORIGIN:?the https origin of the API}
+
+  # The only way in.
+  #
+  # cloudflared dials OUT to Cloudflare and holds the connection open, so the
+  # host needs no inbound port, no public IP, no port forwarding and no
+  # certificate of its own. Cloudflare terminates TLS at its edge and the
+  # tunnel carries traffic to these containers over the internal network.
+  #
+  # It joins the `edge` network only. It has no route to postgres or redis,
+  # which sit on `data`, so a compromise of this container reaches the two HTTP
+  # services and not the database.
+  #
+  # Put Cloudflare Access in front of BOTH hostnames in the dashboard. Access is
+  # what stops a stranger ever reaching the Vantage login page, which matters
+  # because that endpoint runs Argon2id at 64 MB per attempt and is the one
+  # place an unauthenticated caller can make this machine do real work.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: vantage-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?create the tunnel in the Cloudflare dashboard}
+    depends_on:
+      control-api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    networks:
+      - edge
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    cap_drop:
+      - ALL

@@ -3242,6 +3242,91 @@ anywhere else: a critical RCE in Next published between a clean local `npm
 audit` and the push, and these two urllib3 advisories. Both were hours old. The
 local checklist was green for both.
 
+## 30u. It could not be deployed at all
+
+The platform was asked to run somewhere reachable from any device. The first
+thing that turned up is that it could not have been started anywhere but a
+development machine.
+
+### No bootstrap path existed
+
+`seed` is the only caller of `CreateUser`, and `seed` refuses outside
+development and test, correctly, because the accounts it writes have passwords
+published in this repository. There is no HTTP route to create the first user
+either: `/admin/users` requires an existing admin session.
+
+So the guard was right and left nothing behind it. Deploy to production, run the
+migrations, and then discover there is no way to log in and no command that can
+make one.
+
+`create-admin` fills it. It reads the password from the operator rather than
+generating one, because a command that prints a password it chose puts that
+password into a terminal scrollback, a shell history and any log capturing the
+output, and leaves the operator holding a credential they did not pick. It reads
+without echo from a TTY, or from stdin when piped, so the password is never an
+argv entry that `ps` can read. It applies the same policy the HTTP layer applies,
+because a bootstrap path that accepted a weaker password than the application
+would be the weakest link on the account that matters most.
+
+It refuses once any administrator exists. Left able to mint administrators on a
+running system it would be a privilege escalation path for anyone who reaches
+the host; further administrators are created through the audited HTTP route.
+
+Verified against a scratch database rather than argued: create it empty, migrate,
+bootstrap, and the account appears with an Argon2id hash and no plaintext
+anywhere. Run it again and it refuses. Feed it a short password and the policy
+rejects it before any database work happens.
+
+### Serverless cannot host the control plane
+
+Vercel was the first suggestion and it cannot run this, which is worth recording
+because the reason is structural rather than a configuration problem.
+
+The control plane ingests market data every 2 seconds, evaluates strategies
+every 30, dispatches the outbox every 3, reconciles every 5 minutes, and holds
+state in memory between those ticks: the bar aggregator's forming bars, a regime
+tracker per instrument, the correlation matrix, the rate-limit buckets, the
+research circuit breaker.
+
+Serverless functions are request-scoped and cold-start. The 2-second loop has
+nowhere to live, and the forming bars would be discarded on every invocation,
+which is rule 9's frozen-series failure reached by design instead of by
+accident. Vercel can host the terminal. It cannot host the thing the terminal
+talks to.
+
+### The shape chosen
+
+A Cloudflare tunnel, with Cloudflare Access in front of both hostnames. The
+tunnel dials out, so the host needs no inbound port, no public IP and no
+certificate of its own. Every port in the compose file stays bound to
+`127.0.0.1`, so nothing is reachable even with the host firewall open.
+
+Access matters more than it sounds. The login endpoint runs Argon2id at 64 MB
+per attempt and is the one place an unauthenticated stranger can make the
+machine do real work. Access means they never reach it. Both are free.
+
+### Three findings from the project's own secret scanner
+
+The production overlay was written first with connection strings assembled
+inline, `postgres://role:${PASSWORD}@host/db`. The repository's own
+`vantage-postgres-url` rule flagged all three.
+
+That is the rule working. The shape is exactly what a real credential looks
+like, and the next person to edit the line might paste one in. So the overlay
+was restructured to take each URL whole from the environment, which removes the
+shape from the file entirely rather than suppressing the finding.
+
+The scanner then flagged the comment explaining the change, because it wrote the
+pattern out. Reworded.
+
+It then flagged the deployment guide, where the documented command is the one
+that builds the URL from a variable, so the shape is unavoidable. That is the
+one place an allowlist entry was added, and it is narrow enough to be provably
+safe: it matches only when the password position is exactly a `${UPPER_CASE}`
+reference, which a literal password cannot be. Verified by dropping a file
+containing a real literal password into the tree and watching the scanner catch
+it with the allowlist in place.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
