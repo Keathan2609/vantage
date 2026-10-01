@@ -391,6 +391,17 @@ export default function TradePage() {
                     type="button"
                     data-variant={side === "buy" ? "buy" : "sell"}
                     data-selected="true"
+                    /*
+                     * The only control in the terminal that places an order,
+                     * and the only one that carries a glow. See the shadow
+                     * rule in docs/DESIGN_SYSTEM.md: elevation here means
+                     * "this cannot be undone", not "this is important".
+                     *
+                     * It needs its own attribute because the side TOGGLE above
+                     * is also data-variant=buy/sell with data-selected=true,
+                     * and choosing a side is entirely reversible.
+                     */
+                    data-commit="true"
                     onClick={() => void submit()}
                     disabled={busy}
                   >

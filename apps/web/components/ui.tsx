@@ -95,16 +95,48 @@ export function Stat({
   value,
   sub,
   tone,
+  delta,
+  deltaTone,
 }: {
   label: string;
   value: ReactNode;
   sub?: ReactNode;
   tone?: "profit" | "loss" | "";
+  /**
+   * A change against a stated comparison — "+2.4%", "-18 bps", "3 fewer".
+   *
+   * Pre-formatted by the caller and never computed here: a component that did
+   * its own arithmetic on money would have to parse a decimal string into a
+   * float to do it, and this terminal does not do that. `lib/format.ts` is the
+   * only place a figure is turned into text.
+   *
+   * `sub` should then say what the comparison IS. A delta with no stated
+   * baseline is a number the reader cannot check.
+   */
+  delta?: string;
+  /**
+   * Whether the delta is good or bad — which is NOT the same as whether it is
+   * positive. A rising spread, a rising rejection rate and a rising drawdown
+   * are all increases and all bad, and colouring them green because they carry
+   * a plus sign would be actively misleading.
+   *
+   * Omit it entirely for a change that is neither: a count that moved, a
+   * version that incremented. The badge then renders in muted text, which is
+   * the honest answer to "is this good?" when the answer is "it depends".
+   */
+  deltaTone?: "profit" | "loss";
 }) {
   return (
     <div className="stat">
       <div className="stat-label">{label}</div>
-      <div className={`stat-value ${tone ?? ""}`}>{value}</div>
+      <div className="stat-line">
+        <div className={`stat-value ${tone ?? ""}`}>{value}</div>
+        {delta ? (
+          <span className="stat-delta" data-tone={deltaTone ?? "neutral"}>
+            {delta}
+          </span>
+        ) : null}
+      </div>
       {sub ? <div className="stat-sub">{sub}</div> : null}
     </div>
   );

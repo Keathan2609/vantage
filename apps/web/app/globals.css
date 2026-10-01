@@ -583,6 +583,42 @@ button[data-variant="sell"][data-selected="true"] {
   color: var(--text);
 }
 
+/*
+ * The only two shadows in this terminal.
+ *
+ * Both reference interfaces were measured for this. The exchange terminal has
+ * exactly two box-shadows on its entire page — a green glow on BUY and a red
+ * one on SELL — and zero elevation anywhere else. That is not a style choice
+ * dressed up as a principle: shadow there is a category marker meaning "this
+ * action cannot be undone", and it works because nothing else competes for it.
+ *
+ * `data-commit` is set only on the control that actually places the order,
+ * after the operator has reviewed it. Not on the side toggle, not on Review,
+ * not on Cancel — all of those are reversible.
+ *
+ * Adding a third shadow anywhere is a claim that a third thing is
+ * irreversible. If that is ever true, say so here and say what it is.
+ */
+button[data-commit="true"][data-variant="buy"] {
+  box-shadow: 0 0 14px 0 rgba(61, 153, 112, 0.55);
+}
+
+button[data-commit="true"][data-variant="sell"] {
+  box-shadow: 0 0 14px 0 rgba(207, 80, 68, 0.55);
+}
+
+/* A disabled commit is mid-submission, and a glow on a control that is not
+   accepting input would be a lie about what is clickable. */
+button[data-commit="true"]:disabled {
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[data-commit="true"] {
+    transition: none;
+  }
+}
+
 button[data-variant="danger"] {
   border-color: var(--loss-dim);
   color: var(--loss);
@@ -715,6 +751,60 @@ select:disabled {
   font-size: 16px;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
+}
+
+/*
+ * The figure and its change, on one baseline.
+ *
+ * `baseline` rather than `center` so the delta sits on the same line as the
+ * digits regardless of the value's length. Centering makes the badge drift up
+ * and down as the value gains or loses a character, which on a figure that
+ * updates is a visible twitch.
+ */
+.stat-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+/*
+ * A delta is a SECONDARY reading and is drawn as one: 10.5px against the
+ * value's 16px, and never in the value's own colour.
+ *
+ * Deliberately not a filled pill. A solid green chip beside a monetary figure
+ * reads as a second number of equal weight, and the reference dashboard this
+ * borrows from is a business dashboard where every increase is good. Here a
+ * rising drawdown is an increase and a disaster, so the tone is set by the
+ * caller from meaning, not from sign.
+ */
+.stat-delta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.stat-delta[data-tone="neutral"] {
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+}
+
+.stat-delta[data-tone="profit"] {
+  color: var(--profit);
+  background: rgba(61, 153, 112, 0.1);
+  border: 1px solid var(--profit-dim);
+}
+
+.stat-delta[data-tone="loss"] {
+  color: var(--loss);
+  background: rgba(207, 80, 68, 0.1);
+  border: 1px solid var(--loss-dim);
 }
 
 .stat-sub {

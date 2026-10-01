@@ -61,6 +61,29 @@ export default function OverviewPage() {
   const blocked = reconciliation.data?.automation_blocked ?? false;
   const mandate = authority.data?.authority ?? null;
 
+  /**
+   * How much of a configured risk budget is in use, as a label.
+   *
+   * The API has already done the division: `risk.utilisation[key]` is a
+   * decimal string. This only formats it, so no money is divided here and no
+   * figure is reconstructed from parts.
+   *
+   * The float is presentational and never returns to the server — the same
+   * exemption the risk meters on this page already rely on, and the only one
+   * the money rule allows.
+   *
+   * Returns undefined rather than "0%" when the figure is missing or the
+   * budget is untouched: a badge reading 0% is noise on five tiles at once,
+   * and a badge is for something worth looking at.
+   */
+  const budgetUsed = (key: string): string | undefined => {
+    const raw = risk.data?.utilisation?.[key];
+    if (raw === undefined) return undefined;
+    const fraction = Number.parseFloat(raw);
+    if (!Number.isFinite(fraction) || fraction <= 0) return undefined;
+    return `${Math.round(fraction * 100)}% used`;
+  };
+
   const nextEvent = (calendar.data?.events ?? [])
     .filter((event) => new Date(event.ScheduledAt).getTime() > now)
     .sort(
@@ -132,10 +155,22 @@ export default function OverviewPage() {
       >
         <StatStrip>
           <Stat label="Equity" value={money(portfolio?.equity, currency)} />
+          {/*
+            The deltas below are the share of a RISK BUDGET consumed, and every
+            one of them comes from `risk.utilisation` — a decimal string the
+            API already computed. Nothing here divides two figures.
+
+            The tone is loss, never profit: consuming a loss budget or an
+            exposure ceiling is never good news, however small the number. A
+            green badge on "8% of your daily loss limit" would be congratulating
+            the operator for losing money slowly.
+          */}
           <Stat
             label={"Day P&L"}
             value={signed(portfolio?.day_pnl, currency)}
             tone={tone(portfolio?.day_pnl)}
+            delta={budgetUsed("daily_loss")}
+            deltaTone={budgetUsed("daily_loss") ? "loss" : undefined}
             sub={`limit ${money(risk.data?.limits.max_daily_loss, currency)}`}
           />
           <Stat
@@ -152,11 +187,15 @@ export default function OverviewPage() {
           <Stat
             label="Free margin"
             value={money(portfolio?.free_margin, currency)}
-            sub={`used ${money(portfolio?.margin_used, currency)}`}
+            delta={budgetUsed("gross_exposure")}
+            deltaTone={budgetUsed("gross_exposure") ? "loss" : undefined}
+            sub={`used ${money(portfolio?.margin_used, currency)} of the exposure ceiling`}
           />
           <Stat
             label="Drawdown"
             value={percent(portfolio?.drawdown_fraction)}
+            delta={budgetUsed("drawdown")}
+            deltaTone={budgetUsed("drawdown") ? "loss" : undefined}
             sub={`peak ${money(portfolio?.peak_equity, currency)}`}
           />
         </StatStrip>
