@@ -633,24 +633,8 @@ func (s *Server) handleActivateKillSwitch(w http.ResponseWriter, r *http.Request
 			"This scope requires a target identifier.")
 		return
 	}
-	// A user may only halt their own accounts; only an admin may halt globally
-	// or halt someone else.
-	if scope == domain.KillScopeGlobal && !p.User.Role.CanAdminister() {
-		writeError(w, r, http.StatusForbidden, "forbidden",
-			"Only an administrator may activate a global kill switch.")
+	if !s.authoriseKillSwitchScope(w, r, p, scope, req.TargetID, "activate") {
 		return
-	}
-	if scope == domain.KillScopeAccount {
-		id, err := uuid.Parse(*req.TargetID)
-		if err != nil {
-			writeError(w, r, http.StatusUnprocessableEntity, "invalid_target",
-				"target_id must be a valid account identifier.")
-			return
-		}
-		if _, err := s.store.Accounts.AccountForUser(r.Context(), p.User.ID, id); err != nil {
-			writeStoreError(w, r, err, "Account not found.")
-			return
-		}
 	}
 
 	ks, err := s.store.Control.ActivateKillSwitch(r.Context(), scope, req.TargetID, req.Reason, p.User.ID)
@@ -686,11 +670,104 @@ func (s *Server) handleActivateKillSwitch(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// authoriseKillSwitchScope decides whether this principal may act on a halt of
+// this scope, and writes the refusal itself when they may not.
+//
+// ONE rule, used by both activation and deactivation, because the bug it
+// replaces was the predictable consequence of two separate rules written as
+// `if` ladders inside handlers: activation checked `global` and `account` and
+// silently permitted `user`, `broker` and `strategy`, while deactivation
+// checked nothing at all.
+//
+// The asymmetry that mattered: a trader could not create a global halt but
+// could remove one an administrator had placed, so the role that cannot make
+// the control could destroy it. A `switch` over the scope type means a new
+// scope cannot be added without the compiler pointing here.
+//
+// Nothing a trader could previously do to their OWN account is removed. They
+// keep account-scope halt over accounts they own, and cancel and flatten are
+// untouched — an operator stopping their own trading is never impeded.
+func (s *Server) authoriseKillSwitchScope(
+	w http.ResponseWriter, r *http.Request, p Principal,
+	scope domain.KillSwitchScope, targetID *string, verb string,
+) bool {
+	admin := p.User.Role.CanAdminister()
+	deny := func(what string) bool {
+		writeError(w, r, http.StatusForbidden, "forbidden",
+			"Only an administrator may "+verb+" "+what+".")
+		return false
+	}
+
+	switch scope {
+	case domain.KillScopeGlobal:
+		if !admin {
+			return deny("a global kill switch")
+		}
+	case domain.KillScopeBroker:
+		// A broker-scope halt matches every account on that broker, which in
+		// this build is every account there is. It reaches further than a
+		// global switch costs to ask for, so it carries the same bar.
+		if !admin {
+			return deny("a broker-wide kill switch")
+		}
+	case domain.KillScopeStrategy:
+		// Strategies are shared; halting one stops it for every account.
+		if !admin {
+			return deny("a strategy-wide kill switch")
+		}
+	case domain.KillScopeUser:
+		// Halting yourself is ordinary. Halting someone else is administration
+		// — which is what the original comment claimed and did not enforce.
+		if !admin {
+			if targetID == nil || *targetID != p.User.ID.String() {
+				return deny("another operator's trading")
+			}
+		}
+	case domain.KillScopeAccount:
+		// Ownership, not role: a trader may halt an account they own, and an
+		// admin may halt any.
+		if !admin {
+			if targetID == nil {
+				writeError(w, r, http.StatusUnprocessableEntity, "target_required",
+					"This scope requires a target identifier.")
+				return false
+			}
+			id, err := uuid.Parse(*targetID)
+			if err != nil {
+				writeError(w, r, http.StatusUnprocessableEntity, "invalid_target",
+					"target_id must be a valid account identifier.")
+				return false
+			}
+			if _, err := s.store.Accounts.AccountForUser(r.Context(), p.User.ID, id); err != nil {
+				writeStoreError(w, r, err, "Account not found.")
+				return false
+			}
+		}
+	default:
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_scope",
+			"Unknown kill switch scope.")
+		return false
+	}
+	return true
+}
+
 // handleDeactivateKillSwitch resumes trading within a scope.
 func (s *Server) handleDeactivateKillSwitch(w http.ResponseWriter, r *http.Request) {
 	p, _ := principalFrom(r.Context())
 	id, ok := parseUUID(w, r, chi.URLParam(r, "killSwitchID"), "Kill switch id")
 	if !ok {
+		return
+	}
+	// Load it before touching it: the rule depends on the SCOPE, and the
+	// request carries only an id. Removing a halt is the dangerous direction —
+	// activation at worst stops trading, deactivation resumes it — so it is
+	// authorised at least as strictly as activation.
+	ks, err := s.store.Control.KillSwitchByID(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, r, err, "Active kill switch not found.")
+		return
+	}
+	if !s.authoriseKillSwitchScope(w, r, p, ks.Scope, ks.TargetID, "deactivate") {
 		return
 	}
 	if err := s.store.Control.DeactivateKillSwitch(r.Context(), id, p.User.ID); err != nil {

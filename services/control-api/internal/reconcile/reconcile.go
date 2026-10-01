@@ -100,6 +100,16 @@ const (
 	TriggerPostFailure Trigger = "post_failure"
 )
 
+// executionFirstRunLookback is how far back the FIRST execution fetch reaches
+// on an account that has never reconciled.
+//
+// It applies only when there is no cursor. Once a cursor exists it anchors the
+// window on its own, however old it has become — see runLocked. Treating this
+// as a floor on every run is what let a frozen cursor be overtaken, and a
+// frozen cursor is the whole mechanism that stops an unresolved execution
+// issue closing itself.
+const executionFirstRunLookback = 7 * 24 * time.Hour
+
 // Report summarises one run.
 type Report struct {
 	RunID             uuid.UUID
@@ -218,8 +228,28 @@ func (s *Service) runLocked(ctx context.Context, account domain.Account,
 	if err != nil {
 		return report, fmt.Errorf("reconcile: load account state: %w", err)
 	}
-	since := s.clock.Now().Add(-7 * 24 * time.Hour)
-	if state.ExecutionsCursor != nil && state.ExecutionsCursor.After(since) {
+	// The seven days are a FIRST-RUN default and nothing else.
+	//
+	// Once a cursor exists the window is anchored on it, however old it has
+	// become. The previous form only honoured the cursor while it was newer
+	// than `now - 7d`, which quietly undid the freeze below: a cursor held
+	// still by an unresolved execution issue eventually falls behind the
+	// seven-day floor, `since` snaps forward past it, `captureBroker` stops
+	// fetching the execution that is being argued about, `Classify` cannot
+	// produce its fingerprint, and `closeVanishedIssues` resolves the issue
+	// with "the divergence is gone: this run re-examined the same evidence and
+	// did not find it".
+	//
+	// It had not re-examined anything. That is the precise failure the freeze
+	// exists to prevent — an unbooked venue execution closing its own issue
+	// and the account releasing its own halt — rebuilt out of a lookback
+	// constant, and it would have fired seven days in.
+	//
+	// The cost of anchoring is a fetch window that grows while something is
+	// unresolved. That is already the accepted trade below, and it is bounded
+	// by an operator resolving the issue.
+	since := s.clock.Now().Add(-executionFirstRunLookback)
+	if state.ExecutionsCursor != nil {
 		// Overlap the cursor slightly. An execution recorded with a timestamp
 		// marginally before the cursor would otherwise be skipped forever, and
 		// re-seeing one is free: the unique index refuses the duplicate.

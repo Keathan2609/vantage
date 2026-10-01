@@ -2867,6 +2867,194 @@ It is more useful recorded as what it is: **the gap between a green local
 checklist and a green pipeline was six defects wide, and nothing available
 before publication could measure it.**
 
+## 30r. Does it survive a week? No — and the reason was not what anyone was looking for
+
+The question asked was whether this platform runs unattended for a week or
+quietly stops. Two audits were run against it: one for resource exhaustion and
+drift over time, one for authorization and lifetime bugs that a scanner cannot
+see. Four of the findings are fixed here. The first is the answer to the
+question and it is worse than "it stops".
+
+### It does not survive one day, and it does not stop
+
+**Nothing in the running system ever refreshes an FX rate.** `UpsertFXRate`
+has exactly two callers outside the store: the seeder, once, and a hook that
+only fires inside a market replay. There is no scheduler job, and
+`fx.StoreRateSource` only reads what is there. The converter's maximum age is
+24 hours (`internal/app/app.go`).
+
+The account is ZAR and every instrument is USD-quoted, so every valuation
+needs a conversion. Twenty-four hours after a seed, they all fail.
+
+Half of what follows is correct. `risk.Size` returns `ErrSizingUnavailable`,
+so no autonomous order can be placed — that is failing closed, and it is the
+behaviour the rules ask for.
+
+The other half is not. `portfolio.valuePosition` does **not** fail closed: it
+sets a `ValuationNote` and returns the view with `Valued = false` and no
+error. `portfolio.aggregate` then counts that position in `Unvalued` and
+`continue`s — so it contributes **nothing** to unrealised P&L, nothing to
+margin used, nothing to gross or net exposure. Equity becomes balance plus
+zero. Drawdown is measured against it. Free margin looks full.
+
+The book does not report an error. It reports a smaller, healthier book than
+the one that exists, and every ceiling in the risk engine passes more easily
+because of it.
+
+`Snapshot.UnvaluedPositions` has carried the warning since it was written. Its
+comment in `handlers_read.go` says, in so many words, that a value above zero
+means the figures beside it understate risk. Searching the tree for every
+consumer of that field returns: the struct, the counter that sets it, and one
+JSON response field. **Nothing reads it.** Not a risk check, not the OMS, not
+readiness. `/health/ready` reports `ready`, `HEALTHY`, `quant: ok`, and the
+only truthful signal in the entire system is an ERROR log line about a stale
+rate, twice a minute.
+
+So the shape of the failure is: day one, it trades; day two, it silently stops
+trading autonomously while reporting health, and any manual order is assessed
+against a book that is missing its open positions.
+
+**Fixed** by making the engine refuse: `CheckBookIsValued` fails when
+`UnvaluedPositions > 0`, with the code `book_not_valued`. It is the fail-closed
+rule applied to the one input every other check depends on.
+
+It exempts reducing orders, and that exemption is the point rather than a
+softening. Refusing to let an operator **close** a position because the
+platform cannot price it would hold them in the position precisely while the
+system admits it does not know what that position is worth — the trap the
+reducing-order rule exists to prevent, and which three separate checks were
+once found setting.
+
+What is NOT fixed here: the rates still do not refresh. A real FX source is a
+provider behind the `fx.RateSource` seam and this build may not contact a third
+party, so the honest position is that the platform now refuses rather than
+guesses, and the operator is told why. Re-stamping a held rate with a fresh
+timestamp would have made the symptom disappear by fabricating data, which is
+the one thing the market-data rules forbid outright.
+
+### A halt that releases itself after seven days
+
+Rule 7's corollary — "not re-detected" must mean "fixed", never "no longer
+examined" — is implemented by freezing the execution cursor while any
+execution-derived issue is open. The freeze is correct, and the comment above
+it explains at length why freezing beats widening.
+
+The lookback underneath it undid the whole thing:
+
+    since := now - 7d
+    if cursor != nil && cursor.After(since) { since = cursor - 1m }
+
+While the frozen cursor is newer than seven days, it anchors the window. Once
+wall time passes it, `cursor.After(since)` is false, `since` snaps **forward**
+past the frozen cursor, the venue capture stops fetching the execution that is
+being argued about, `Classify` cannot produce its fingerprint, and
+`closeVanishedIssues` resolves the issue with *"the divergence is gone: this
+run re-examined the same evidence and did not find it."*
+
+It had re-examined nothing. An unbooked venue execution would have closed its
+own issue and the account would have released its own halt — the exact incident
+the freeze was written for, rebuilt out of a lookback constant, firing seven
+days in.
+
+**Fixed:** the seven days are now `executionFirstRunLookback` and apply only
+when there is no cursor. Once a cursor exists it anchors the window however old
+it has become. The cost is a fetch that grows while something is unresolved,
+which the surrounding comment had already accepted as the price of the freeze.
+
+### A trader could lift a halt an administrator placed
+
+`handleDeactivateKillSwitch` performed **no** scope or role check: it parsed a
+UUID and called the store, which has no predicate either. The route sits in the
+trader-or-admin group, while activating a *global* switch is admin-only. So the
+role that cannot create the control could remove it, and the ids are handed out
+by `GET /kill-switches`, which any authenticated user may call.
+
+Activation was incomplete in the same way. Its comment claims *"only an admin
+may halt globally or halt someone else"*; the code checked `global` and
+`account` and let `user`, `broker` and `strategy` through unexamined. A trader
+could halt another operator by user id, or halt every account on a broker —
+which in this build is every account there is, making it a global halt reached
+without the admin check that guards the global scope.
+
+**Fixed** with a single `authoriseKillSwitchScope` used by both paths, written
+as a `switch` over the scope type so a new scope cannot be added without the
+compiler pointing at it. That is the real repair: both bugs were the
+predictable result of an authorization rule written as an `if` ladder inside a
+handler, covering the branches someone happened to think of.
+
+Nothing a trader could do to their own account is removed. Account-scope halt
+over an owned account, cancel and flatten are all untouched — an operator
+stopping their own trading is never impeded.
+
+### The login rate limit was bypassable with a header
+
+`middleware.RealIP` was the **first** middleware on the router. chi ships it
+marked `Deprecated: RealIP is vulnerable to IP spoofing` (GHSA-3fxj-6jh8-hvhx,
+GHSA-rjr7-jggh-pgcp, GHSA-9g5q-2w5x-hmxf): it rewrites `r.RemoteAddr` from
+`True-Client-IP`, `X-Real-IP` or the leftmost `X-Forwarded-For`,
+unconditionally, with no trusted-proxy list.
+
+The defence was downstream in `clientIP`, which honours `X-Forwarded-For` only
+behind a configured trusted proxy. It could not work: `RealIP` had already
+poisoned `RemoteAddr` before `clientIP` read it. The trusted-proxy branch is
+also dead — nothing in production sets the flag.
+
+The login limiter keys on the client address, so a caller presenting a fresh
+`X-Forwarded-For` per request got a fresh full token bucket every time. That
+removed the only cost control on an endpoint that runs Argon2id at **64 MiB**
+per attempt — including on the unknown-user path, which hashes a dummy to
+equalise timing. A hundred concurrent requests is about 6.4 GB. It also let an
+attacker write any address they chose into `audit_events.ip_address` and
+`sessions.ip_address`; the hash chain still verifies, because it signs whatever
+it is given.
+
+**Fixed** by deleting one line. `clientIP` was always correct.
+
+The guard test is the interesting part. `TestAClientCannotSpoofItsAddressUnlessAProxyIsTrusted`
+passed throughout, because it calls `clientIP` **directly on a bare
+httptest request** — no middleware ever runs. The helper was right; the stack
+above it was not, and a test of the helper could not see that. There are now
+two tests through the router, one behavioural across all three headers and one
+asserting the middleware stays out of `routes()`. Verified by putting it back:
+the second fails with *"middleware.RealIP is back in the router"*.
+
+### And the disk
+
+Docker's default `json-file` driver is unbounded and no service declared any
+rotation, while Postgres runs with `log_connections`, `log_disconnections` and
+`log_min_duration_statement=500` against a pool that recycles every 30 minutes.
+On Windows that grows inside the Docker Desktop VHDX and is never reclaimed.
+All five services now cap at 50 MB × 5.
+
+### What is recorded but not fixed
+
+The longevity audit found more than was repaired here, and the rest is listed
+in section 31 rather than quietly dropped. The largest is retention:
+`market_quotes` gains roughly 179,000 rows a day — about 27 MB, 10 GB a year —
+and the only scheduled deletion anywhere in the module is the session sweep.
+Several tables carry append-only triggers and cannot be pruned at all by
+design, which makes an archive strategy a real design question rather than a
+cleanup job.
+
+Also unrepaired: `strategy_runs` still grows unbounded under any *persistent*
+pre-flight refusal, because only the history-refusal path was given a bar time.
+A halted account writes about 23,900 rows a day through the remaining nil-bar
+skips. And `vantage_marketdata_latest_bar_age_seconds` is defined and never
+set — the one gauge that would catch rule 9's frozen-bar failure recurring is
+dead.
+
+### The common shape
+
+Every one of the four is the same thing in a different place: **a control that
+the repository's own documentation and tests describe as present, which is not
+present, because the check sits one layer away from where the decision is
+made.** `UnvaluedPositions` documents the risk and is read by nobody. The
+cursor freeze is reasoned about at length and overridden by a constant above
+it. The kill-switch comment states a rule the code does not enforce. `clientIP`
+implements the spoofing defence and runs after the middleware that defeats it.
+
+In three of the four, a test existed and passed.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -2911,6 +3099,48 @@ Stated plainly, because a report that lists only successes is not useful.
   is checked in both directions so an entry cannot outlive the fixture it
   describes. Lengthening any of them stays a separate decision with its own
   constraint -- each fixture needs its own date range.
+
+- **Nothing refreshes an FX rate, so a rate goes stale 24 hours after a
+  seed.** The platform now REFUSES rather than valuing a position at zero
+  (section 30r), which closes the dangerous half. The rate still does not
+  refresh: a real source is a provider behind the `fx.RateSource` seam and this
+  build may not contact a third party. Re-stamping a held rate would make the
+  symptom vanish by fabricating data.
+
+- **There is no retention anywhere except the session sweep.** `market_quotes`
+  gains roughly 179,000 rows a day — about 27 MB, 10 GB a year — at the 2-second
+  ingest interval across six instruments. `reconciliation_runs` gains 288 a day
+  per account. `outbox` and `command_idempotency` are never pruned, the latter
+  carrying an index on `created_at` that was plainly added for a job nobody
+  wrote. Several tables (`audit_events`, `decision_snapshots`, `transactions`,
+  `fills`) carry append-only triggers and cannot be deleted from at all, so they
+  need an archive design rather than a cleanup job. `docs/COMPLIANCE_READINESS.md`
+  already records retention as Not built; this quantifies it.
+
+- **`strategy_runs` still grows unbounded under a persistent refusal.** Only
+  the history-refusal path was given a bar time, so the per-bar unique index
+  deduplicates that one. Every other pre-flight refusal — reconciliation
+  blocked, feed unhealthy, authority expired, kill switch active, research
+  service down — still records with a nil bar time, which the partial index
+  cannot dedupe and `PurgeStrategyRunsInRange` cannot delete. A halted account
+  writes about 23,900 rows a day.
+
+- **`vantage_marketdata_latest_bar_age_seconds` is defined and never set.**
+  Rule 9 exists because the bar series silently froze once; the one gauge that
+  would catch it recurring has no setter in production code. There is also no
+  gauge for FX rate age and no heartbeat for "last successful strategy pass",
+  and readiness checks database, brokers, quant and the reconciliation verdict
+  but not market-data freshness.
+
+- **Nothing warns before a trading authority expires.** The dev seed grants
+  three years. On the day it lapses, `ActiveAuthorityForAccount` still returns
+  the row, `Effective` refuses, the scheduler's strategy loop silently
+  `continue`s without logging, and the platform stops trading with no alert and
+  no readiness signal.
+
+- **`GET /admin/audit/verify` stops verifying past 10,000 events.** It checks
+  sequences 1…10000 and reports `verified: true` whatever `head_sequence` says,
+  so the most recent history — where tampering would be — is never examined.
 
 - **Accessibility is not tested at all.** No axe run, no keyboard-navigation
   test, no screen-reader pass. The terminal is a single-operator tool, which is

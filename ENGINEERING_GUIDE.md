@@ -303,6 +303,50 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   `http://localhost:8080`, so set it to match or every suite fails at start-up
   looking like a dead control plane.
 
+- **A position that cannot be PRICED is not a position worth zero, and the
+  portfolio code does not say so by itself.** `valuePosition` degrades on a
+  conversion failure -- it sets a note and returns `Valued = false` with no
+  error -- and `aggregate` then COUNTS it in `Unvalued` and skips it. The
+  position contributes nothing to unrealised P&L, margin used or gross
+  exposure, so every ceiling in the risk engine is computed against a book that
+  is missing it and they all pass more easily. The snapshot does not look
+  broken; it looks healthy.
+
+  Nothing refreshes an FX rate in the running system -- `UpsertFXRate` has two
+  callers, the seeder and a replay hook -- and the converter's maximum age is
+  24 hours, so this is reachable one day after a seed. `CheckBookIsValued` now
+  refuses to OPEN while `UnvaluedPositions > 0`, and exempts reducing orders
+  for the usual reason: a platform that cannot price your position must not
+  also refuse to let you close it.
+
+- **A lookback floor can silently undo a frozen cursor.** Reconciliation
+  freezes the execution cursor while an execution-derived issue is open, which
+  is the whole mechanism behind rule 7's corollary. The `now - 7d` floor
+  underneath it used to override the frozen cursor once the cursor aged past
+  seven days, at which point the window moved forward, the evidence stopped
+  being fetched, and `closeVanishedIssues` closed the issue as "not
+  re-detected". The lookback is a FIRST-RUN default only; a cursor, once it
+  exists, anchors the window however old it gets.
+
+- **An authorization rule written as an `if` ladder inside a handler will miss
+  a branch.** Kill-switch activation checked `global` and `account` and let
+  `user`, `broker` and `strategy` through; deactivation checked nothing at all,
+  so a trader could lift a global halt an admin had placed. Both are now one
+  `switch` over the scope type, shared by both paths, so a new scope cannot be
+  added without the compiler pointing at it. Prefer a route-level gate, or a
+  shared exhaustive helper -- never a per-handler ladder.
+
+- **`middleware.RealIP` must stay out of the router.** chi ships it marked
+  Deprecated as spoofable. It was the FIRST middleware here, rewriting
+  `r.RemoteAddr` from attacker-controlled headers before `clientIP` could apply
+  its trusted-proxy gate -- so the login limiter could be given a fresh bucket
+  per request, on an endpoint that runs Argon2id at 64 MiB per attempt. If a
+  proxy is ever deployed, set `ctxTrustProxy` from configuration instead.
+
+  The guard test passed the entire time, because it called `clientIP` directly
+  on a bare `httptest.NewRequest` and no middleware ran. **Test the stack, not
+  the helper** -- the helper was always correct.
+
 - **The local venv's mypy is NOT the mypy CI runs, and it is weaker.**
   `pyproject.toml` declares `mypy>=1.13,<2.0`; the venv on this machine holds
   **2.3.1**, outside that range. CI honours the constraint, so the two tools

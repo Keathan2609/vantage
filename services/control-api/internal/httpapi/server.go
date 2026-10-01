@@ -195,7 +195,26 @@ func (s *Server) Handler() http.Handler { return s.router }
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
 
-	r.Use(middleware.RealIP)
+	// middleware.RealIP is deliberately NOT used.
+	//
+	// chi ships it marked Deprecated as spoofable (GHSA-3fxj-6jh8-hvhx,
+	// GHSA-rjr7-jggh-pgcp, GHSA-9g5q-2w5x-hmxf): it rewrites r.RemoteAddr from
+	// True-Client-IP, X-Real-IP or the leftmost X-Forwarded-For
+	// unconditionally, with no trusted-proxy list.
+	//
+	// It used to be the FIRST middleware here, which defeated the trusted-proxy
+	// gate in clientIP by poisoning RemoteAddr before clientIP ever read it.
+	// The login limiter keys on the client address, so a caller could present a
+	// fresh X-Forwarded-For per request and get a fresh full token bucket every
+	// time — removing the only cost control on an endpoint that runs Argon2id
+	// at 64 MiB per attempt, including for unknown users. It also let an
+	// attacker write any address they liked into the audit chain and the
+	// session record; the hash chain still verified, because it signs whatever
+	// it is given.
+	//
+	// clientIP already does the right thing with an untouched RemoteAddr. If a
+	// reverse proxy is ever deployed, set ctxTrustProxy from configuration —
+	// do not reinstate this.
 	r.Use(s.requestIDMiddleware)
 	r.Use(s.recoverer)
 	r.Use(s.securityHeaders)

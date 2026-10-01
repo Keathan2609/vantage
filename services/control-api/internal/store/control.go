@@ -214,6 +214,23 @@ func (s *ControlStore) activeKillSwitch(ctx context.Context, scope domain.KillSw
 	return ks, mapError(err)
 }
 
+// KillSwitchByID loads one switch, active or not.
+//
+// Deactivation needs it: the authorisation rule depends on the switch's SCOPE,
+// and the request carries only an id. Without this the handler had nothing to
+// decide on and so decided nothing, which let a trader lift a global halt an
+// administrator had placed.
+func (s *ControlStore) KillSwitchByID(ctx context.Context, id uuid.UUID) (domain.KillSwitch, error) {
+	var ks domain.KillSwitch
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, scope, target_id, active, reason, activated_by, activated_at,
+		       deactivated_by, deactivated_at, created_at, updated_at
+		FROM kill_switches WHERE id = $1`, id).
+		Scan(&ks.ID, &ks.Scope, &ks.TargetID, &ks.Active, &ks.Reason, &ks.ActivatedBy,
+			&ks.ActivatedAt, &ks.DeactivatedBy, &ks.DeactivatedAt, &ks.CreatedAt, &ks.UpdatedAt)
+	return ks, mapError(err)
+}
+
 // DeactivateKillSwitch resumes trading within a scope.
 func (s *ControlStore) DeactivateKillSwitch(ctx context.Context, id uuid.UUID, actor uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `

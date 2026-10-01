@@ -272,6 +272,40 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 		Code: domain.RejectDrawdown,
 	})
 
+	// --- Is the book even knowable? ---------------------------------------
+	//
+	// Every ceiling above and below this point is computed from the snapshot,
+	// and `portfolio.aggregate` COUNTS an unpriceable position and then skips
+	// it: it adds nothing to unrealised P&L, nothing to margin used, nothing
+	// to gross exposure. So a book with one unvalued position does not report
+	// an error — it reports a smaller, healthier book than the one that
+	// exists, and every limit here passes more easily because of it.
+	//
+	// A stale FX rate is sufficient to cause this, and it is reached in one
+	// day: the converter's maximum age is 24 hours and nothing in the running
+	// system refreshes a rate. `Snapshot.UnvaluedPositions` has carried the
+	// warning since it was written, and until now was read only by a JSON
+	// field.
+	//
+	// Reducing is exempt, and that is not a softening. Refusing to let an
+	// operator CLOSE a position because the platform cannot price it is
+	// exactly the trap the reducing-order rule exists to prevent — the
+	// operator would be held in a position precisely while the system admits
+	// it does not know what that position is worth.
+	bookValued := in.Snapshot.UnvaluedPositions == 0
+	add(domain.RiskCheckResult{
+		Name:     domain.CheckBookIsValued,
+		Passed:   reducing || bookValued,
+		Limit:    "0",
+		Observed: fmt.Sprint(in.Snapshot.UnvaluedPositions),
+		Message: fmt.Sprintf(
+			"%d open position(s) could not be priced, so exposure, margin and "+
+				"loss figures understate the real book. Opening is refused until "+
+				"every position can be valued; closing is still allowed.",
+			in.Snapshot.UnvaluedPositions),
+		Code: domain.RejectBookNotValued,
+	})
+
 	// --- Position and order counts ----------------------------------------
 	positionsOK := reducing || in.OpenPositions < in.Limits.MaxOpenPositions ||
 		(in.ExistingPosition != nil && in.ExistingPosition.Side == in.Intent.Side)

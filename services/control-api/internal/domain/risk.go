@@ -121,8 +121,23 @@ const (
 	CheckDrawdown             RiskCheckName = "max_drawdown"
 	CheckSpread               RiskCheckName = "max_spread"
 	CheckEventRisk            RiskCheckName = "event_risk"
-	CheckAccountTrading       RiskCheckName = "account_trading_enabled"
-	CheckInstrumentEnabled    RiskCheckName = "instrument_enabled"
+	// CheckBookIsValued refuses to open while any open position could not be
+	// priced.
+	//
+	// An unpriced position contributes NOTHING to unrealised P&L, margin used
+	// or gross exposure — `portfolio.aggregate` counts it and skips it — so
+	// every exposure and loss ceiling below is computed against a book that is
+	// missing a position. The numbers do not look wrong; they look good. A
+	// stale FX rate is enough to cause it.
+	//
+	// This is the "fail closed" rule applied to the one input every other
+	// check depends on. It is NOT an exposure ceiling, and it exempts reducing
+	// orders for the same reason they all do: refusing to let an operator
+	// close a position because the platform cannot value it is how you trap
+	// someone in the position that is hurting them.
+	CheckBookIsValued      RiskCheckName = "book_is_valued"
+	CheckAccountTrading    RiskCheckName = "account_trading_enabled"
+	CheckInstrumentEnabled RiskCheckName = "instrument_enabled"
 
 	// The trading authority's own numeric ceilings.
 	//

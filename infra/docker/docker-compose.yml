@@ -23,6 +23,21 @@ services:
     image: postgres:17.6-alpine
     container_name: vantage-postgres
     restart: unless-stopped
+    # Docker's default json-file driver is UNBOUNDED. Nothing here rotates
+    # without it, and these services are `restart: unless-stopped`, so the
+    # logs outlive every container restart and grow for as long as the stack
+    # runs. On Windows that lands inside the Docker Desktop VHDX, which grows
+    # and is never reclaimed.
+    #
+    # 50 MB x 5 caps each service at 250 MB. Postgres is the loudest by
+    # configuration -- log_connections, log_disconnections and
+    # log_min_duration_statement are all on below, against a pool that recycles
+    # connections every 30 minutes.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       POSTGRES_DB: vantage
       POSTGRES_USER: vantage_superuser
@@ -72,6 +87,21 @@ services:
     image: redis:7.4-alpine
     container_name: vantage-redis
     restart: unless-stopped
+    # Docker's default json-file driver is UNBOUNDED. Nothing here rotates
+    # without it, and these services are `restart: unless-stopped`, so the
+    # logs outlive every container restart and grow for as long as the stack
+    # runs. On Windows that lands inside the Docker Desktop VHDX, which grows
+    # and is never reclaimed.
+    #
+    # 50 MB x 5 caps each service at 250 MB. Postgres is the loudest by
+    # configuration -- log_connections, log_disconnections and
+    # log_min_duration_statement are all on below, against a pool that recycles
+    # connections every 30 minutes.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     # Redis holds rate-limit counters and bounded caches only. It is never the
     # source of truth for financial state, so persistence is disabled and a
     # cold start is harmless.
@@ -112,6 +142,21 @@ services:
       dockerfile: Dockerfile
     container_name: vantage-control-api
     restart: unless-stopped
+    # Docker's default json-file driver is UNBOUNDED. Nothing here rotates
+    # without it, and these services are `restart: unless-stopped`, so the
+    # logs outlive every container restart and grow for as long as the stack
+    # runs. On Windows that lands inside the Docker Desktop VHDX, which grows
+    # and is never reclaimed.
+    #
+    # 50 MB x 5 caps each service at 250 MB. Postgres is the loudest by
+    # configuration -- log_connections, log_disconnections and
+    # log_min_duration_statement are all on below, against a pool that recycles
+    # connections every 30 minutes.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,6 +205,21 @@ services:
       dockerfile: Dockerfile
     container_name: vantage-quant
     restart: unless-stopped
+    # Docker's default json-file driver is UNBOUNDED. Nothing here rotates
+    # without it, and these services are `restart: unless-stopped`, so the
+    # logs outlive every container restart and grow for as long as the stack
+    # runs. On Windows that lands inside the Docker Desktop VHDX, which grows
+    # and is never reclaimed.
+    #
+    # 50 MB x 5 caps each service at 250 MB. Postgres is the loudest by
+    # configuration -- log_connections, log_disconnections and
+    # log_min_duration_statement are all on below, against a pool that recycles
+    # connections every 30 minutes.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     depends_on:
       postgres:
         condition: service_healthy
@@ -200,6 +260,21 @@ services:
       dockerfile: apps/web/Dockerfile
     container_name: vantage-web
     restart: unless-stopped
+    # Docker's default json-file driver is UNBOUNDED. Nothing here rotates
+    # without it, and these services are `restart: unless-stopped`, so the
+    # logs outlive every container restart and grow for as long as the stack
+    # runs. On Windows that lands inside the Docker Desktop VHDX, which grows
+    # and is never reclaimed.
+    #
+    # 50 MB x 5 caps each service at 250 MB. Postgres is the loudest by
+    # configuration -- log_connections, log_disconnections and
+    # log_min_duration_statement are all on below, against a pool that recycles
+    # connections every 30 minutes.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     depends_on:
       control-api:
         condition: service_started

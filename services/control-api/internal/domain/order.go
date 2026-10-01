@@ -398,10 +398,13 @@ const (
 	RejectInsufficientMargin   RejectCode = "insufficient_margin"
 	RejectDailyLoss            RejectCode = "daily_loss_limit_reached"
 	RejectDrawdown             RejectCode = "drawdown_limit_reached"
-	RejectMaxPositions         RejectCode = "max_open_positions"
-	RejectMaxPendingOrders     RejectCode = "max_pending_orders"
-	RejectExposureLimit        RejectCode = "exposure_limit_breached"
-	RejectConcentration        RejectCode = "concentration_limit_breached"
+	// RejectBookNotValued means at least one open position could not be
+	// priced, so every exposure and loss figure understates the real book.
+	RejectBookNotValued    RejectCode = "book_not_valued"
+	RejectMaxPositions     RejectCode = "max_open_positions"
+	RejectMaxPendingOrders RejectCode = "max_pending_orders"
+	RejectExposureLimit    RejectCode = "exposure_limit_breached"
+	RejectConcentration    RejectCode = "concentration_limit_breached"
 	// RejectCorrelatedExposure refuses a proposal that measured correlation
 	// shows is effectively adding to an existing position. Distinct from
 	// concentration, which counts instruments rather than positions.

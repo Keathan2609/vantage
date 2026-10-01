@@ -506,6 +506,7 @@ func TestEveryDocumentedCheckIsEvaluated(t *testing.T) {
 		domain.CheckEventRisk,
 		domain.CheckDailyLoss,
 		domain.CheckDrawdown,
+		domain.CheckBookIsValued,
 		domain.CheckOrderQuantity,
 		domain.CheckOrderNotional,
 		domain.CheckStopLossRequired,
