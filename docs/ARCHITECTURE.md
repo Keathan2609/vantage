@@ -32,7 +32,7 @@ the system closest to the money.
 
 ## Planes
 
-### Control plane — `services/control-api` (Go)
+### Control plane -- `services/control-api` (Go)
 
 Owns authentication, authorisation, accounts, orders, positions, the ledger,
 risk, trading authority, kill switches, reconciliation, market-data ingestion,
@@ -64,7 +64,7 @@ both are the kind of rule that decays the moment it is only a convention:
 
 - **`booking` holds no broker adapter.** It cannot ask the venue anything. It
   is given a fill and told where the fill came from, so the accounting cannot
-  depend on who is calling — which is the whole point of there being one
+  depend on who is calling -- which is the whole point of there being one
   accounting path for ordinary execution and for recovery.
 - **`booking` is the only package that appends a fill.** Any second writer
   would be a second, subtly different, opinion about money.
@@ -77,7 +77,7 @@ snapshots, decides using pure functions in `domain` and `reconcile.Classify`,
 and writes only through `booking` and a narrow repair path in `store`. It has
 no privileged route into the ledger.
 
-### Research plane — `services/quant` (Python, FastAPI)
+### Research plane -- `services/quant` (Python, FastAPI)
 
 Indicators, 12 strategies, the backtester, the ML pipeline and the scanner.
 Stateless with respect to trading: it is given the data it needs in the request
@@ -85,37 +85,37 @@ or reads it through its read-only role, and it answers.
 
 The control plane calls it over HTTP with a shared bearer token, behind a
 circuit breaker and a timeout. When the research service is unreachable, the
-control plane's answer is "no signal" — never "trade without the filter".
+control plane's answer is "no signal" -- never "trade without the filter".
 
-### Presentation — `apps/web` (Next.js 16, TypeScript strict)
+### Presentation -- `apps/web` (Next.js 16, TypeScript strict)
 
 A client-rendered terminal. It holds no business rule: every refusal it shows
 comes from the API with a machine-readable code, and it never computes a limit,
 a size or a P&L figure. Money arrives as decimal strings and stays strings;
 `lib/format.ts` formats them without ever constructing a float.
 
-### Storage — PostgreSQL
+### Storage -- PostgreSQL
 
 60 tables. The database is not a passive store; it is the last line of several
 invariants:
 
-- `accounts_paper_only_ck`, `broker_connections_mock_only_ck` — mode ceilings
-- `orders_account_idempotency_uniq` — one order per idempotency key per account
-- `fills_broker_fill_uniq` — a venue fill cannot be recorded twice
-- `positions_one_open_per_instrument_uniq` — no accidental parallel positions
-- `transactions_account_sequence_uniq` — a gapless per-account ledger sequence
-- `kill_switches_active_global_uniq` — one active global switch, not five
-- `reconciliation_issues_open_fingerprint_uniq` — a partial unique index over
+- `accounts_paper_only_ck`, `broker_connections_mock_only_ck` -- mode ceilings
+- `orders_account_idempotency_uniq` -- one order per idempotency key per account
+- `fills_broker_fill_uniq` -- a venue fill cannot be recorded twice
+- `positions_one_open_per_instrument_uniq` -- no accidental parallel positions
+- `transactions_account_sequence_uniq` -- a gapless per-account ledger sequence
+- `kill_switches_active_global_uniq` -- one active global switch, not five
+- `reconciliation_issues_open_fingerprint_uniq` -- a partial unique index over
   `(account_id, fingerprint) WHERE resolved_at IS NULL`: one open issue per
   distinct problem, however many times it is re-detected, while the same
   problem recurring after a resolution is a new incident with its own history
-- `order_state_transitions_repair_ck` — a transition claiming to be a repair
+- `order_state_transitions_repair_ck` -- a transition claiming to be a repair
   must name the reconciliation issue that justified it, so a reconstructed
   state change can never be mistaken for one the venue reported at the time
-- `fills_ingest_source_ck` — every fill declares how it arrived
+- `fills_ingest_source_ck` -- every fill declares how it arrived
   (`execution_response`, `execution_poll` or `reconciliation_import`)
-- `risk_limits_risk_ceiling_ck` — no risk-per-trade above 10%, ever
-- `strategy_versions_paper_ceiling_ck` — no strategy above PAPER in this build
+- `risk_limits_risk_ceiling_ck` -- no risk-per-trade above 10%, ever
+- `strategy_versions_paper_ceiling_ck` -- no strategy above PAPER in this build
 - append-only triggers on `audit_events`, `transactions`, `fills`,
   `order_state_transitions`, `decision_snapshots` and the three history tables
 
@@ -129,14 +129,14 @@ touches Redis.
 ## Data flow: a manual order
 
 1. The browser mints an idempotency key when the operator opens the review
-   panel — once per intent, not once per click.
+   panel -- once per intent, not once per click.
 2. `POST /api/v1/orders` authenticates the session cookie, checks the CSRF
    header, requires the `trader` role and confirms account ownership.
 3. `oms.Submit` runs phase A: execution mode, trading authority, kill switches,
    market-data freshness, session state, instrument rules, then the risk
    engine.
 4. Phase B, one transaction: claim the idempotency key, write the order and its
-   decision snapshot — or write the rejection and stop.
+   decision snapshot -- or write the rejection and stop.
 5. Phase C: call the broker adapter with **no transaction open**.
 6. Phase D, one transaction: apply fills, update the position, append ledger
    transactions, append the state transition, append the audit event.
@@ -163,13 +163,13 @@ gate because there is no other pipeline to skip it into.
 A run is a comparison, then a decision, then at most a repair. The order of the
 first three steps is the design:
 
-1. Take the **local** snapshot first — orders, fills already booked, positions,
+1. Take the **local** snapshot first -- orders, fills already booked, positions,
    balances, the ledger-derived balance.
 2. Take the **broker** snapshot, using the local snapshot to know what to ask
    about: `FetchOpenOrders` omits filled orders, so every local order the open
    list does not cover is resolved individually by client id. Skipping that
    step made a filled order look like it had vanished from the venue.
-3. `reconcile.Classify(local, broker, tolerance)` — a **pure function**
+3. `reconcile.Classify(local, broker, tolerance)` -- a **pure function**
    returning findings. No database handle, no adapter, no clock. Every branch
    of the taxonomy is unit-testable by constructing two snapshots.
 4. Persist each finding as an issue, deduplicated by fingerprint.
@@ -208,8 +208,8 @@ testable.
 Market sessions resolve in the venue's IANA zone (New York for the FX and
 metals calendar), so the weekly open and close move correctly across
 daylight-saving changes instead of drifting an hour twice a year. Timestamps
-are stored in UTC and truncated to microseconds — Postgres `timestamptz`
-resolution — so a value read back hashes identically to the value written,
+are stored in UTC and truncated to microseconds -- Postgres `timestamptz`
+resolution -- so a value read back hashes identically to the value written,
 which the audit chain depends on.
 
 ## Money

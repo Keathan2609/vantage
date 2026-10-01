@@ -131,7 +131,7 @@ func RequestID(ctx context.Context) string {
 }
 
 // WithCorrelationID attaches a correlation identifier that spans the whole
-// causal chain — a strategy run, the order it produced and the fill that
+// causal chain -- a strategy run, the order it produced and the fill that
 // followed all share one, so an incident can be traced end to end.
 func WithCorrelationID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, correlationIDKey, id)

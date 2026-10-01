@@ -72,7 +72,7 @@ func TestCalendarRespectsTheRequestedWindow(t *testing.T) {
 }
 
 // Status is derived, so a fixture cannot claim a release happened in the
-// future — which would corrupt any point-in-time research built on it.
+// future -- which would corrupt any point-in-time research built on it.
 func TestNoEventClaimsAFutureRelease(t *testing.T) {
 	calendar := NewMockCalendar(fixedClock(refNow))
 	events, err := calendar.Events(context.Background(),

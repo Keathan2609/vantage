@@ -21,8 +21,8 @@ the API and by a database constraint.
 
 **1. Chronological splits with an embargo.**
 
-Train, validation and test are contiguous windows in time order — 60 / 20 / 20
-— with a gap between them of twice the label horizon. Random K-fold on
+Train, validation and test are contiguous windows in time order -- 60 / 20 / 20
+-- with a gap between them of twice the label horizon. Random K-fold on
 time-series data trains on the future and is the single most common cause of an
 unreproducible result. The embargo removes the overlap where a training row's
 label window reaches into the validation window.
@@ -37,7 +37,7 @@ label leaks. They are dropped.
 
 Every feature is computed from completed bars at or before its own row. There
 is no `shift(-1)` anywhere in `build_features`, and a property test asserts
-that *adding future bars never changes a historical feature value* — the same
+that *adding future bars never changes a historical feature value* -- the same
 test applied to the indicators. All 14 features are covered.
 
 **4. The baseline is a real baseline.**
@@ -48,7 +48,7 @@ that rose on 53% of bars hands 53% accuracy to a model that always says "up".
 model that does not beat the baseline is reported as not beating it.
 
 Most first attempts do not. On a random walk, verified in the test suite, no
-model beats the baseline — which is the correct result and a useful check that
+model beats the baseline -- which is the correct result and a useful check that
 the harness is not leaking.
 
 **5. Failure is closed.**
@@ -121,13 +121,13 @@ Both are reported per split, alongside precision, recall and log loss.
 ## Drift
 
 `ml_drift_events` records distribution shift between the training window and
-recent live data, per feature. Drift is a warning, not an automatic action — a
+recent live data, per feature. Drift is a warning, not an automatic action -- a
 model is not disabled by drift detection, because a false positive that
 silently stops trading is its own failure.
 
 One development note worth keeping: an early drift test compared a random
-walk's tail against its whole history and failed. The detector was right — the
-tail of a random walk *does* differ from its history — and the test was wrong.
+walk's tail against its whole history and failed. The detector was right -- the
+tail of a random walk *does* differ from its history -- and the test was wrong.
 The test was fixed, not the detector.
 
 ## Artefacts are not committed

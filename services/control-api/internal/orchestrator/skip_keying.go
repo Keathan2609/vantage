@@ -9,8 +9,8 @@ import (
 // skipAtNewestBar records a refusal against the newest bar in hand, or without
 // one when there are no bars at all.
 //
-// The per-bar unique indexes on `strategy_runs` are PARTIAL —
-// `WHERE bar_time IS NOT NULL` — so a refusal recorded with a nil bar time is
+// The per-bar unique indexes on `strategy_runs` are PARTIAL --
+// `WHERE bar_time IS NOT NULL` -- so a refusal recorded with a nil bar time is
 // inserted afresh on every scheduler tick rather than deduplicated. At a
 // 30-second interval an hourly bar is 120 ticks, so a condition that persists
 // across a day writes about 23 900 rows for twelve strategies instead of a few

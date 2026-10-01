@@ -27,7 +27,7 @@ recorded in `docs/COMPLIANCE_READINESS.md`.
 procedure below now reflects:
 
 1. **Do not restore with `--no-privileges`.** The first run did, and produced a
-   database the application could not read at all — `permission denied for
+   database the application could not read at all -- `permission denied for
    table audit_events`. The GRANTs are part of the backup and must come back
    with it.
 2. **Restore into a scratch database, not over the live one.** The drill does
@@ -40,13 +40,13 @@ procedure below now reflects:
 | --- | --- | --- |
 | Ledger (`transactions`) | Postgres | **No.** Append-only, gapless per account. This is the money. |
 | Orders, fills, state transitions | Postgres | **No.** |
-| Positions | Postgres | Partly — from the venue, by reconciliation |
+| Positions | Postgres | Partly -- from the venue, by reconciliation |
 | Audit chain | Postgres | **No.** Its value is that it cannot be rebuilt. |
 | Decision snapshots | Postgres | No, and they are the record of *why* |
 | Risk limits, authorities, their history | Postgres | No |
 | Users, MFA secrets, recovery codes | Postgres | No (and MFA can be re-enrolled) |
 | Market bars and quotes | Postgres | Yes, from a provider |
-| Backtests, model evaluations | Postgres | Yes, by re-running — the dataset hash and seed are stored |
+| Backtests, model evaluations | Postgres | Yes, by re-running -- the dataset hash and seed are stored |
 | Model artefacts | Filesystem | Yes, by retraining |
 | Encryption keys | Environment / KMS | **No.** Lose the key and every MFA secret is unreadable. |
 
@@ -56,7 +56,7 @@ either reconstructible or replaceable.
 ## Backups
 
 Postgres is the only stateful component that matters. Redis holds rate-limit
-buckets and is disposable by design — a cold start is harmless.
+buckets and is disposable by design -- a cold start is harmless.
 
 ```bash
 # Full logical backup, custom format, compressed. Written inside the
@@ -141,7 +141,7 @@ curl -X POST http://localhost:8080/api/v1/reconciliation/{accountID}/run
 lost, because nothing is written outside a transaction.
 
 **First action.** Restore connectivity. Do not restart the control plane
-repeatedly — it will simply fail readiness again, and the restart loop hides
+repeatedly -- it will simply fail readiness again, and the restart loop hides
 the actual error in the logs.
 
 ### The control plane crashed mid-order
@@ -160,7 +160,7 @@ unknown outcome is how one intended trade becomes two positions.
 **Symptom.** `broker_up` is 0; new orders fail.
 
 **Effect.** Open positions are at the venue and unaffected by our outage. Stops
-placed *at the venue* still work; stops that exist only in Vantage do not — which
+placed *at the venue* still work; stops that exist only in Vantage do not -- which
 is why the platform submits protective levels with the order rather than
 holding them locally.
 
@@ -176,7 +176,7 @@ against.
 
 **First action.** Look at both views on the Authority page. Decide whether this
 was a bug, a lost response, or a trade placed directly in the broker's own
-terminal — all three look identical from here, which is why resolution is a
+terminal -- all three look identical from here, which is why resolution is a
 human action rather than an automatic overwrite.
 
 ### The audit chain fails verification
@@ -189,7 +189,7 @@ the first broken sequence number, so everything after it is suspect and
 everything before it is intact.
 
 **First action.** **Stop trading.** Activate a global kill switch, preserve the
-database (do not restore over it — that destroys the evidence), and establish
+database (do not restore over it -- that destroys the evidence), and establish
 who had write access. This is the one failure that is not an operational
 problem.
 
@@ -206,7 +206,7 @@ Keys are versioned precisely so this is a re-enrolment rather than a rebuild.
 **Symptom.** `/health/ready` reports `quant: unavailable`.
 
 **Effect.** No new signals. Manual trading is unaffected. The circuit breaker
-opens and the answer becomes "no signal" — never "trade without the filter".
+opens and the answer becomes "no signal" -- never "trade without the filter".
 
 **First action.** Restart it. Nothing is lost: it holds no state that matters.
 
@@ -228,7 +228,7 @@ measured under a real failure:
 | Objective | Target | Currently |
 | --- | --- | --- |
 | RPO (data loss) | 0 for the ledger | Last manual dump |
-| RTO (control plane) | Minutes | Minutes — it is one stateless binary |
+| RTO (control plane) | Minutes | Minutes -- it is one stateless binary |
 | RTO (database) | Under an hour | Untested |
 | Position-book accuracy after recovery | Exact, via reconciliation | Depends on the venue's history window |
 

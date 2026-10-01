@@ -133,7 +133,7 @@ func (a *Alerter) KillSwitchActivated(ctx context.Context, scope, target, reason
 		Title:    fmt.Sprintf("Kill switch activated (%s)", scope),
 		Body: fmt.Sprintf(
 			"New orders are refused within the %s scope. Reason: %s. "+
-				"Open positions are NOT affected — closing one is the separate, confirmed Flatten action.",
+				"Open positions are NOT affected. Closing one is the separate, confirmed Flatten action.",
 			scope, reason),
 		AccountID: accountID,
 		Fields:    map[string]any{"scope": scope, "target": target, "reason": reason},
@@ -381,7 +381,7 @@ func (a *Alerter) TradingHalted(ctx context.Context, accountID uuid.UUID, scope,
 		Key:      accountID.String(),
 		Title:    "Automated trading halted (" + scope + ")",
 		Body: "Automated trading is halted: " + reason +
-			". Manual trading and all read access are unaffected -- an operator can see " +
+			". Manual trading and all read access are unaffected, so an operator can see " +
 			"the warning and decide, which an algorithm cannot.",
 		AccountID: &id,
 		Fields: map[string]any{

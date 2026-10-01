@@ -8,12 +8,12 @@
 
 // Content-Security-Policy is deliberately NOT here. It needs a per-request
 // nonce, which only middleware can generate, and two CSP headers would be
-// enforced as their intersection — the static one has no nonce, so nothing
+// enforced as their intersection -- the static one has no nonce, so nothing
 // would run. See middleware.ts.
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   // Cross-origin isolation. Set here rather than in middleware so it also
-  // covers /_next/static, which the middleware matcher deliberately skips —
+  // covers /_next/static, which the middleware matcher deliberately skips --
   // a ZAP baseline scan flagged exactly that gap on the static chunks.
   { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },

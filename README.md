@@ -1,41 +1,70 @@
 # Vantage
 
-An institutional-style trading platform for a single operator: market data, a
-strategy and research engine, a risk-controlled order pipeline, and a dense
-terminal interface.
+A single operator trading platform: market data, a strategy and research
+engine, a risk controlled order pipeline, and a dense terminal to drive it all
+from.
 
-**This build executes simulated paper orders against a mock venue. No live
-broker adapter is compiled into the binary, no real-money venue is reachable
-from any process here, and no real funds can move.** That is enforced in three
-independent places in code and again in the database — see
-[Paper-only enforcement](#paper-only-enforcement).
+**Everything here is simulated.** Orders go to a mock venue. No live broker
+adapter is compiled into the binary, no real money venue is reachable from any
+process in this repository, and no funds can move. Four independent mechanisms
+enforce that, described under [Paper only](#paper-only).
 
----
+I built it to find out what it actually takes to run an automated strategy
+responsibly, rather than to make money. Most of the work turned out to be in
+the parts nobody demos: reconciliation, failing closed, and being able to prove
+afterwards what the system did and why.
 
-## What it does
+## What is in it
 
-| Area | Summary |
-| --- | --- |
-| Market data | Quote and bar ingestion behind a `marketdata.Provider` interface, with per-instrument health that the risk engine consults before any order |
-| Trading | A single order pipeline: 19 ordered gates, idempotent submission, an explicit order state machine, and a paper venue that models spread, slippage, latency, partial fills and margin refusal |
-| Risk | 18 deterministic checks evaluated as a pure function; every check runs, all failures are reported, and risk may only reduce a requested size |
-| Control | Trading authority (a scoped technical mandate), kill switches, account trading flags, and a four-state trading verdict derived from real state rather than from process health |
-| Replay | A deterministic market replay that drives the **real** pipeline — ingestion, bars, strategies, orchestration, risk, Autopilot, OMS, the mock venue, the ledger and the audit chain — from a committed dataset, on an injected clock, with byte-identical financial output across runs. Development only, and refused elsewhere |
-| Intelligence | A versioned multi-strategy consensus policy that puts vetoes before votes and never resolves a disagreement by majority; seven explicit market regimes with UNKNOWN as a real answer; and a deterministic market replay provider so autonomous behaviour is tested against a known market rather than by waiting for one |
-| Recovery | Snapshot-based reconciliation with a 13-type divergence taxonomy: provable divergence is repaired automatically through the same accounting path an ordinary fill uses, ambiguous divergence halts the narrowest scope that contains it and waits for a named operator action |
-| Research | 12 registered strategies, an honest backtester, chronological-split machine learning with baseline comparison, and an opportunity scanner |
-| Evidence | Append-only, hash-chained audit events; immutable decision snapshots; a full ledger of every balance change |
-| Interface | An 18-page Next.js terminal: dark, dense, tabular, with the execution mode visible on every page — including an operations view that shows unresolved divergence, its evidence, and whether automatic repair is permitted |
+**Market data.** Quote and bar ingestion behind one provider interface, with
+per instrument health that the risk engine checks before any order. Live quotes
+fold into 15m, 1h and 4h bars so the series keeps moving.
 
-## Quick start
+**Trading.** One order pipeline with no second entry point. Idempotent
+submission, an explicit state machine, and a paper venue that models spread,
+slippage, latency, partial fills and margin refusal, plus deliberate fault
+modes so recovery is tested against a venue that misbehaves rather than a mock
+that agrees.
 
-Requires Docker, Go 1.26+, Python 3.12+ and Node 20+.
+**Risk.** A pure function, 26 checks, all of them evaluated on every order so a
+refusal reports everything that failed rather than the first thing. Risk may
+only reduce a requested size, never increase it, and no check that limits
+exposure is allowed to refuse an order that reduces a position.
+
+**Control.** Trading authority as a scoped technical control, kill switches,
+account level trading flags, and a trading verdict derived from real state
+rather than from whether the process is up.
+
+**Recovery.** Reconciliation snapshots both sides, classifies the difference
+with a pure function, and repairs only what is provable from evidence. Anything
+ambiguous halts the narrowest scope that contains it and waits for a named
+operator action. Position quantities are never written to match the venue.
+
+**Replay.** A committed dataset drives the real pipeline on an injected clock:
+ingestion, bars, strategies, consensus, risk, the OMS, the venue, the ledger
+and the audit chain. Two runs from the same starting database produce identical
+financial output. Development only, and refused anywhere else.
+
+**Research.** Twelve registered strategies, a backtester that states its fill
+assumptions, machine learning with chronological splits and a baseline to beat,
+and a scanner. The research service has no broker client and cannot reach one.
+
+**Evidence.** Append only hash chained audit events, immutable decision
+snapshots, and a ledger entry behind every balance change.
+
+**Terminal.** A dark, dense, tabular Next.js front end. It holds no business
+rules. Every refusal comes from the API with a machine readable code, and the
+execution mode is visible on every page.
+
+## Running it
+
+You need Docker, Go 1.26+, Python 3.12+ and Node 20+.
 
 ```bash
 cp .env.example .env
 ```
 
-Generate the two keys the `.env` asks for and paste them in:
+The `.env` asks for two keys. Generate each with:
 
 ```bash
 openssl rand -base64 32
@@ -47,16 +76,16 @@ Start Postgres and Redis:
 docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
-Apply migrations, then load development data:
+Apply migrations and load development data:
 
 ```bash
 cd services/control-api && go run ./cmd/control-api migrate && go run ./cmd/control-api seed
 ```
 
-The seed prints development-only credentials. They exist solely on your
-machine; seeding refuses to run in any environment other than `local`.
+Seeding prints credentials that exist only on your machine, and it refuses to
+run in any environment other than `local`.
 
-Run the three services in separate terminals:
+Then run the three services, each in its own terminal:
 
 ```bash
 cd services/control-api && go run ./cmd/control-api serve
@@ -70,76 +99,72 @@ cd services/quant && python -m uvicorn vantage_quant.main:app --host 127.0.0.1 -
 cd apps/web && npm install && npm run dev
 ```
 
-Then open http://localhost:3000.
+The terminal is at http://localhost:3000. If something else on your machine
+already has that port, set `VANTAGE_PUBLIC_WEB_ORIGIN` to the port you actually
+get and restart the control plane, or CORS will refuse the browser.
 
 ## Layout
 
 ```
-apps/web                  Next.js 16 terminal (App Router, TypeScript strict)
-services/control-api      Go control plane — the only path to a broker
-  internal/domain         Money, orders, positions, risk, audit: no I/O
+apps/web                  Next.js terminal (App Router, TypeScript strict)
+services/control-api      Go control plane, the only path to a broker
+  internal/domain         Money, orders, positions, risk, audit. No I/O
   internal/oms            The order pipeline
-  internal/risk           The risk engine (a pure function) and position sizing
-  internal/booking        The single accounting path: fill -> position, ledger, balance
-  internal/reconcile      Snapshots, a pure classifier, and bounded repair
-  internal/replay         Deterministic market replay (development only)
+  internal/risk           The risk engine and position sizing, both pure
+  internal/booking        The one accounting path: fill to position, ledger, balance
+  internal/reconcile      Snapshots, a pure classifier, bounded repair
+  internal/replay         Deterministic market replay, development only
   internal/orchestrator   Signals to intents, and the consensus policy
-  internal/broker         BrokerAdapter interface; broker/mock is the paper venue
+  internal/broker         The adapter interface; broker/mock is the paper venue
   internal/store          SQL, one file per bounded context
-  migrations              Numbered, forward-only SQL
-services/quant            Python research service (FastAPI): strategies,
-                          backtests, indicators, ML. No broker client exists here.
-tests/smoke               End-to-end assertions against a running stack
-infra/docker              Local Postgres and Redis, with least-privilege roles
+  migrations              Numbered, forward only
+services/quant            Python research service. No broker client exists here
+tests/smoke               End to end assertions against a running stack
+infra/docker              Local Postgres and Redis with least privilege roles
 docs                      Architecture, security and operational documentation
 ```
 
-## Paper-only enforcement
+## Paper only
 
-Four independent mechanisms, any one of which would stop live execution on its
-own:
+Four mechanisms, any one of which would stop live execution on its own.
 
-1. **A compile-time constant.** `config.BuildAllowsLiveExecution = false`. No
-   configuration value can change it, and no live adapter is linked into the
-   binary.
-2. **Configuration validation.** `config.Load` refuses to return a
-   configuration whose execution mode is anything but `paper`, or whose broker
-   list contains anything but `mock`. The process exits rather than starting in
-   an unexpected mode.
-3. **No live adapter exists.** The broker registry is populated only with the
-   mock venue. There is no code path that could reach a real broker, because no
-   such adapter is present to reach.
-4. **Database constraints.** `accounts_paper_only_ck`,
-   `broker_connections_mock_only_ck`, `orders` mode checks and
-   `strategy_versions_paper_ceiling_ck` reject non-paper rows at the storage
-   layer, whatever the application believes.
+1. **A compile time constant.** `config.BuildAllowsLiveExecution` is false. No
+   configuration value can change it.
+2. **Configuration validation.** `config.Load` refuses any execution mode other
+   than paper, and any broker other than the mock venue. The process exits
+   rather than starting in an unexpected mode.
+3. **No live adapter exists.** The broker registry holds only the mock venue.
+   There is no code path to a real broker because there is no adapter to reach.
+4. **Database constraints.** Check constraints on accounts, broker connections,
+   orders and strategy versions reject non paper rows at the storage layer,
+   whatever the application believes.
 
-The consequences are stated where an operator will see them: the terminal
-carries a PAPER marker on every page, `/version` reports
-`live_trading_available: false`, and the control plane logs its mode at
-start-up.
+The consequences are visible rather than buried. The terminal carries a PAPER
+marker on every page, `/version` reports `live_trading_available: false`, and
+the control plane logs its mode at startup.
 
 ## Documentation
 
 | Document | Covers |
 | --- | --- |
-| [ARCHITECTURE](docs/ARCHITECTURE.md) | Services, planes, data flow, why the boundaries sit where they do |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Services, planes, data flow, and why the boundaries sit where they do |
 | [SECURITY](docs/SECURITY.md) | Authentication, authorisation, secrets, cryptography, transport, database privilege |
 | [THREAT_MODEL](docs/THREAT_MODEL.md) | Assets, adversaries, attack surfaces, controls, residual risk |
 | [REGULATORY_BOUNDARY](docs/REGULATORY_BOUNDARY.md) | What this software is and is not, and what architecture cannot decide |
-| [COMPLIANCE_READINESS](docs/COMPLIANCE_READINESS.md) | Which capabilities support which obligations, and the gaps |
+| [COMPLIANCE_READINESS](docs/COMPLIANCE_READINESS.md) | Which capabilities support which obligations, and where the gaps are |
 | [TRADING_AUTHORITY](docs/TRADING_AUTHORITY.md) | The mandate model, and why it is a technical control |
 | [ORDER_LIFECYCLE](docs/ORDER_LIFECYCLE.md) | The pipeline, the state machine, idempotency, failure semantics |
 | [RISK_ENGINE](docs/RISK_ENGINE.md) | Every check, position sizing, and what risk may not do |
 | [BROKER_ADAPTERS](docs/BROKER_ADAPTERS.md) | The adapter contract, the mock venue, and what a real adapter would need |
 | [MARKET_DATA](docs/MARKET_DATA.md) | Providers, freshness, health states, sessions and the market clock |
-| [RECONCILIATION](docs/RECONCILIATION.md) | Detection, the divergence taxonomy, automatic vs operator repair, startup and periodic runs, halt scope, and what remains unresolvable |
+| [RECONCILIATION](docs/RECONCILIATION.md) | Detection, the divergence taxonomy, automatic against operator repair, halt scope, and what stays unresolvable |
 | [STRATEGY_ENGINE](docs/STRATEGY_ENGINE.md) | Signals, the registry, lifecycle promotion, and the boundary with execution |
 | [BACKTESTING](docs/BACKTESTING.md) | Fill assumptions, costs, metrics, and the ways a backtest lies |
-| [MACHINE_LEARNING](docs/MACHINE_LEARNING.md) | Features, splits, leakage tests, baselines, drift, fail-closed inference |
+| [MACHINE_LEARNING](docs/MACHINE_LEARNING.md) | Features, splits, leakage tests, baselines, drift, fail closed inference |
 | [NEWS_AND_CALENDAR](docs/NEWS_AND_CALENDAR.md) | Event data, blackout windows, and provider terms |
-| [AUTOPILOT](docs/AUTOPILOT.md) | The autonomous pipeline, its gates, the global on/off switch, and what is deliberately not enabled |
-| [MARKET_REPLAY](docs/MARKET_REPLAY.md) | Driving the real pipeline from a dataset: the clock substitution, dataset format, controls, determinism, and the assumptions a replay makes |
+| [AUTOPILOT](docs/AUTOPILOT.md) | The autonomous pipeline, its gates, the on off switch, and what is deliberately not enabled |
+| [MARKET_REPLAY](docs/MARKET_REPLAY.md) | Driving the real pipeline from a dataset, and the assumptions a replay makes |
+| [DESIGN_SYSTEM](docs/DESIGN_SYSTEM.md) | The terminal's visual rules, and the measurements behind them |
 | [GOLD_RESEARCH_PROFILE](docs/GOLD_RESEARCH_PROFILE.md) | What is specific about XAUUSD, and why none of it belongs in generic infrastructure |
 | [OBSERVABILITY](docs/OBSERVABILITY.md) | Logs, metrics, audit, and what to alert on |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Environments, workflows, testing, migrations, conventions |
@@ -152,29 +177,34 @@ start-up.
 cd services/control-api && go test ./...
 cd services/quant && python -m pytest
 cd apps/web && npm run typecheck && npm run build
-python tests/smoke/smoke.py            # against a running stack
+python tests/smoke/smoke.py            # needs a running stack
 python tests/smoke/smoke_research.py
-cd apps/web && npm run test            # Playwright, against a running stack
+cd apps/web && npm run test            # Playwright, needs a running stack
 cd services/control-api && go test ./tests/race/   # concurrency and recovery
 ```
 
-The last two need credentials and a base URL in the environment; nothing is
-defaulted, and `VANTAGE_RACE_E2E=1` opts into the race suite. The race suite
-also spends the seeded account's real daily-loss budget on commission, so
-after two full runs it skips with an explicit instruction to reseed rather
-than failing as though something were broken. `./scripts/test-all.ps1 -Smoke`
-runs everything and reports every failure instead of stopping at the first.
+The last three need credentials and a base URL in the environment. Nothing is
+defaulted, and `VANTAGE_RACE_E2E=1` opts into the race suite.
+
+The race suite spends the seeded account's real daily loss budget on
+commission, so after two full runs it skips with an instruction to reseed
+rather than failing as though something were broken.
+`./scripts/test-all.ps1 -Smoke` runs the lot and reports every failure instead
+of stopping at the first.
 
 ## What this is not
 
-- It is not a licensed financial service, and it gives no advice. See
-  [REGULATORY_BOUNDARY](docs/REGULATORY_BOUNDARY.md).
-- It does not hold, pool or transfer client funds, and has no structure that
-  could.
-- It makes no claim about profitability. The research tools are built to
-  measure whether an approach works and to report honestly when it does not.
+It is not a licensed financial service and it gives no advice. See
+[REGULATORY_BOUNDARY](docs/REGULATORY_BOUNDARY.md).
+
+It does not hold, pool or transfer anyone's funds, and has no structure that
+could.
+
+It makes no claim about profitability. The research tools exist to measure
+whether an approach works and to say so plainly when it does not, which so far
+is most of the time.
 
 ## Licence
 
-All rights reserved — see [LICENSE](LICENSE). The code is published for review
-and evaluation, not for reuse. If you want to do something with it, ask.
+All rights reserved. See [LICENSE](LICENSE). The code is published so it can be
+read and assessed, not reused. If you want to do something with it, ask.

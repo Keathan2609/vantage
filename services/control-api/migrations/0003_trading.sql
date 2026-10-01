@@ -157,7 +157,7 @@ CREATE TRIGGER order_state_transitions_append_only
 -- Fills
 --
 -- Append-only. The unique index on (broker_name, broker_fill_id) is the
--- defence against processing the same execution twice — which is a real
+-- defence against processing the same execution twice -- which is a real
 -- scenario whenever a broker stream reconnects and replays.
 -- ---------------------------------------------------------------------------
 CREATE TABLE fills (

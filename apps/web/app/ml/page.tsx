@@ -102,7 +102,7 @@ export default function MlPage() {
                         <td className="mono tiny muted">
                           {model.TestStart
                             ? `${dateTime(model.TestStart)} → ${dateTime(model.TestEnd)}`
-                            : "—"}
+                            : "-"}
                         </td>
                         <td className="mono right muted">{dateTime(model.CreatedAt)}</td>
                       </tr>
@@ -140,10 +140,10 @@ export default function MlPage() {
                               {model.ModelKey} v{model.Version}
                             </td>
                             <td>{evaluation.Split}</td>
-                            <td className="mono right muted">{String(metrics.rows ?? "—")}</td>
-                            <td className="mono right">{String(metrics.accuracy ?? "—")}</td>
+                            <td className="mono right muted">{String(metrics.rows ?? "-")}</td>
+                            <td className="mono right">{String(metrics.accuracy ?? "-")}</td>
                             <td className="mono right muted">
-                              {String(metrics.majority_class_baseline ?? "—")}
+                              {String(metrics.majority_class_baseline ?? "-")}
                             </td>
                             <td
                               className={`mono right ${
@@ -152,7 +152,7 @@ export default function MlPage() {
                                   : "profit"
                               }`}
                             >
-                              {String(metrics.accuracy_over_baseline ?? "—")}
+                              {String(metrics.accuracy_over_baseline ?? "-")}
                             </td>
                             <td>
                               <Status
@@ -161,7 +161,7 @@ export default function MlPage() {
                               />
                             </td>
                             <td className="mono right muted">
-                              {String(metrics.brier_score ?? "—")}
+                              {String(metrics.brier_score ?? "-")}
                             </td>
                           </tr>
                         );
@@ -174,7 +174,7 @@ export default function MlPage() {
                 <p className="tiny muted" style={{ margin: 0 }}>
                   Accuracy alone is meaningless on imbalanced data: a market that rose on 53%
                   of bars hands 53% accuracy to a model that always says &ldquo;up&rdquo;. The
-                  Brier score measures calibration, which matters more for a filter — a model
+                  Brier score measures calibration, which matters more for a filter, since a model
                   whose &ldquo;60%&rdquo; means 60% is usable; one whose &ldquo;90%&rdquo;
                   means 55% is dangerous.
                 </p>
@@ -322,7 +322,7 @@ export default function MlPage() {
               </p>
               <p className="small muted" style={{ marginBottom: 0 }}>
                 When inference fails or a feature is unavailable, the consuming strategy
-                returns NO TRADE rather than falling back to an unfiltered signal —
+                returns NO TRADE rather than falling back to an unfiltered signal --
                 otherwise &ldquo;the model is broken&rdquo; would silently become
                 &ldquo;trade without the filter&rdquo;.
               </p>

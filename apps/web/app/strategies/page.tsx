@@ -121,9 +121,9 @@ export default function StrategiesPage() {
                         tone={strategy.enabled ? "ok" : "warn"}
                       />
                     </td>
-                    <td className="mono muted">{strategy.timeframe || "—"}</td>
+                    <td className="mono muted">{strategy.timeframe || "-"}</td>
                     <td className="mono muted">
-                      {(strategy.instruments ?? []).join(", ") || "—"}
+                      {(strategy.instruments ?? []).join(", ") || "-"}
                     </td>
                     <td className="mono right">{strategy.runs_7d}</td>
                     <td className="mono right">{strategy.signals_7d}</td>
@@ -173,12 +173,12 @@ export default function StrategiesPage() {
               <dd>{selected.enabled ? "yes" : "no"}</dd>
               <dt>High risk</dt>
               <dd className={selected.high_risk ? "loss" : ""}>
-                {selected.high_risk ? "yes — execution barred" : "no"}
+                {selected.high_risk ? "yes, execution barred" : "no"}
               </dd>
               <dt>Timeframe</dt>
-              <dd>{selected.timeframe || "—"}</dd>
+              <dd>{selected.timeframe || "-"}</dd>
               <dt>Instruments</dt>
-              <dd>{(selected.instruments ?? []).join(", ") || "—"}</dd>
+              <dd>{(selected.instruments ?? []).join(", ") || "-"}</dd>
               <dt>Runs / signals (7d)</dt>
               <dd>
                 {selected.runs_7d} / {selected.signals_7d}
@@ -244,7 +244,7 @@ export default function StrategiesPage() {
 
                 {run.rejection ? (
                   <Notice tone="bad">
-                    <strong>{humanise(run.rejection.code)}</strong> — {run.rejection.message}
+                    <strong>{humanise(run.rejection.code)}</strong>: {run.rejection.message}
                   </Notice>
                 ) : null}
 
@@ -312,7 +312,7 @@ export default function StrategiesPage() {
               <tr>
                 <td>VALIDATED</td>
                 <td className="muted">
-                  an out-of-sample or walk-forward result — in-sample is not evidence of an
+                  an out-of-sample or walk-forward result, since in-sample is not evidence of an
                   edge
                 </td>
               </tr>
@@ -323,7 +323,7 @@ export default function StrategiesPage() {
               <tr>
                 <td className="muted">DEMO, LIVE</td>
                 <td className="loss">
-                  unreachable — refused by the API, the domain, and a database constraint
+                  unreachable, being refused by the API, the domain, and a database constraint
                 </td>
               </tr>
             </tbody>

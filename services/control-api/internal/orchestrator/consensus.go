@@ -333,7 +333,7 @@ func Decide(in ConsensusInput) Verdict {
 	opposingFraction := losing.Div(total)
 	if opposingFraction.GreaterThan(in.Policy.MaxOpposingWeightFraction) {
 		v.Reason = fmt.Sprintf(
-			"NO TRADE: strategies disagree -- %s%% of the surviving weight opposes the "+
+			"NO TRADE: strategies disagree. %s%% of the surviving weight opposes the "+
 				"%s side, above the %s%% the policy tolerates. A split is not a decision",
 			opposingFraction.Mul(decimal.NewFromInt(100)).StringFixed(1),
 			winner,

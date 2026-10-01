@@ -1,7 +1,7 @@
 // Package orchestrator turns strategy signals into order intents.
 //
 // It is the ONLY component that sits between research and execution, and it is
-// deliberately dull. It does not decide whether a trade is a good idea — the
+// deliberately dull. It does not decide whether a trade is a good idea -- the
 // strategy already offered an opinion and the risk engine will decide what is
 // permissible. Its job is to:
 //
@@ -468,7 +468,7 @@ func (s *Service) EvaluateAndRoute(ctx context.Context, req RunRequest) (Outcome
 		return Outcome{}, err
 	}
 	if runID == uuid.Nil {
-		// This bar has already been evaluated — usually by the scheduler, a
+		// This bar has already been evaluated -- usually by the scheduler, a
 		// moment before a manual run asked for the same thing. The per-bar
 		// guard did its job; recording a second signal for one bar would
 		// double-count the strategy's opinion.

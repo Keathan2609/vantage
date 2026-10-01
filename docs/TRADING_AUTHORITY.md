@@ -1,7 +1,7 @@
 # Trading authority
 
 An authority is the scoped technical mandate that says what Vantage may do on
-an account. Without an active one, every order is refused — automated and
+an account. Without an active one, every order is refused -- automated and
 manual alike.
 
 > Trading authority is a technical control that limits what Vantage may do on
@@ -98,13 +98,13 @@ different audit meaning, which matters when reconstructing an incident.
 - It cannot act while `automation_enabled` is false: the check produces
   `automation_disabled` and the strategy run records a refusal.
 - It cannot act outside `allowed_instruments`, even for an instrument its
-  strategy declares — the authority is the narrower of the two.
+  strategy declares -- the authority is the narrower of the two.
 
 ## Seeding, and one thing worth knowing
 
 The development seed creates an authority for the paper account. It will
 **widen an existing authority only through an explicit, audited reconcile
-step** — early on it silently left an existing narrow authority in place, which
+step** -- early on it silently left an existing narrow authority in place, which
 made a freshly seeded environment refuse trades for reasons that were correct
 but invisible. The fix was to make the widening explicit and audited rather
 than to make the seed overwrite quietly.

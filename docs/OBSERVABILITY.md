@@ -17,8 +17,8 @@ refused".
 Structured JSON via `log/slog`, one line per event, with a request id
 propagated through the context so every line from one request correlates.
 
-Fields on every line: timestamp, level, message, request id, and — where
-applicable — user id, account id, order id and instrument.
+Fields on every line: timestamp, level, message, request id, and -- where
+applicable -- user id, account id, order id and instrument.
 
 **Redaction is by key name**, applied in `internal/logging`. Passwords, tokens,
 secrets, cookies and credential-shaped keys never reach an output stream. That
@@ -30,7 +30,7 @@ What is logged at each level:
 | Level | Used for |
 | --- | --- |
 | `error` | A request failed for a reason the operator must know about; an audit chain verification failure |
-| `warn` | A degradation the platform handled — a failed market-data poll, an unreachable research service, a failed calendar refresh |
+| `warn` | A degradation the platform handled -- a failed market-data poll, an unreachable research service, a failed calendar refresh |
 | `info` | Start-up (including the execution mode, stated explicitly), order outcomes, control actions, reconciliation runs |
 | `debug` | Poll-level detail, off by default |
 
@@ -44,18 +44,18 @@ in.
 
 ## Metrics
 
-Prometheus, on a separate internal listener — not on the public API port, so
+Prometheus, on a separate internal listener -- not on the public API port, so
 metrics are not reachable from wherever the terminal is.
 
 All metrics are namespaced `vantage_<subsystem>_<name>`.
 
-**Trading** — subsystem `trading`
+**Trading** -- subsystem `trading`
 
 | Metric | Meaning |
 | --- | --- |
 | `vantage_trading_orders_accepted_total` | Orders accepted, by instrument and source |
 | `vantage_trading_orders_rejected_total` | Rejections, **by reject code** |
-| `vantage_trading_orders_failed_total` | Unknown outcomes — the ones that need reconciliation |
+| `vantage_trading_orders_failed_total` | Unknown outcomes -- the ones that need reconciliation |
 | `vantage_trading_fills_total` | Fills recorded |
 | `vantage_trading_duplicate_commands_suppressed_total` | Idempotency working |
 
@@ -63,36 +63,36 @@ All metrics are namespaced `vantage_<subsystem>_<name>`.
 spike in `insufficient_margin` and a spike in `market_data_stale` are entirely
 different incidents.
 
-**Risk and account** — subsystem `risk`
+**Risk and account** -- subsystem `risk`
 
 `vantage_risk_limit_utilisation_fraction` (per account, per limit),
 `vantage_risk_account_equity`, `vantage_risk_account_drawdown_fraction`,
 `vantage_risk_rejections_total`, `vantage_risk_kill_switch_active`.
 
-**Market data** — subsystem `marketdata`
+**Market data** -- subsystem `marketdata`
 
 `vantage_marketdata_quote_age_seconds`, `vantage_marketdata_healthy`,
 `vantage_marketdata_issues_total`,
 `vantage_marketdata_provider_latency_seconds`.
 
-**Broker** — subsystem `broker`
+**Broker** -- subsystem `broker`
 
 `vantage_broker_call_duration_seconds`, `vantage_broker_errors_total`,
 `vantage_broker_up`.
 
-**Reconciliation** — subsystem `reconciliation`
+**Reconciliation** -- subsystem `reconciliation`
 
 `vantage_reconciliation_runs_total`,
 `vantage_reconciliation_mismatches_total`,
 `vantage_reconciliation_unresolved_discrepancies`.
 
-**Research** — subsystems `strategy` and `ml`
+**Research** -- subsystems `strategy` and `ml`
 
 `vantage_strategy_runs_total`, `vantage_strategy_signals_total`,
 `vantage_strategy_run_duration_seconds`, `vantage_ml_predictions_total`,
 `vantage_ml_inference_duration_seconds`.
 
-**HTTP and security** — subsystems `http` and `security`
+**HTTP and security** -- subsystems `http` and `security`
 
 `vantage_http_requests_total`, `vantage_http_request_duration_seconds`,
 `vantage_http_requests_in_flight`, `vantage_security_auth_successes_total`,
@@ -124,8 +124,8 @@ verified on demand by `GET /api/v1/admin/audit/verify`, which reports the first
 broken link rather than a boolean. It is tamper **evidence**, not immutability.
 
 The Activity page shows the chain hash per row and checks sequence contiguity
-in the browser, so a gap — rows removed from the tail, which a chain check
-alone would not reveal — is visible.
+in the browser, so a gap -- rows removed from the tail, which a chain check
+alone would not reveal -- is visible.
 
 ## What to alert on
 
@@ -156,7 +156,7 @@ market-data poll (the next one usually succeeds).
 Not implemented. With three services and a synchronous request path, the
 request id in the logs answers the same question at a fraction of the
 operational cost. Distributed tracing becomes worth it when the call graph is
-deep enough that reading logs stops working — which is a reason to add it
+deep enough that reading logs stops working -- which is a reason to add it
 later, not now.
 
 ## Dashboards

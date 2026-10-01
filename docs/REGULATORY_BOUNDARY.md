@@ -9,7 +9,7 @@ competent legal professional can.
 ## What Vantage is, technically
 
 - Software that runs on infrastructure controlled by its operator.
-- It connects — in this build, only to a **mock venue** — through a broker
+- It connects -- in this build, only to a **mock venue** -- through a broker
   adapter, using credentials the operator supplies for the operator's own
   account.
 - It analyses market data, generates signals, applies risk limits and, within
@@ -77,7 +77,7 @@ software cannot answer about itself:
 | --- | --- | --- |
 | **FAIS** (Financial Advisory and Intermediary Services Act) | Does any activity constitute "advice" or an "intermediary service" to another person? | Signals are self-directed analysis on the operator's own account; no output is addressed to a third party |
 | **FSCA licensing** | Does the activity require an FSP licence, and under which category? | Non-custodial, self-directed, single-account by construction |
-| **CISCA** (Collective Investment Schemes Control Act) | Is anything a collective investment scheme? | No pooling, no units, no third-party capital — structurally |
+| **CISCA** (Collective Investment Schemes Control Act) | Is anything a collective investment scheme? | No pooling, no units, no third-party capital -- structurally |
 | **FICA** (Financial Intelligence Centre Act) | Do KYC/AML obligations attach? | No funds are received or transmitted; identity data is limited to an operator login |
 | **POPIA** (Protection of Personal Information Act) | Is personal information processed lawfully and minimally? | See below |
 | **Exchange control** | Do cross-border flows arise? | No funds move through this software at all |
@@ -91,7 +91,7 @@ audit records of actions taken. No identity documents, no financial account
 numbers, no biometric data, no marketing data. Data is stored on
 infrastructure the operator controls. Sessions expire and can be revoked
 individually. Audit and ledger records are append-only *by design*, which means
-a POPIA erasure request against them conflicts with the integrity property —
+a POPIA erasure request against them conflicts with the integrity property --
 that tension is real, and a deployment serving other people must resolve it in
 policy (for example by pseudonymising the actor reference rather than deleting
 the event). It is named here rather than left to be discovered.
@@ -129,8 +129,8 @@ wrong is not:
 
 - Vantage is **not** described as "compliant", "FSCA-approved", "licensed",
   "regulated" or "legally cleared", anywhere.
-- The architecture is described as **compliance-supporting** — it produces the
-  records and controls that an obligation would need — and that is the
+- The architecture is described as **compliance-supporting** -- it produces the
+  records and controls that an obligation would need -- and that is the
   strongest available claim.
 - No document in this repository concludes that a licence is or is not
   required. That conclusion is not ours to draw.

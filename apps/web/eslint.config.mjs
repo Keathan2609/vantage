@@ -23,7 +23,7 @@ const config = [
       // NOTE: there is deliberately no lint rule banning Number.parseFloat.
       //
       // An earlier revision had one, written against the bare `parseFloat`
-      // global — which this codebase never uses, so the rule never fired and
+      // global -- which this codebase never uses, so the rule never fired and
       // read as assurance it did not provide.
       //
       // The real constraint is not "never parse a float", it is "never let a

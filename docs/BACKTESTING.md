@@ -7,7 +7,7 @@ in the same few ways, and this engine is built specifically to avoid them.
 
 **1. Entries fill on the bar AFTER the signal.**
 
-A strategy that sees bar *i*'s close cannot trade at that close — the close is
+A strategy that sees bar *i*'s close cannot trade at that close -- the close is
 the last price of a bar that has just finished. Entries fill at the *next*
 bar's open, crossing the spread, plus slippage. Filling at the signal bar's
 close is the single most flattering error available, and it silently inflates
@@ -26,7 +26,7 @@ target is how a losing strategy looks profitable.
 Spread (half on entry, half on exit), slippage, commission per lot, and
 overnight financing. A frictionless run is available for isolating a signal's
 raw behaviour, but it sets a `frictionless` flag that is stored with the result
-and displayed — so it can never be read later as a realistic expectation.
+and displayed -- so it can never be read later as a realistic expectation.
 
 **4. Unaffordable trades are counted, not dropped.**
 
@@ -65,7 +65,7 @@ Metrics are chosen so that the flattering ones cannot stand alone:
 
 | Metric | Why it is there |
 | --- | --- |
-`expectancy` | Average result per trade — the headline
+`expectancy` | Average result per trade -- the headline
 `profit_factor` | Gross profit ÷ gross loss
 `max_drawdown`, `max_drawdown_pct` | The number that decides whether an approach is survivable
 `max_drawdown_duration_bars` | How long being wrong lasted
@@ -108,14 +108,14 @@ strategy was developed on; it is not evidence of a forward edge, and only
 
 Every stored backtest carries:
 
-- `strategy_id` **and** `strategy_version` — the result belongs to a version,
+- `strategy_id` **and** `strategy_version` -- the result belongs to a version,
   so editing parameters invalidates it
-- `dataset_hash` — a hash of the exact bars used
+- `dataset_hash` -- a hash of the exact bars used
 - `period_start`, `period_end`, `timeframe`
 - `initial_capital` and `currency`
 - `frictionless`
 - `sample_kind`
-- `warnings` — the methodology caveats that applied to this run
+- `warnings` -- the methodology caveats that applied to this run
 
 The dataset hash is what makes "run it again and see" a real option: a
 different hash means the data changed, and a comparison across different hashes
@@ -144,7 +144,7 @@ backtest. What was checked, and what was found:
 
 | Leak | Enforcement | Verified by |
 | --- | --- | --- |
-| A strategy reading a bar it could not have seen | The engine hands each strategy `bars.iloc[: i + 1]` — a strict prefix, never the whole frame | `backtest.py:196`; `test_backtest.py` |
+| A strategy reading a bar it could not have seen | The engine hands each strategy `bars.iloc[: i + 1]` -- a strict prefix, never the whole frame | `backtest.py:196`; `test_backtest.py` |
 | Bars supplied out of order | Non-ascending timestamps are rejected before the run starts, so a "shuffle" cannot be smuggled in as input | `test_backtest.py` |
 | An indicator reading forward | 13 indicator series are recomputed on truncated prefixes and compared value-by-value | `test_indicators.py::test_no_lookahead` (parameterised) |
 | Indicator warm-up producing a value from too little data | 15 `min_periods` declarations; warm-up bars are `NaN`, not a partial average | `test_indicators.py` |
@@ -158,7 +158,7 @@ backtest. What was checked, and what was found:
 **One finding, and it is a caveat rather than a bug.** `support_resistance` is
 the only indicator that uses `shift(-1)`, to identify a swing point by
 comparing a bar with its neighbours on both sides. It cannot mark the final bar
-as a swing — there is no bar after it — which is correct. But it then reports
+as a swing -- there is no bar after it -- which is correct. But it then reports
 the *mean* of each cluster of swing points, so adding later bars changes
 cluster membership and moves the reported level: a level found at 1844.24 over
 400 bars had no counterpart within 159 points once 600 bars were supplied.

@@ -153,7 +153,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	// Both halves matter, and the second was missing.
 	//
 	// Why "opposite side" alone is not enough: an account long 0.08 lots could
-	// send a SELL of 5.00 lots, which is not a reduction at all — it closes
+	// send a SELL of 5.00 lots, which is not a reduction at all -- it closes
 	// 0.08 and opens 4.92 in the other direction. Treating that as reducing
 	// let it skip the gross-exposure, per-instrument and concentration checks
 	// entirely, which is a hole in exactly the control that is supposed to cap
@@ -162,7 +162,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	// Why the concept is needed at all: an order that genuinely reduces
 	// exposure must never be refused BY an exposure limit. Otherwise a
 	// position built up by several individually-permitted orders can grow past
-	// the per-order cap and then become impossible to close — the limit that
+	// the per-order cap and then become impossible to close -- the limit that
 	// exists to contain risk would prevent shedding it, and the bigger the
 	// position, the harder the exit. A flatten of a 3866 ZAR position was
 	// refused for "Order notional 3866.77 against a limit of 2500.00" before
@@ -278,7 +278,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	// and `portfolio.aggregate` COUNTS an unpriceable position and then skips
 	// it: it adds nothing to unrealised P&L, nothing to margin used, nothing
 	// to gross exposure. So a book with one unvalued position does not report
-	// an error — it reports a smaller, healthier book than the one that
+	// an error -- it reports a smaller, healthier book than the one that
 	// exists, and every limit here passes more easily because of it.
 	//
 	// A stale FX rate is sufficient to cause this, and it is reached in one
@@ -289,7 +289,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	//
 	// Reducing is exempt, and that is not a softening. Refusing to let an
 	// operator CLOSE a position because the platform cannot price it is
-	// exactly the trap the reducing-order rule exists to prevent — the
+	// exactly the trap the reducing-order rule exists to prevent -- the
 	// operator would be held in a position precisely while the system admits
 	// it does not know what that position is worth.
 	bookValued := in.Snapshot.UnvaluedPositions == 0
@@ -512,7 +512,7 @@ func (e *Engine) Evaluate(ctx context.Context, in Input) (domain.RiskDecision, e
 	// The check only means anything once the portfolio holds more than one
 	// instrument. A single position is, by arithmetic, 100% of gross exposure,
 	// so applying a 60% cap to a flat account would refuse every first trade
-	// forever — the limit would read as a sensible diversification rule while
+	// forever -- the limit would read as a sensible diversification rule while
 	// actually being a permanent halt. It is therefore evaluated only when the
 	// account will hold exposure in at least one OTHER instrument.
 	distinctInstruments := 0
@@ -749,9 +749,9 @@ func (e *Engine) toAccount(ctx context.Context, amount money.Amount, target mone
 // The reference is therefore the worst price the order could fill at:
 //
 //	market      the current executable price, crossing the spread
-//	limit       the limit price — the order cannot fill worse than this
-//	stop        the stop price — where the order becomes a market order
-//	stop_limit  the limit price — the worst fill the order permits
+//	limit       the limit price -- the order cannot fill worse than this
+//	stop        the stop price -- where the order becomes a market order
+//	stop_limit  the limit price -- the worst fill the order permits
 //
 // Where the price the type requires is missing, the market price is used, and
 // the instrument-rule gate earlier in the pipeline has already refused an

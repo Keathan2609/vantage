@@ -9,7 +9,7 @@ import { useAsync } from "@/lib/store";
 
 function metric(metrics: Record<string, unknown>, key: string): string {
   const value = metrics[key];
-  if (value === undefined || value === null) return "—";
+  if (value === undefined || value === null) return "-";
   return typeof value === "number" ? String(value) : String(value);
 }
 
@@ -75,7 +75,7 @@ export default function BacktestsPage() {
       <Notice>
         Entries fill on the bar AFTER the signal, crossing the spread, with slippage,
         commission and overnight financing applied. When a bar covers both the stop and the
-        target, the STOP is assumed — bar data cannot say which came first, and the
+        target, the STOP is assumed, because bar data cannot say which came first, and the
         pessimistic reading is the only safe one.
       </Notice>
 
@@ -197,7 +197,7 @@ export default function BacktestsPage() {
                     </dd>
                     <dt>Frictionless</dt>
                     <dd className={focused.Frictionless ? "loss" : ""}>
-                      {focused.Frictionless ? "yes — unrealistic" : "no, costs applied"}
+                      {focused.Frictionless ? "yes, unrealistic" : "no, costs applied"}
                     </dd>
                     <dt>Dataset hash</dt>
                     <dd className="tiny">{focused.DatasetHash.slice(0, 24)}</dd>
@@ -325,11 +325,11 @@ export default function BacktestsPage() {
                     {percentValue(String(result.metrics.max_drawdown_pct ?? ""))}
                   </dd>
                   <dt>Expectancy</dt>
-                  <dd>{String(result.metrics.expectancy ?? "—")}</dd>
+                  <dd>{String(result.metrics.expectancy ?? "-")}</dd>
                   <dt>Win rate</dt>
-                  <dd>{String(result.metrics.win_rate ?? "—")}</dd>
+                  <dd>{String(result.metrics.win_rate ?? "-")}</dd>
                   <dt>Profit factor</dt>
-                  <dd>{String(result.metrics.profit_factor ?? "—")}</dd>
+                  <dd>{String(result.metrics.profit_factor ?? "-")}</dd>
                   <dt>Costs</dt>
                   <dd>
                     {String(result.metrics.total_commission ?? 0)} +{" "}

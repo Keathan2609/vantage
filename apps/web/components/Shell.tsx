@@ -166,7 +166,7 @@ function TopBar() {
       ) : (
         <div className="tile">
           <div className="tile-label">Account</div>
-          <div className="tile-value small">{account?.name ?? "—"}</div>
+          <div className="tile-value small">{account?.name ?? "-"}</div>
         </div>
       )}
 
@@ -246,9 +246,9 @@ function TopBar() {
       ) : null}
 
       <div className="tile">
-        <div className="tile-label">{session?.user.role ?? "—"}</div>
+        <div className="tile-label">{session?.user.role ?? "-"}</div>
         <div className="tile-value small">
-          {session?.user.email ?? "—"}
+          {session?.user.email ?? "-"}
           {marketStatus?.next_close ? (
             <span className="muted"> · closes {relative(marketStatus.next_close)}</span>
           ) : null}

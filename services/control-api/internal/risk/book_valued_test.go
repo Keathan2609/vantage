@@ -14,8 +14,8 @@ import (
 // missing a position, and they all pass MORE easily than they should. The
 // snapshot does not look broken; it looks healthy.
 //
-// A stale FX rate reaches this in a day — the converter's maximum age is 24
-// hours and nothing in the running system refreshes a rate — and until this
+// A stale FX rate reaches this in a day -- the converter's maximum age is 24
+// hours and nothing in the running system refreshes a rate -- and until this
 // check existed, `Snapshot.UnvaluedPositions` was read by one JSON field and
 // nothing else.
 

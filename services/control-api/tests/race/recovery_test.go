@@ -302,7 +302,7 @@ func TestALostFillIsDiscoveredImportedOnceAndConverges(t *testing.T) {
 // TestReRunningReconciliationChangesNothing is the idempotence requirement.
 //
 // A repair applied twice would double a position and double a ledger entry, and
-// reconciliation runs every five minutes — so "converges once" is not enough;
+// reconciliation runs every five minutes -- so "converges once" is not enough;
 // it has to converge and then stop.
 func TestReRunningReconciliationChangesNothing(t *testing.T) {
 	c, accountID := setup(t)

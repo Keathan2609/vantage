@@ -256,7 +256,7 @@ export function useAsync<T>(
 
   // One state write per completed request, tagged with the request it answers.
   // `loading` is then DERIVED by comparing the answer we hold against the
-  // request we want, so nothing has to set a loading flag — which also means
+  // request we want, so nothing has to set a loading flag -- which also means
   // no synchronous state write inside the effect, and one render per fetch
   // instead of three.
   const [answer, setAnswer] = useState<{

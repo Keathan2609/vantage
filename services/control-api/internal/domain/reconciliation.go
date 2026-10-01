@@ -18,7 +18,7 @@ import "fmt"
 // # The governing principle
 //
 // Repair automatically only where the correct answer is PROVABLE from the
-// evidence. Not likely, not usually — provable. Everything else waits for an
+// evidence. Not likely, not usually -- provable. Everything else waits for an
 // operator, and an operator who is shown the evidence rather than a summary of
 // it.
 //
@@ -31,7 +31,7 @@ import "fmt"
 // The types are deliberately narrow. An earlier version recorded
 // "fill_quantity_mismatch" for both "the venue has an execution we can prove
 // belongs to order X" and "the venue has an execution we cannot attribute to
-// anything" — one of which is safely repairable and one of which must never be
+// anything" -- one of which is safely repairable and one of which must never be
 // touched automatically. Collapsing them meant neither could be handled.
 type IssueType string
 
@@ -94,8 +94,8 @@ const (
 	IssueDuplicateExecutionReport IssueType = "DUPLICATE_EXECUTION_REPORT"
 
 	// IssueOutOfOrderExecutionReport: an execution arrived with a timestamp
-	// earlier than one already processed. Booking is commutative — the fill
-	// aggregate is recomputed from the fills themselves — so this is recorded
+	// earlier than one already processed. Booking is commutative -- the fill
+	// aggregate is recomputed from the fills themselves -- so this is recorded
 	// rather than treated as an error.
 	IssueOutOfOrderExecutionReport IssueType = "OUT_OF_ORDER_EXECUTION_REPORT"
 
@@ -127,7 +127,7 @@ const (
 	IssueOperatorActionRequired IssueStatus = "OPERATOR_ACTION_REQUIRED"
 	// IssueResolved means an operator closed it.
 	IssueResolved IssueStatus = "RESOLVED"
-	// IssueUnresolvable means no action available to this system can fix it —
+	// IssueUnresolvable means no action available to this system can fix it --
 	// typically because the truth is outside Vantage entirely.
 	IssueUnresolvable IssueStatus = "UNRESOLVABLE"
 )
@@ -167,8 +167,8 @@ const (
 	// trading and all read access continue.
 	HaltAccount HaltScope = "ACCOUNT"
 	// HaltBrokerConnection: every account on this broker connection stops.
-	// Reserved for evidence that the connection itself is misreporting — an
-	// identifier mapping that does not hold, or a venue contradicting itself —
+	// Reserved for evidence that the connection itself is misreporting -- an
+	// identifier mapping that does not hold, or a venue contradicting itself --
 	// because in that state no account's data on that connection is
 	// trustworthy.
 	HaltBrokerConnection HaltScope = "BROKER_CONNECTION"
@@ -259,7 +259,7 @@ type IssuePolicy struct {
 
 // issuePolicies is the authoritative repair policy.
 //
-// Every issue type appears exactly once, and a test asserts that — an issue
+// Every issue type appears exactly once, and a test asserts that -- an issue
 // type with no policy would otherwise fall through to a default, and a default
 // here is a decision nobody made.
 var issuePolicies = map[IssueType]IssuePolicy{
@@ -281,7 +281,7 @@ var issuePolicies = map[IssueType]IssuePolicy{
 		Halt:            HaltAccount,
 		AllowedActions:  []ResolutionAction{ActionRecheck, ActionAcknowledge, ActionResolveManually},
 		Rationale: "This is raised only when the venue re-reports an execution id with a " +
-			"DIFFERENT quantity, price or side from the one Vantage booked -- not for an " +
+			"DIFFERENT quantity, price or side from the one Vantage booked, not for an " +
 			"ordinary replay, which is normal and silent. The unique index on " +
 			"(broker_name, broker_fill_id) refused the second copy, so nothing was written " +
 			"twice; but one of the two records is now wrong about a trade that happened, " +
@@ -298,7 +298,7 @@ var issuePolicies = map[IssueType]IssuePolicy{
 		Rationale: "Booking is commutative: filled quantity and average price are recomputed " +
 			"from the fills themselves rather than incremented, so arrival order cannot " +
 			"change the result. Recorded because a venue that reorders executions is worth " +
-			"knowing about even when it is harmless. Expected to be rare -- unlike a plain " +
+			"knowing about even when it is harmless. Expected to be rare, unlike a plain " +
 			"replay, which is the normal steady state and is not recorded at all.",
 	},
 	IssueOrderMissingAtBroker: {
@@ -321,7 +321,7 @@ var issuePolicies = map[IssueType]IssuePolicy{
 		AllowedActions:  []ResolutionAction{ActionRecheck, ActionAcknowledge, ActionResolveManually},
 		Rationale: "The venue is authoritative about its own order states. Adopting a venue " +
 			"status is safe where the repair state machine permits the move AND the filled " +
-			"quantities already agree -- a status difference accompanied by a quantity " +
+			"quantities already agree. A status difference accompanied by a quantity " +
 			"difference is a missing execution, which is a different issue and must be " +
 			"repaired by booking the execution rather than by relabelling the order.",
 	},
@@ -394,7 +394,7 @@ var issuePolicies = map[IssueType]IssuePolicy{
 		Rationale: "Vantage holds a venue identifier the venue does not recognise, or the " +
 			"venue reports a different one for the same client order id. Every other repair " +
 			"in this system relies on that mapping being sound, so while it is in doubt no " +
-			"repair on this connection can be trusted -- which is why the halt scope is the " +
+			"repair on this connection can be trusted, which is why the halt scope is the " +
 			"connection rather than the account.",
 	},
 	IssueUnknownExecutionState: {
@@ -416,7 +416,7 @@ var issuePolicies = map[IssueType]IssuePolicy{
 		Repair:          RepairUnresolvableAutomatically,
 		Halt:            HaltAccount,
 		AllowedActions:  []ResolutionAction{ActionAcknowledge, ActionResolveManually},
-		Rationale: "State at the venue that Vantage did not cause -- a position opened, an " +
+		Rationale: "State at the venue that Vantage did not cause: a position opened, an " +
 			"order cancelled or a stop moved in the broker's own terminal. Vantage must not " +
 			"adopt it as though it had originated it, because every downstream record " +
 			"(decision snapshot, risk check, authority) would then be a fabrication. It is " +
@@ -498,7 +498,7 @@ func ActionAllowed(t IssueType, a ResolutionAction) bool {
 //
 // So recovery gets its own table. A transition here is reachable only through
 // the reconciliation repair path, which requires an issue id, evidence and a
-// classification of AUTOMATICALLY_SAFE or an explicit operator action — and
+// classification of AUTOMATICALLY_SAFE or an explicit operator action -- and
 // every such transition is stamped is_repair in order_state_transitions, so
 // the history distinguishes "the venue told us at the time" from "we
 // reconstructed this afterwards".
@@ -608,7 +608,7 @@ const (
 	// TradingHealthy: reconciled recently, no unresolved issues.
 	TradingHealthy TradingState = "HEALTHY"
 	// TradingDegraded: something is wrong but not in a way that compromises
-	// the position book — a stale feed, a warning-level divergence.
+	// the position book -- a stale feed, a warning-level divergence.
 	TradingDegraded TradingState = "DEGRADED"
 	// TradingReconciliationRequired: the account has never been reconciled, or
 	// its last run failed, so agreement with the venue is unproven. Distinct
@@ -644,7 +644,7 @@ func (s TradingState) Severity() int {
 }
 
 // WorstTradingState returns the most severe of the given states, defaulting to
-// RECONCILIATION_REQUIRED for an empty set — an account nobody reported on is
+// RECONCILIATION_REQUIRED for an empty set -- an account nobody reported on is
 // not thereby healthy.
 func WorstTradingState(states ...TradingState) TradingState {
 	if len(states) == 0 {

@@ -1,8 +1,8 @@
 # Gitleaks configuration.
 #
 # Every allowlist entry below is a triaged finding with a stated reason. The
-# alternative — a blanket exclusion, or leaving fourteen unexplained hits in
-# every report — means the next person cannot tell a real leak from noise.
+# alternative -- a blanket exclusion, or leaving fourteen unexplained hits in
+# every report -- means the next person cannot tell a real leak from noise.
 #
 # Nothing here suppresses a rule for source code that could hold a real
 # credential. The application's own secrets come from the environment and have

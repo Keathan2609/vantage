@@ -9,11 +9,11 @@ makes them useful: each is right for a different kind of surface, and this
 terminal has both kinds.
 
 Neither is a target to copy. Both get one thing wrong that matters more here
-than anything they get right — see "Where both references are wrong".
+than anything they get right -- see "Where both references are wrong".
 
 ## What was measured
 
-### Reference A — a cryptocurrency exchange terminal
+### Reference A -- a cryptocurrency exchange terminal
 
 Dark mode, 1226 elements sampled.
 
@@ -22,7 +22,7 @@ Dark mode, 1226 elements sampled.
 | Page surface | `#131722`, **95.3%** of painted area |
 | Panel surface | `#1C2030`, 2.4% |
 | Raised / border | `#2A2E39`, 1.7% |
-| Up / down | `#26DE81` / `#FF231F` — **identical in light and dark** |
+| Up / down | `#26DE81` / `#FF231F` -- **identical in light and dark** |
 | Text | `#FFFFFF` → `#C5CBCE` → `#758696` → `#4F5966` |
 | Family | Overpass, **528 of 529** text nodes |
 | Size | **13px on 406 of 529 nodes.** Then 14px (87), 16px (25), 12px (6), 11px (5) |
@@ -31,7 +31,7 @@ Dark mode, 1226 elements sampled.
 | Border | `1px` hairline, **504 occurrences** |
 | Padding | `10px 18px`, **477 occurrences** |
 | Shadow | **Two, and only two:** a green glow on BUY and a red glow on SELL |
-| Height | 1463px at a 900px viewport — barely scrolls |
+| Height | 1463px at a 900px viewport -- barely scrolls |
 
 Three things stand out.
 
@@ -46,7 +46,7 @@ shadows. Nothing floats above anything.
 document are coloured glows on the two buttons that spend money. Shadow is not
 decoration there; it is a category marker for "this action cannot be undone".
 
-### Reference B — a shadcn admin dashboard
+### Reference B -- a shadcn admin dashboard
 
 Dark mode, same viewport.
 
@@ -54,14 +54,14 @@ Dark mode, same viewport.
 |---|---|
 | Page surface | `oklch(0.145 0 0)`, 51.1% of painted area |
 | Card surface | `oklch(0.205 0 0)`, **47.3%** |
-| Border | `oklch(1 0 0 / 10%)` — white at 10%, not a colour |
+| Border | `oklch(1 0 0 / 10%)` -- white at 10%, not a colour |
 | Family | Inter |
 | Size | 14px (80) and 12px (80) **equally**, 16px (26), 24px (8), 30px (1) |
-| Weight | 400 (111), 500 (60), 600 (15), 700 (9) — four levels, all used |
+| Weight | 400 (111), 500 (60), 600 (15), 700 (9) -- four levels, all used |
 | Radius | 8px (60), 10px (21), 14px (11), pill (25) |
-| Gap | 8px (64), 4px (33), 6px (24), 24px (17) — a 4px scale |
+| Gap | 8px (64), 4px (33), 6px (24), 24px (17) -- a 4px scale |
 | Grid | 4 × 266px at 16px gap; 2 × 544px at 24px gap |
-| Shadow | `0 1px 2px rgba(0,0,0,.05)` and `0 1px 3px rgba(0,0,0,.1)` — real elevation |
+| Shadow | `0 1px 2px rgba(0,0,0,.05)` and `0 1px 3px rgba(0,0,0,.1)` -- real elevation |
 
 Nearly half the painted surface is a raised card. Type hierarchy is real and
 four levels deep. Spacing is a strict 4px scale. This is the opposite of
@@ -74,7 +74,7 @@ at once and acting on them**. Density is the feature; a card border around each
 number would push the second half of the book below the fold.
 
 Reference B is right for a surface where the operator is **being told
-something** — a few figures, each needing a label, a delta and a sentence of
+something** -- a few figures, each needing a label, a delta and a sentence of
 context. Density there is a liability; the reader needs to be walked through it.
 
 This terminal has both. So it uses both, and the rule is which surface you are
@@ -82,8 +82,8 @@ on:
 
 | Surface | Rule | Pages |
 |---|---|---|
-| **Trading** — reading and acting | Reference A. 13px, one weight, hairlines, no cards, no elevation, colour carries hierarchy, maximum rows above the fold | trade, orders, positions, portfolio, markets, operations |
-| **Analytical** — being told something | Reference B. Cards on a 4px scale, 4-up then 2-up, a delta badge, one plain sentence per figure, real type hierarchy | overview, strategies, backtests, ml, scanner, calendar |
+| **Trading** -- reading and acting | Reference A. 13px, one weight, hairlines, no cards, no elevation, colour carries hierarchy, maximum rows above the fold | trade, orders, positions, portfolio, markets, operations |
+| **Analytical** -- being told something | Reference B. Cards on a 4px scale, 4-up then 2-up, a delta badge, one plain sentence per figure, real type hierarchy | overview, strategies, backtests, ml, scanner, calendar |
 
 A page does not mix them. The boundary is the page, not the panel.
 
@@ -105,7 +105,7 @@ the one place to beat both references rather than follow them.
 
 **Neither has a mode marker.** Every figure in this terminal is simulated. The
 PAPER marker is not a badge in the corner that a confident reader learns to
-stop seeing — it is in the top bar, on the account, and beside any figure that
+stop seeing -- it is in the top bar, on the account, and beside any figure that
 could be mistaken for real money.
 
 ## The tokens
@@ -114,7 +114,7 @@ Defined in `app/globals.css`. The surface ramp is deliberately darker and
 flatter than Reference A: this terminal runs for hours on a single screen and
 the panel-to-page step only has to be visible, not decorative.
 
-Green and red mean profit and loss and nothing else — never "primary button",
+Green and red mean profit and loss and nothing else -- never "primary button",
 never "success toast". That is why the primary accent is gold: an action needs
 emphasis that cannot be read as a gain.
 
@@ -141,7 +141,7 @@ On trading surfaces it stays at 13/400 and colour does the work.
 `apps/web/tests/e2e` asserts structure, not appearance, and a redesign must
 keep these or change them deliberately:
 
-- `.topbar` and `.login-card` — the two selectors the sign-in helper waits for.
+- `.topbar` and `.login-card` -- the two selectors the sign-in helper waits for.
   Renaming either makes all 57 tests fail at sign-in, and the failure reads as
   a broken login rather than a renamed class.
 - Machine-readable refusal codes. The terminal holds no business rules; every

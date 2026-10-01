@@ -13,7 +13,7 @@
  *
  * Resolving a divergence can book an execution into an append-only ledger.
  * The button set is therefore derived from `allowed_actions`, which the SERVER
- * computes from the repair policy — this page does not decide what is
+ * computes from the repair policy -- this page does not decide what is
  * permitted, and deliberately cannot. A terminal that re-implemented the
  * policy would eventually offer an action the server refuses, which reads to
  * an operator as a broken button rather than as a rule.
@@ -269,7 +269,7 @@ export default function OperationsPage() {
                       />
                     </td>
                     <td>{account.automation_allowed ? "permitted" : "stopped"}</td>
-                    <td>{account.halt_scope === "NONE" ? "—" : humanise(account.halt_scope)}</td>
+                    <td>{account.halt_scope === "NONE" ? "-" : humanise(account.halt_scope)}</td>
                     <td className="num">{account.open_issues}</td>
                     <td className="num">{account.operator_action_required}</td>
                     <td className="num">{account.uncertain_orders}</td>
@@ -365,7 +365,7 @@ export default function OperationsPage() {
             {!isAdmin && groups.operator.length > 0 && (
               <Notice tone="warn">
                 {groups.operator.length} issue(s) need an administrator. Resolving a
-                divergence can write to the ledger, so it requires the admin role — which
+                divergence can write to the ledger, so it requires the admin role, which
                 is deliberately barred from placing orders.
               </Notice>
             )}
@@ -482,7 +482,7 @@ function IssueGroup({
                   label={humanise(issue.issue_type)}
                 />
                 <span className="muted small">
-                  {issue.instrument_id ?? "—"} &middot; detected{" "}
+                  {issue.instrument_id ?? "-"} &middot; detected{" "}
                   {relative(issue.detected_at)}
                   {issue.check_count > 1 && ` · seen ${issue.check_count}×`}
                 </span>

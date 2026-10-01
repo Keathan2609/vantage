@@ -2,8 +2,8 @@
 --
 -- Tamper EVIDENCE, not immutability. A party with write access to the database
 -- can still rewrite history, but they must rewrite every subsequent row to keep
--- the chain consistent. A verifier holding a previously observed head hash — or
--- one shipped off-box — detects the divergence. See docs/SECURITY.md.
+-- the chain consistent. A verifier holding a previously observed head hash -- or
+-- one shipped off-box -- detects the divergence. See docs/SECURITY.md.
 
 CREATE TABLE audit_events (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

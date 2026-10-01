@@ -61,7 +61,7 @@ func (h *harness) placeOrder(accountID, instrument, side, quantity, stop,
 		"time_in_force": "gtc",
 	}, &out)
 	if out.Rejection != nil {
-		h.t.Logf("the order was refused: %s — %s",
+		h.t.Logf("the order was refused: %s -- %s",
 			out.Rejection.Code, out.Rejection.Message)
 	}
 	return code, out.Order.ID

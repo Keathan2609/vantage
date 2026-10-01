@@ -5,7 +5,7 @@ import { collectConsoleErrors, signIn } from "./fixtures";
 /**
  * End-to-end checks for the terminal.
  *
- * These assert the properties that would be dangerous to get wrong — that the
+ * These assert the properties that would be dangerous to get wrong -- that the
  * PAPER marker is always present, that no page claims live execution, that a
  * refusal is shown as a refusal, and that no navigation entry leads to an
  * empty page. They deliberately do not assert profit, accuracy or any other

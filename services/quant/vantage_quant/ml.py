@@ -1,6 +1,6 @@
 """Machine-learning research layer.
 
-The default failure mode of ML in trading is not a bad model — it is a good
+The default failure mode of ML in trading is not a bad model -- it is a good
 score on a leaked dataset. This module is organised around preventing that,
 because a model that scores 0.95 on leaked data and 0.50 in production is
 worse than no model: it carries confidence it has not earned.
@@ -158,7 +158,7 @@ def build_labels(bars: pd.DataFrame, horizon: int = 1) -> pd.Series:
 
     This is the one place a future value is used, which is what a label IS. The
     rows that cannot be labelled become NaN and are dropped by ``build_dataset``;
-    filling them — with zero, or with the last known direction — would train the
+    filling them -- with zero, or with the last known direction -- would train the
     model on fabricated outcomes.
     """
     if horizon < 1:
@@ -387,8 +387,8 @@ def train(
     #
     # This is refused rather than silently widened. A caller who asked for a
     # 2-bar embargo on a 10-bar label has a mistaken mental model, and quietly
-    # giving them a different split than the one they requested — and recording
-    # it in the model's provenance — hides that instead of correcting it.
+    # giving them a different split than the one they requested -- and recording
+    # it in the model's provenance -- hides that instead of correcting it.
     if embargo_bars < horizon:
         raise ValueError(
             f"embargo_bars ({embargo_bars}) is smaller than the label horizon "
@@ -430,7 +430,7 @@ def train(
 
     # Scaling is fitted inside the pipeline on the TRAINING window only.
     # Fitting a scaler on the whole series before splitting leaks the test
-    # window's distribution into training — a subtle, very common leak.
+    # window's distribution into training -- a subtle, very common leak.
     pipeline = Pipeline([("scaler", StandardScaler()), ("model", estimator)])
     pipeline.fit(x[split.train], y[split.train])
 

@@ -500,7 +500,7 @@ func (c *client) waitForTradableFeed(instrument string, timeout time.Duration) {
 // flattenAll closes every open position.
 //
 // Without this, positions accumulate across runs until the per-instrument
-// exposure ceiling binds and every later order is refused — correctly, for a
+// exposure ceiling binds and every later order is refused -- correctly, for a
 // reason unrelated to the test.
 func (c *client) flattenAll(accountID string) {
 	c.t.Helper()

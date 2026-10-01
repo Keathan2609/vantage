@@ -68,7 +68,7 @@ export default function OverviewPage() {
    * decimal string. This only formats it, so no money is divided here and no
    * figure is reconstructed from parts.
    *
-   * The float is presentational and never returns to the server — the same
+   * The float is presentational and never returns to the server -- the same
    * exemption the risk meters on this page already rely on, and the only one
    * the money rule allows.
    *
@@ -100,7 +100,7 @@ export default function OverviewPage() {
       {activeSwitches.length > 0 ? (
         <Notice tone="bad">
           <strong>Trading halted.</strong>{" "}
-          {activeSwitches.map((sw) => `${sw.Scope}: ${sw.Reason}`).join(" · ")} — new orders
+          {activeSwitches.map((sw) => `${sw.Scope}: ${sw.Reason}`).join(" · ")}. New orders
           are refused within scope. Open positions are NOT closed; use Flatten on a position
           to close it deliberately.
         </Notice>
@@ -150,14 +150,14 @@ export default function OverviewPage() {
 
       <Panel
         title="Account"
-        note={`${account?.name ?? "—"} · ${account?.broker_name ?? "—"} · simulated`}
+        note={`${account?.name ?? "-"} · ${account?.broker_name ?? "-"} · simulated`}
         flush
       >
         <StatStrip>
           <Stat label="Equity" value={money(portfolio?.equity, currency)} />
           {/*
             The deltas below are the share of a RISK BUDGET consumed, and every
-            one of them comes from `risk.utilisation` — a decimal string the
+            one of them comes from `risk.utilisation`, a decimal string the
             API already computed. Nothing here divides two figures.
 
             The tone is loss, never profit: consuming a loss budget or an
@@ -270,7 +270,7 @@ export default function OverviewPage() {
                           <span className="tiny muted">
                             {Number.isFinite(utilisation)
                               ? `${(utilisation * 100).toFixed(0)}%`
-                              : "—"}
+                              : "-"}
                           </span>
                         </td>
                       </tr>
@@ -398,9 +398,9 @@ export default function OverviewPage() {
                   <dt>Scheduled</dt>
                   <dd>{dateTime(nextEvent.ScheduledAt)}</dd>
                   <dt>Forecast</dt>
-                  <dd>{nextEvent.Forecast ?? "—"}</dd>
+                  <dd>{nextEvent.Forecast ?? "-"}</dd>
                   <dt>Previous</dt>
-                  <dd>{nextEvent.Previous ?? "—"}</dd>
+                  <dd>{nextEvent.Previous ?? "-"}</dd>
                 </dl>
                 <p className="tiny muted" style={{ marginBottom: 0, marginTop: 8 }}>
                   Automated trading is blocked{" "}
@@ -516,9 +516,9 @@ export default function OverviewPage() {
             <div className="panel-body">
               <dl className="kv">
                 <dt>Version</dt>
-                <dd>{version?.version ?? "—"}</dd>
+                <dd>{version?.version ?? "-"}</dd>
                 <dt>Execution mode</dt>
-                <dd>{version?.execution_mode ?? "—"}</dd>
+                <dd>{version?.execution_mode ?? "-"}</dd>
                 <dt>Funds</dt>
                 <dd>{version?.simulated_funds ? "simulated" : "real"}</dd>
                 <dt>Live trading</dt>

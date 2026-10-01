@@ -391,7 +391,7 @@ def test_recent_window_of_a_random_walk_legitimately_drifts() -> None:
 
     This is not a false positive. A random walk has no stable level, so
     level-dependent features (z-score, position in range) genuinely differ
-    between the whole history and its recent tail — which is exactly the
+    between the whole history and its recent tail -- which is exactly the
     condition a model trained on the full history should be warned about
     before its predictions are trusted.
     """

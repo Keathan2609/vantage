@@ -8,7 +8,7 @@ anything except its inputs.
 Three properties follow from that, and all three matter:
 
 1. It is exhaustively testable without a database or a venue.
-2. It cannot be partially applied — there is no code path that skips it.
+2. It cannot be partially applied -- there is no code path that skips it.
 3. Its verdict is reproducible from the stored decision snapshot months later.
 
 ## Every check runs
@@ -61,7 +61,7 @@ concentrationApplies := distinctInstruments > 0
 
 Without that condition, the *first* trade on an empty account is always 100%
 concentrated in one instrument and is always refused. The check was written
-first and blocked every opening trade until this was fixed — a good example of
+first and blocked every opening trade until this was fixed -- a good example of
 a limit that is correct in aggregate and nonsense at the boundary.
 
 **Event risk** applies to automated orders only. A manual order passes with the
@@ -97,7 +97,7 @@ Four things this deliberately does:
 - **Refuses below the minimum.** If the budget cannot afford one minimum lot,
   the answer is NO TRADE, not "take the minimum anyway". On a R500 account with
   a 100-ounce gold contract at roughly R48,000 of notional per 0.01 lot, this
-  is the common answer — which is why the platform also seeds `XAUUSD.m`, a
+  is the common answer -- which is why the platform also seeds `XAUUSD.m`, a
   one-ounce micro contract, and keeps the standard contract enabled so the
   refusal stays visible rather than hidden.
 - **Converts explicitly.** With no USD/ZAR rate available, sizing fails with a
@@ -122,7 +122,7 @@ inputs. The Risk page lists every refusal with its reason, and the Decisions
 tab shows the rows where nothing was placed.
 
 On a small account, NO TRADE is the *common* outcome. A system that only
-recorded what it did would be unable to answer the more useful question — why
+recorded what it did would be unable to answer the more useful question -- why
 it did not act.
 
 ## Hard ceilings the application cannot raise
@@ -136,7 +136,7 @@ risk_limits_risk_ceiling_ck  CHECK (max_risk_per_trade_fraction <= 0.10)
 ```
 
 A compromised API, a bad migration or a manual UPDATE cannot store a limit
-above the ceiling. Drawdown is capped at 100% for the same reason — a limit
+above the ceiling. Drawdown is capped at 100% for the same reason -- a limit
 above that is not a limit.
 
 Every limit change is written to `risk_limit_history` with its previous value,
@@ -151,7 +151,7 @@ strategy) and does nothing to open positions.
 
 Closing a position is the separate, explicitly confirmed Flatten action. The
 two are kept apart because automatic liquidation on an alarm would dump
-positions into exactly the conditions that raised the alarm — and because an
+positions into exactly the conditions that raised the alarm -- and because an
 operator hitting "stop" in an incident must not be surprised in either
 direction.
 

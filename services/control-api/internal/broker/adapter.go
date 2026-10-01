@@ -14,7 +14,7 @@
 //     disagree, Vantage is wrong until proven otherwise.
 //
 // MetaTrader 5, a REST venue and a FIX session all fit behind this. What does
-// NOT fit — and is deliberately excluded — is any assumption that a call
+// NOT fit -- and is deliberately excluded -- is any assumption that a call
 // returning an error means the order did not reach the market.
 package broker
 

@@ -22,7 +22,7 @@ these capabilities satisfy it, is a question for a qualified adviser.
 | Capability | State | Detail |
 | --- | --- | --- |
 | Every order recorded with actor, time, inputs, outcome | Built | `orders`, `order_state_transitions`, `decision_snapshots` |
-| Every refusal recorded with its reason | Built | `risk_events`, `decision_snapshots` — a rejected order is a first-class record, not a gap |
+| Every refusal recorded with its reason | Built | `risk_events`, `decision_snapshots` -- a rejected order is a first-class record, not a gap |
 | Complete per-account ledger | Built | `transactions`, gapless sequence enforced by `transactions_account_sequence_uniq` |
 | Append-only enforcement | Built | Triggers plus revoked UPDATE/DELETE grants on eight tables |
 | Tamper detection | Built | SHA-256 hash chain over `audit_events`; `GET /admin/audit/verify` reports the first broken link |
@@ -50,7 +50,7 @@ capability the platform invests in most heavily.
 
 | Capability | State | Detail |
 | --- | --- | --- |
-| Pre-trade risk checks | Built | 18 deterministic checks, all evaluated, on every order |
+| Pre-trade risk checks | Built | 26 deterministic checks, all evaluated, on every order |
 | Hard ceilings independent of application code | Built | CHECK constraints, including risk-per-trade ≤ 10% |
 | Mandatory stop-loss policy | Built | Per-account flag, enforced in the engine |
 | Kill switch | Built | Global, account and strategy scope; separate from position closing |
@@ -78,7 +78,7 @@ capability the platform invests in most heavily.
 | --- | --- |
 | Client money segregation | **No client money exists.** No wallet, no deposit path, no third-party balance table |
 | Reconciliation of client assets | Not applicable for the same reason; venue reconciliation exists for positions and orders |
-| Custody controls | Not applicable — non-custodial by construction |
+| Custody controls | Not applicable -- non-custodial by construction |
 
 If any of these ever *became* applicable, it would be because the boundary in
 `docs/REGULATORY_BOUNDARY.md` had been crossed, which is a legal decision
@@ -101,19 +101,19 @@ before it is an engineering one.
 
 | Capability | State | Detail |
 | --- | --- | --- |
-| Data minimisation | Built | Email, display name, role, session metadata, action audit — nothing more |
+| Data minimisation | Built | Email, display name, role, session metadata, action audit -- nothing more |
 | Purpose limitation | Built | No analytics, no marketing, no third-party telemetry, no external calls beyond providers |
 | Encryption of sensitive fields at rest | Partial | MFA secrets encrypted under a versioned key; whole-database encryption is a deployment concern |
 | Encryption in transit | Partial | HSTS and secure cookies in production; local development is HTTP by necessity |
 | Access logging | Built | Authentication and authorisation outcomes audited |
-| Right to erasure | **Conflicted, by design** | Audit and ledger rows are append-only. A deployment serving other people must resolve this in policy — pseudonymising the actor reference is the usual answer — and the conflict is documented rather than hidden |
+| Right to erasure | **Conflicted, by design** | Audit and ledger rows are append-only. A deployment serving other people must resolve this in policy -- pseudonymising the actor reference is the usual answer -- and the conflict is documented rather than hidden |
 | Data-subject export | Partial | All data is queryable; no packaged subject-access export |
 | Breach detection | Partial | Auth failure metrics and audit chain verification; no alerting pipeline configured |
 
 ## The honest summary
 
 What this platform genuinely provides is **evidence**: a complete, ordered,
-tamper-evident record of what it did, what it refused, and why — with the
+tamper-evident record of what it did, what it refused, and why -- with the
 inputs preserved well enough to reconstruct a decision months later. That is
 the expensive part of most record-keeping obligations, and it is built.
 

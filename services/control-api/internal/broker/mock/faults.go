@@ -45,7 +45,7 @@ const (
 	FaultTimeout Fault = "timeout"
 
 	// FaultRejection makes the venue refuse definitively. Nothing happened,
-	// so a retry would be safe — which is exactly why this must be
+	// so a retry would be safe -- which is exactly why this must be
 	// distinguishable from a timeout.
 	FaultRejection Fault = "rejection"
 

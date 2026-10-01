@@ -50,7 +50,7 @@ a limit, and the last stage is the same OMS a human uses.
 | Trend score | Directional strength |
 | Momentum score | Rate of change |
 | Volatility | Regime classification, and a penalty at extremes |
-| Spread fraction | **Subtracted** — cost reduces the score directly |
+| Spread fraction | **Subtracted** -- cost reduces the score directly |
 | Event risk | Caps the score outright when high |
 | Agreeing strategies | Raises confidence when independent approaches concur |
 
@@ -99,15 +99,15 @@ They are deliberately separate. A kill switch is "stop everything now"; this is
 "stop the robot". An operator taking over by hand should not have to disable a
 protection to do it, and a system that is quiet should not still be busy.
 
-- `GET /api/v1/autopilot` — any signed-in role. "Is the robot running?" is the
+- `GET /api/v1/autopilot` -- any signed-in role. "Is the robot running?" is the
   first question anyone asks, and a viewer who cannot answer it cannot
   interpret anything else on the screen.
-- `POST /api/v1/autopilot` — **ADMIN only**, with a mandatory reason of at
+- `POST /api/v1/autopilot` -- **ADMIN only**, with a mandatory reason of at
   least ten characters. Switching it on commits the platform to placing orders
   with no human in the loop, which is a larger decision than any single order a
   trader can make. ADMIN cannot place an order at all, so the role that starts
   the machine is not the role that trades.
-- `GET /api/v1/autopilot/history` — append-only. The state table holds only the
+- `GET /api/v1/autopilot/history` -- append-only. The state table holds only the
   present; without history a period of autonomous trading leaves no trace once
   the switch is flipped back, and an investigation into a trade cannot
   establish whether autopilot was even running when it was placed.
@@ -116,7 +116,7 @@ protection to do it, and a system that is quiet should not still be busy.
 same reason the reconciliation halt is: checking beforehand leaves a window in
 which the switch is flipped microseconds before an automated order commits
 anyway. It is also checked in the scheduler, so switching off stops the work as
-well as the orders. Refusals carry their own code, `autopilot_off` — reporting
+well as the orders. Refusals carry their own code, `autopilot_off` -- reporting
 `reconciliation_required` instead would send someone hunting a divergence that
 does not exist.
 
@@ -134,7 +134,7 @@ The order of the rules IS the policy:
 
 1. **Vetoes, first and completely.** Data quality, portfolio state, a
    high-impact release, a confident RISK_OFF model, and a required model that
-   could not answer. No confidence level reaches past one — a 0.99 signal into
+   could not answer. No confidence level reaches past one -- a 0.99 signal into
    a news blackout is a 0.99 signal that must not be taken.
 2. **Opinions are admitted or discarded individually**, and the reason is kept
    either way. An operator asking "why did nothing happen?" needs the discards
@@ -164,7 +164,7 @@ explicit.
 The property that makes it trustworthy: it never returns a bar the cursor has
 not reached, so a scenario cannot quietly become a look-ahead test. Stepping
 past the end holds at the last bar rather than wrapping, because a wrapped
-series looks like a fresh trend while a held one produces a stale feed — a real
+series looks like a fresh trend while a held one produces a stale feed -- a real
 condition the platform already handles.
 
 Ten scenarios (`internal/orchestrator/scenario_test.go`) cover a clean trend, a
@@ -172,7 +172,7 @@ range, a volatility shock, a high-impact event, a spread spike, a data outage
 and a reconnect replaying an old price, conflicting signals, a drawdown
 sequence, a strong model signal with no risk budget, and a kill switch or
 autopilot switched off mid-run. Each is asserted reproducible, and each fixture
-is checked to actually be the market it claims — a "trend" scenario that did
+is checked to actually be the market it claims -- a "trend" scenario that did
 not trend would prove nothing.
 
 They exercise the decision layer, not the full live pipeline. Wiring the replay
@@ -222,8 +222,8 @@ Every 30 seconds, under a lease so two instances cannot double-run:
 3. Refuse, with a recorded reason, for account lifecycle, market session,
    reconciliation state, data health, authority or kill switch.
 4. Ask the research service for a signal.
-5. If actionable, size from the account's budget — ignoring any size the
-   strategy suggested — and submit through the OMS.
+5. If actionable, size from the account's budget -- ignoring any size the
+   strategy suggested -- and submit through the OMS.
 
 Steps 3 and 5 are the ones worth noticing. The refusals are *recorded*, so a
 quiet system can be told apart from a stopped one, and the sizing ignores the

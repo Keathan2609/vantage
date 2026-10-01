@@ -455,7 +455,7 @@ func (s *Server) setSessionCookies(w http.ResponseWriter, token, csrfToken strin
 		MaxAge:   int(time.Until(expires).Seconds()),
 	})
 	// The CSRF cookie is deliberately readable by script: the frontend must
-	// echo it into a header. It is not a secret on its own — it is only useful
+	// echo it into a header. It is not a secret on its own -- it is only useful
 	// combined with the HttpOnly session cookie, which script cannot read. The
 	// double-submit defence requires same-origin script to read this value,
 	// and a cross-site request cannot. Secure follows the environment as above.

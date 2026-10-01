@@ -6,7 +6,7 @@ control is partial or deferred, it says so. Nothing here is aspirational.
 ## Principles
 
 1. **The database is the last line, not the only one.** Every invariant that
-   matters is enforced in the domain, in SQL, and by grants — so bypassing the
+   matters is enforced in the domain, in SQL, and by grants -- so bypassing the
    application does not bypass the rule.
 2. **No custom cryptography.** `internal/crypto` composes AES-256-GCM and
    HMAC-SHA-256 from the standard library. No primitive is implemented here,
@@ -35,11 +35,11 @@ session tokens. Cookies are:
 | `Secure` | true under TLS | No plaintext transmission |
 | `SameSite` | `Lax` | Blocks the common cross-site POST |
 | `__Host-` prefix | under TLS | Binds the cookie to the exact host, no subdomain injection |
-| `Path` | `/` | — |
+| `Path` | `/` | -- |
 
 **Multi-factor.** TOTP (RFC 6238) with a ±1 step window. The secret is
 generated server-side, encrypted with AES-256-GCM under a versioned key, and
-bound to the user id via the AEAD associated data — a ciphertext copied to
+bound to the user id via the AEAD associated data -- a ciphertext copied to
 another user's row will not decrypt. Ten recovery codes are issued once; only
 their HMAC-SHA-256 hashes are stored, and consumption is atomic so a code
 cannot be redeemed twice.
@@ -91,7 +91,7 @@ That is the intended friction.
 The scope resolution is deliberately different here, and it was a defect
 before it was a decision. Reconciliation handlers use `accountForOperations`
 rather than `accountForRequest`, because an admin owns no trading account and
-every repair call therefore returned "account not found" — the endpoint was
+every repair call therefore returned "account not found" -- the endpoint was
 unreachable by the only role permitted to use it. `accountForOperations`
 widens to any account **for ADMIN only**; every other role still resolves
 through ownership. `TestEveryReconciliationHandlerUsesTheOperationsScope` in
@@ -101,7 +101,7 @@ the wrong thing.
 
 Forged and cross-account issue ids are not a separate check. The account is in
 the `WHERE` clause of the issue lookup, so an issue id belonging to another
-account is simply not found — a 404, with no signal that the id exists.
+account is simply not found -- a 404, with no signal that the id exists.
 
 ## CSRF
 
@@ -116,7 +116,7 @@ and the double-submit pair does not.
 ## CORS
 
 Exactly one configured origin is allowed, with credentials. There is no
-wildcard and **no origin reflection** — reflecting `Origin` alongside
+wildcard and **no origin reflection** -- reflecting `Origin` alongside
 `Allow-Credentials` would let any site drive the API with the user's session,
 which is precisely the attack CSRF defence exists for.
 
@@ -180,7 +180,7 @@ money, and the database is where that boundary is actually enforced.
 Append-only tables (`audit_events`, `transactions`, `fills`,
 `order_state_transitions`, `decision_snapshots`, `risk_limit_history`,
 `trading_authority_history`, `strategy_lifecycle_history`) are protected twice
-— by triggers that refuse UPDATE and DELETE, and by revoked grants so the
+-- by triggers that refuse UPDATE and DELETE, and by revoked grants so the
 attempt fails before reaching a trigger an attacker might try to disable.
 
 Both role boundaries are verified by `tests/smoke/smoke.py`, which attempts
@@ -216,7 +216,7 @@ What exists instead is seven named actions, each of which knows what it means:
 `ACKNOWLEDGE`, `RECHECK`, `IMPORT_BROKER_FILL`, `MARK_BROKER_REJECTED`,
 `MARK_NOT_EXECUTED`, `LINK_BROKER_ORDER`, `RESOLVE_MANUALLY`. Each requires
 ADMIN, requires the issue to be open, requires the action to be one the issue's
-own policy permits, and requires a reason of at least ten characters — not as
+own policy permits, and requires a reason of at least ten characters -- not as
 bureaucracy but because the reason is the only record of *why* a human
 overrode the system, and "ok" is not one.
 

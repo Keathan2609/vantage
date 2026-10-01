@@ -27,7 +27,7 @@ import (
 	// resolves zone names (New York, for the FX and metals calendar) at
 	// construction, and the deployed image is `scratch` with no
 	// /usr/share/zoneinfo to read. Without this the platform would fail to
-	// start rather than silently use UTC — but paying ~450KB to remove the
+	// start rather than silently use UTC -- but paying ~450KB to remove the
 	// filesystem dependency entirely is the better trade.
 	_ "time/tzdata"
 

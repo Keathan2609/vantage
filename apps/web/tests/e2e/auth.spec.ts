@@ -116,7 +116,7 @@ test.describe("authorisation", () => {
 
     await page.goto("/trade");
     // The ticket may render, but the control that would place an order must be
-    // absent or disabled — a viewer must not be able to start the flow.
+    // absent or disabled -- a viewer must not be able to start the flow.
     const review = page.getByRole("button", { name: /review order/i });
     if (await review.count()) {
       await expect(review).toBeDisabled();

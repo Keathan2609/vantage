@@ -11,7 +11,7 @@ interface design:
 1. **Requests may be lost.** Every mutating call carries a client-supplied
    `ClientOrderID` so the venue, or the adapter, can recognise a retry.
 2. **Responses may be lost.** An adapter must therefore be able to ask the
-   venue what it believes the state is — `FetchOrderByClientID` exists
+   venue what it believes the state is -- `FetchOrderByClientID` exists
    precisely so a lost-response retry can ask "did you already take this?"
    instead of guessing.
 3. **Fills are asynchronous, partial, out of order and replayable.**
@@ -38,7 +38,7 @@ Vantage never automatically retries a placement.
 | `Capabilities()` | What the venue supports, so the pipeline can refuse rather than emulate |
 | `Health(ctx)` | Connectivity; a degraded verdict is a normal answer, not an exception |
 | `PlaceOrder` | Submit, with a client order id |
-| `CancelOrder` | Request cancellation — which races fills |
+| `CancelOrder` | Request cancellation -- which races fills |
 | `FetchOrder`, `FetchOrderByClientID` | The venue's view of one order |
 | `FetchOpenOrders`, `FetchPositions`, `FetchAccount` | Authoritative state for reconciliation |
 | `PollExecutions(since)` | Replayable execution stream |
@@ -46,7 +46,7 @@ Vantage never automatically retries a placement.
 `Capabilities` is what lets the OMS refuse an unsupported order type instead of
 synthesising it locally. A platform that emulates a stop order the venue does
 not support ends up holding a stop that only exists while the platform is
-running — which is the worst possible place for a stop to live.
+running -- which is the worst possible place for a stop to live.
 
 ## The mock venue
 
@@ -81,7 +81,7 @@ find.
 A real adapter faces all of these, which is the honest reason a passing mock
 suite is not evidence that a live integration is safe.
 
-## Adding a real adapter — the actual work
+## Adding a real adapter -- the actual work
 
 The interface is the small part. What a live integration needs before it should
 be trusted:
@@ -93,7 +93,7 @@ types must have no field capable of carrying them.
 
 **Symbol mapping.** Venue symbols do not match internal instrument ids
 (`XAUUSD.m` here is one venue's micro-contract naming). The mapping belongs in
-the adapter, with a refusal for any unmapped symbol — never a best-effort
+the adapter, with a refusal for any unmapped symbol -- never a best-effort
 guess.
 
 **Contract specifications from the venue.** Contract size, tick size, minimum
@@ -117,7 +117,7 @@ rejected loudly rather than written into the ledger.
 
 ## MetaTrader 5 specifically
 
-MT5 is the intended eventual venue, and the interface fits it — but not
+MT5 is the intended eventual venue, and the interface fits it -- but not
 without work worth stating in advance:
 
 - MT5's API is a Windows-oriented terminal integration rather than a plain
@@ -146,5 +146,5 @@ broker name other than `mock`, `BuildAllowsLiveExecution` is a compile-time
 row at the database level.
 
 The OMS looks the adapter up by name from the account's broker. An account
-whose adapter is not registered cannot trade at all — the failure is a refusal
+whose adapter is not registered cannot trade at all -- the failure is a refusal
 at submission, not a nil dereference at execution time.

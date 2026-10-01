@@ -66,7 +66,7 @@ export async function signIn(
     page.locator(".login-card").waitFor({ state: "visible", timeout: 20_000 }),
   ]);
 
-  // Already signed in — the saved session from global setup is being reused.
+  // Already signed in -- the saved session from global setup is being reused.
   if (await page.locator(".topbar").isVisible()) return;
 
   await page.getByLabel("Email").fill(email);
@@ -88,7 +88,7 @@ export async function signOut(page: Page): Promise<void> {
 
 /**
  * An authenticated API context, for the setup and teardown a UI test should
- * not have to click through — arming a broker fault, releasing a kill switch.
+ * not have to click through -- arming a broker fault, releasing a kill switch.
  *
  * Using the API for arrangement and the UI for the assertion keeps each test
  * about one thing.
@@ -97,8 +97,8 @@ export async function apiClient(
   stateFile = "test-results/.auth/trader.json",
 ): Promise<{ ctx: APIRequestContext; csrf: string }> {
   // The session saved by global setup is reused rather than a fresh login
-  // being performed. Signing in per spec exhausts the login budget — burst
-  // ten, then two per minute — and the suite then reports the platform's own
+  // being performed. Signing in per spec exhausts the login budget -- burst
+  // ten, then two per minute -- and the suite then reports the platform's own
   // rate limiting as a failure.
   const ctx = await request.newContext({ baseURL: API, storageState: stateFile });
   const state = await ctx.storageState();
@@ -188,7 +188,7 @@ export async function resetBrokerFaults(
  * human would: arming twelve fault modes, activating and releasing kill
  * switches, revoking and restoring an authority. The control-change budget is
  * burst ten then one every two seconds, and it is a real control that is NOT
- * widened to suit a test — so the development cache is cleared instead, which
+ * widened to suit a test -- so the development cache is cleared instead, which
  * is what the smoke suite does for the same reason.
  *
  * A no-op wherever the development container is unreachable.
@@ -226,7 +226,7 @@ export function collectConsoleErrors(page: Page): string[] {
  *
  * A hardcoded stop is a trap: gold moves, and a stop that was 0.5% away when
  * the test was written is 2% away a week later. The first run of this suite
- * failed on exactly that — the risk engine correctly refused an order risking
+ * failed on exactly that -- the risk engine correctly refused an order risking
  * 1.84% against a 1% limit, and the test reported it as a platform failure.
  *
  * `fraction` is the distance from the current price, well inside the 1% of
@@ -253,7 +253,7 @@ export async function safeStop(
  * Closes every open position so the suite starts from a known state.
  *
  * Without this, positions accumulate across runs until the per-instrument
- * exposure ceiling binds and every later order is refused — correctly, for a
+ * exposure ceiling binds and every later order is refused -- correctly, for a
  * reason that has nothing to do with the test. The engine was right; the
  * fixture was dirty.
  */
@@ -312,7 +312,7 @@ export async function cancelAllWorking(
  * Writes to the venue's own tables via the development container, which is the
  * only way to make the venue know something Vantage does not. Every API path
  * necessarily creates a Vantage order first, so no sequence of API calls can
- * produce this state — and it is exactly the state a real venue reaches when
+ * produce this state -- and it is exactly the state a real venue reaches when
  * someone trades in the broker's own terminal.
  *
  * Classified EXTRA_BROKER_FILL or ORDER_MISSING_LOCALLY: unattributable, never
@@ -326,7 +326,7 @@ export function createOrphanVenueExecution(accountId: string): string | null {
   // The venue reference is looked up here rather than passed in.
   //
   // An earlier version read it from the account endpoint, which does not
-  // expose it, and fell back to the account id — but the seeded account's
+  // expose it, and fell back to the account id -- but the seeded account's
   // venue reference is a DIFFERENT uuid. The fixture then wrote a venue row
   // under a reference the venue never queries, no divergence was detected,
   // and the tests skipped as though nothing were wrong.
@@ -339,7 +339,7 @@ export function createOrphanVenueExecution(accountId: string): string | null {
 
   // A UNIQUE, non-Vantage client order id. An empty one would be the purest
   // simulation, but the venue carries UNIQUE (account_ref, client_order_id),
-  // so only one blank can exist per account — and a second attempt then
+  // so only one blank can exist per account -- and a second attempt then
   // silently inserts nothing. A foreign identifier is also the more realistic
   // shape: a trade placed in a broker's terminal carries the BROKER's id.
   const clientOrderId = `EXTERNAL-${stamp}`;

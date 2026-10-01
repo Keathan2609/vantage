@@ -13,7 +13,7 @@ import (
 // Kept together and deliberately narrow. Evidence is written by this package
 // and read back by this package, but it is still data that has been through a
 // database and could have been edited there, so every value is parsed rather
-// than asserted — a malformed number must produce a refused action, not a
+// than asserted -- a malformed number must produce a refused action, not a
 // panic or a zero silently booked into the ledger.
 
 func jsonUnmarshal(raw json.RawMessage, into any) error {

@@ -136,7 +136,7 @@ python tests/smoke/smoke_research.py
 | Go unit | Money arithmetic, the order state machine, position maths, the audit chain, the market clock, config refusals, the risk engine as a pure function | Anything touching the database |
 | Python unit | Indicators (including no-look-ahead), strategies, the backtester's fill assumptions, the ML split and baseline logic | The HTTP boundary |
 | Smoke: trading | The real pipeline against a real database: idempotency under concurrency, role boundaries, cross-tenant refusal, kill switches, hostile DB writes | Browser behaviour |
-| Smoke: research | Strategy evaluation, backtests and training through the API | — |
+| Smoke: research | Strategy evaluation, backtests and training through the API | -- |
 | Playwright | That every navigation entry renders content, that the PAPER marker is always present, that refusals read as refusals | Trading outcomes |
 
 Two properties are asserted rather than assumed, because both are the kind of
@@ -173,7 +173,7 @@ server's message. It never invents its own wording for a condition the server
 understands better.
 
 **Comments explain why, not what.** The interesting comments in this codebase
-are the ones recording a decision — why the stop is assumed on an ambiguous
+are the ones recording a decision -- why the stop is assumed on an ambiguous
 bar, why `ON CONFLICT DO NOTHING` rather than catching a unique violation, why
 concentration does not apply to the first trade.
 

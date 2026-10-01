@@ -82,9 +82,9 @@ func datasetScenarios() []scenario {
 			letter: "B", name: "range", dataset: "range-bound", steps: 140,
 			expect: func(t *testing.T, o observed) {
 				// NOT "a range produced decisions". A range is the market this
-				// fixture exists to show a trend strategy DECLINING on — the
+				// fixture exists to show a trend strategy DECLINING on -- the
 				// registry describes it as the one "on which a trend strategy
-				// should not churn" — so asserting it must trade asserts the
+				// should not churn" -- so asserting it must trade asserts the
 				// opposite of the point. What must hold is that the strategies
 				// were reached and looked.
 				if !assertPipelineReachedTheStrategies(t, o) {
@@ -152,7 +152,7 @@ func datasetScenarios() []scenario {
 					return
 				}
 				// A shock suppressing every actionable signal is a defensible
-				// outcome — it is what a risk-aware strategy set should do — so
+				// outcome -- it is what a risk-aware strategy set should do -- so
 				// it is reported rather than failed. What would be wrong is
 				// trading through it while recording an ordinary regime, and
 				// that is the assertion below.

@@ -245,7 +245,7 @@ export default function TradePage() {
               >
                 {tradable.map((instrument) => (
                   <option key={instrument.id} value={instrument.id}>
-                    {instrument.symbol} — {instrument.name}
+                    {instrument.symbol} · {instrument.name}
                   </option>
                 ))}
               </select>
@@ -473,7 +473,7 @@ export default function TradePage() {
                       {estimate?.riskFraction !== null &&
                       estimate?.riskFraction !== undefined
                         ? `${(estimate.riskFraction * 100).toFixed(2)}%`
-                        : "—"}
+                        : "-"}
                     </dd>
                     <dt>Free margin after</dt>
                     <dd>
@@ -485,7 +485,7 @@ export default function TradePage() {
                             ).toFixed(2),
                             currency,
                           )
-                        : "—"}
+                        : "-"}
                     </dd>
                   </dl>
 
@@ -573,7 +573,7 @@ function OrderOutcome({
         note={result.duplicate ? "returned from a previous identical command" : undefined}
       >
         <Notice tone="bad">
-          <strong>{humanise(result.rejection.code)}</strong> — {result.rejection.message}
+          <strong>{humanise(result.rejection.code)}</strong>: {result.rejection.message}
         </Notice>
         {failed.length > 0 ? (
           <>

@@ -33,7 +33,7 @@ func TestConsensusPolicyV1IsFrozenAtTheNumbersItActuallyRan(t *testing.T) {
 			t.Errorf("v1 %s is %s, and it ran as %s.\n"+
 				"A frozen policy may not be edited. If the platform should decide "+
 				"differently, register a NEW version and point ActivePolicyID at "+
-				"it -- every decision that recorded policy_version 1 was taken "+
+				"it, because every decision that recorded policy_version 1 was taken "+
 				"against these numbers and must stay interpretable.",
 				c.name, c.got, c.want)
 		}

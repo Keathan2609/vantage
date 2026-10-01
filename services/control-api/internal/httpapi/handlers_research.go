@@ -272,7 +272,7 @@ func (s *Server) handleRunStrategy(w http.ResponseWriter, r *http.Request) {
 	// The instrument is validated HERE rather than being left to the foreign
 	// key. An unvalidated value reached the database and came back as
 	// "strategy_runs_instrument_id_fkey rejected the write", which the handler
-	// then reported as HTTP 500 "The strategy could not be evaluated" — an
+	// then reported as HTTP 500 "The strategy could not be evaluated" -- an
 	// internal error for what is plainly a bad request. A caller cannot tell
 	// "you named an instrument that does not exist" from "the platform is
 	// broken", and only one of those is their problem to fix.

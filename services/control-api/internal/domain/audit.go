@@ -95,7 +95,7 @@ const (
 // Events are hash-chained: each row stores the hash of its own canonical
 // content combined with the previous row's hash. This provides TAMPER
 // EVIDENCE, not immutability. Anyone with write access to the database can
-// still rewrite history — but they must rewrite every subsequent row to keep
+// still rewrite history -- but they must rewrite every subsequent row to keep
 // the chain consistent, and a verifier that has recorded an earlier head hash
 // (or shipped it off-box) will detect the divergence. See docs/SECURITY.md.
 type AuditEvent struct {

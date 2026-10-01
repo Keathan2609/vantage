@@ -43,7 +43,7 @@ import (
 // always present and always identical: a second copy would eventually differ
 // from this one, and the difference would be in the direction of sounding more
 // like a result.
-const replayLabel = "SIMULATED — REPLAY — PAPER. Not a claim about future performance."
+const replayLabel = "SIMULATED · REPLAY · PAPER. Not a claim about future performance."
 
 type replayRunView struct {
 	ID          string `json:"id"`

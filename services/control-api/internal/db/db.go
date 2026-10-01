@@ -68,8 +68,8 @@ func Open(ctx context.Context, url string) (*Pool, error) {
 // InTx runs fn inside a serializable-by-default read-committed transaction and
 // commits it, rolling back on any error or panic.
 //
-// Every write that touches money goes through here. A partially applied fill —
-// position updated, ledger not — is not a state the system can recover from by
+// Every write that touches money goes through here. A partially applied fill --
+// position updated, ledger not -- is not a state the system can recover from by
 // retrying, so the unit of work is the transaction, never the statement.
 func (p *Pool) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	tx, err := p.Begin(ctx)
@@ -99,7 +99,7 @@ func (p *Pool) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
 
 // InSerializableTx runs fn at SERIALIZABLE isolation. Used where a read
 // informs a write that must not interleave with a concurrent identical
-// operation — for example allocating the next ledger sequence.
+// operation -- for example allocating the next ledger sequence.
 func (p *Pool) InSerializableTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	tx, err := p.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -158,7 +158,7 @@ func (l *SessionLock) Release(ctx context.Context) {
 //
 // It is enforced by PostgreSQL across processes, so two control planes cannot
 // both decide they hold it, and it is released automatically if the process
-// dies — a `locked_until` column in a table would leave a stale lock that
+// dies -- a `locked_until` column in a table would leave a stale lock that
 // needs a timeout to clear, and picking that timeout means guessing how long a
 // run should take.
 //

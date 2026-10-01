@@ -97,7 +97,7 @@ var ErrSizingUnavailable = errors.New("risk: position size cannot be computed")
 // Every policy ends the same way: the result is floored onto the instrument's
 // quantity step and checked against its minimum. Sizing never rounds up to
 // reach a tradable size, because doing so would take more risk than the policy
-// authorised — which is precisely the failure mode that empties small accounts.
+// authorised -- which is precisely the failure mode that empties small accounts.
 func Size(ctx context.Context, req SizingRequest) (SizingResult, error) {
 	res := SizingResult{Policy: req.Policy, RiskAmount: money.Zero(req.Account.Currency)}
 	spec := req.Instrument.Spec

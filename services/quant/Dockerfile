@@ -50,8 +50,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The base image's own pip and setuptools are older than the application's.
-# They are not used at runtime — the service runs out of the copied virtualenv
-# — but they are still installed files a scanner will flag, and `pkg_resources`
+# They are not used at runtime -- the service runs out of the copied virtualenv
+# -- but they are still installed files a scanner will flag, and `pkg_resources`
 # is imported by enough libraries that deleting setuptools is riskier than
 # updating it.
 RUN pip install --no-cache-dir --upgrade pip setuptools

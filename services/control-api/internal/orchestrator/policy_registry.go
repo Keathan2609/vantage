@@ -73,7 +73,7 @@ var policyRegister = map[PolicyID]RegisteredPolicy{
 		Provenance: "Chosen as a starting posture for a platform that had never " +
 			"traded unattended, so that the common outcome is NO TRADE. Never " +
 			"fitted against realised outcomes, and applied to an UNCALIBRATED " +
-			"raw score whose scale differs between strategies -- four of the " +
+			"raw score whose scale differs between strategies. Four of the " +
 			"twelve are capped below 0.80 by a constant inside the formula, so " +
 			"a 0.55 floor means something different for each of them.",
 		Frozen:            true,

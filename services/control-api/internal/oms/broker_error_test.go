@@ -13,7 +13,7 @@ import (
 //
 // The previous audit found that three of these six branches were reached by no
 // test at all. Getting one wrong means an order that DID reach the market is
-// recorded as refused — after which its risk budget is released and the
+// recorded as refused -- after which its risk budget is released and the
 // position it opened is invisible to every subsequent risk check.
 
 func TestADefinitiveVenueRejectionIsAKnownOutcome(t *testing.T) {
@@ -126,7 +126,7 @@ func TestAnUnrecognisedErrorFailsClosed(t *testing.T) {
 
 // TestANilErrorIsStillTreatedAsUnknown.
 //
-// A nil error should never reach here — the caller only calls this on failure —
+// A nil error should never reach here -- the caller only calls this on failure --
 // but if it ever did, the safe reading is "we do not know", not "the venue
 // refused it".
 func TestANilErrorIsStillTreatedAsUnknown(t *testing.T) {
@@ -139,7 +139,7 @@ func TestANilErrorIsStillTreatedAsUnknown(t *testing.T) {
 //
 // The adapter package defines the vocabulary; this asserts the OMS speaks all
 // of it. A sentinel added to broker/adapter.go and not handled here would
-// silently become an unknown outcome — which is SAFE, but halts an account for
+// silently become an unknown outcome -- which is SAFE, but halts an account for
 // what may be an ordinary refusal, so it should be a deliberate choice.
 func TestEveryDefinitiveErrorInTheAdapterPackageIsClassified(t *testing.T) {
 	definitive := []error{

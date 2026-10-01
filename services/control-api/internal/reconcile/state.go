@@ -25,7 +25,7 @@ import (
 // # Two ways to be unsafe
 //
 // A halted account has a known problem. An unreconciled account has an unknown
-// one — nothing is wrong, but nothing is known to be right either. Both stop
+// one -- nothing is wrong, but nothing is known to be right either. Both stop
 // automation, and the distinction is reported because the operator response
 // differs: one needs investigating, the other needs a run.
 

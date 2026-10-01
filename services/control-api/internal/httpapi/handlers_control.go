@@ -687,7 +687,7 @@ func (s *Server) handleActivateKillSwitch(w http.ResponseWriter, r *http.Request
 //
 // Nothing a trader could previously do to their OWN account is removed. They
 // keep account-scope halt over accounts they own, and cancel and flatten are
-// untouched — an operator stopping their own trading is never impeded.
+// untouched -- an operator stopping their own trading is never impeded.
 func (s *Server) authoriseKillSwitchScope(
 	w http.ResponseWriter, r *http.Request, p Principal,
 	scope domain.KillSwitchScope, targetID *string, verb string,
@@ -718,7 +718,7 @@ func (s *Server) authoriseKillSwitchScope(
 		}
 	case domain.KillScopeUser:
 		// Halting yourself is ordinary. Halting someone else is administration
-		// — which is what the original comment claimed and did not enforce.
+		// -- which is what the original comment claimed and did not enforce.
 		if !admin {
 			if targetID == nil || *targetID != p.User.ID.String() {
 				return deny("another operator's trading")
@@ -760,8 +760,8 @@ func (s *Server) handleDeactivateKillSwitch(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// Load it before touching it: the rule depends on the SCOPE, and the
-	// request carries only an id. Removing a halt is the dangerous direction —
-	// activation at worst stops trading, deactivation resumes it — so it is
+	// request carries only an id. Removing a halt is the dangerous direction --
+	// activation at worst stops trading, deactivation resumes it -- so it is
 	// authorised at least as strictly as activation.
 	ks, err := s.store.Control.KillSwitchByID(r.Context(), id)
 	if err != nil {

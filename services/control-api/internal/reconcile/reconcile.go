@@ -18,7 +18,7 @@
 //  7. record the run and update readiness
 //
 // Steps 2 and 3 happen before any repair, so a run is a pure function of two
-// snapshots plus the repair policy — which is what makes it reproducible and
+// snapshots plus the repair policy -- which is what makes it reproducible and
 // unit-testable.
 //
 // # Where the difference goes
@@ -104,7 +104,7 @@ const (
 // on an account that has never reconciled.
 //
 // It applies only when there is no cursor. Once a cursor exists it anchors the
-// window on its own, however old it has become — see runLocked. Treating this
+// window on its own, however old it has become -- see runLocked. Treating this
 // as a floor on every run is what let a frozen cursor be overtaken, and a
 // frozen cursor is the whole mechanism that stops an unresolved execution
 // issue closing itself.
@@ -156,8 +156,8 @@ var ErrRunInProgress = errors.New("reconcile: a run is already in progress for t
 // accountLockObject derives the advisory lock object id for an account.
 //
 // A 64-bit UUID hashed into 32 bits collides eventually. A collision here
-// costs one account waiting for another's run — a small, self-correcting
-// serialisation, not a correctness problem — which is the right trade for a
+// costs one account waiting for another's run -- a small, self-correcting
+// serialisation, not a correctness problem -- which is the right trade for a
 // lock that PostgreSQL enforces across processes.
 func accountLockObject(accountID uuid.UUID) int32 {
 	h := fnv.New32a()
@@ -241,8 +241,8 @@ func (s *Service) runLocked(ctx context.Context, account domain.Account,
 	// did not find it".
 	//
 	// It had not re-examined anything. That is the precise failure the freeze
-	// exists to prevent — an unbooked venue execution closing its own issue
-	// and the account releasing its own halt — rebuilt out of a lookback
+	// exists to prevent -- an unbooked venue execution closing its own issue
+	// and the account releasing its own halt -- rebuilt out of a lookback
 	// constant, and it would have fired seven days in.
 	//
 	// The cost of anchoring is a fetch window that grows while something is
@@ -742,7 +742,7 @@ func (s *Service) importFill(ctx context.Context, tx pgx.Tx, account domain.Acco
 // # Why only issues detected before this run started
 //
 // An issue raised by THIS run is obviously in the detected set, so the filter
-// is belt and braces — but it also guards the case where a repair inside this
+// is belt and braces -- but it also guards the case where a repair inside this
 // run created a new issue after classification finished. Closing that would
 // discard a live finding.
 //

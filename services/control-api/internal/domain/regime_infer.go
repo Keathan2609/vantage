@@ -215,7 +215,7 @@ func (a RegimeAssessment) Explain() []string {
 			line += fmt.Sprintf(", threshold %s", r.Threshold)
 		}
 		if r.Detail != "" {
-			line += " — " + r.Detail
+			line += ": " + r.Detail
 		}
 		out = append(out, line)
 	}

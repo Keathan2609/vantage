@@ -259,8 +259,8 @@ func (a *Aggregator) AggregateInto(ctx context.Context, s barWriter, q domain.Qu
 		// seed time once: every strategy re-evaluated a single bar for ever,
 		// the per-bar guard jammed shut, the live quote drifted 79 dollars from
 		// the newest bar, and nothing reported unhealthy. A frozen series is
-		// invisible in every other signal — ingestion still succeeds, the
-		// quote is still fresh, the feed is still "ok" — and shows up here
+		// invisible in every other signal -- ingestion still succeeds, the
+		// quote is still fresh, the feed is still "ok" -- and shows up here
 		// immediately as an age that climbs and never resets.
 		//
 		// Set from the bar's own close time against the quote's clock rather

@@ -206,14 +206,14 @@ func (s *Server) routes() chi.Router {
 	// gate in clientIP by poisoning RemoteAddr before clientIP ever read it.
 	// The login limiter keys on the client address, so a caller could present a
 	// fresh X-Forwarded-For per request and get a fresh full token bucket every
-	// time — removing the only cost control on an endpoint that runs Argon2id
+	// time -- removing the only cost control on an endpoint that runs Argon2id
 	// at 64 MiB per attempt, including for unknown users. It also let an
 	// attacker write any address they liked into the audit chain and the
 	// session record; the hash chain still verified, because it signs whatever
 	// it is given.
 	//
 	// clientIP already does the right thing with an untouched RemoteAddr. If a
-	// reverse proxy is ever deployed, set ctxTrustProxy from configuration —
+	// reverse proxy is ever deployed, set ctxTrustProxy from configuration --
 	// do not reinstate this.
 	r.Use(s.requestIDMiddleware)
 	r.Use(s.recoverer)
@@ -515,8 +515,8 @@ type readinessResponse struct {
 // handleReadiness reports whether the service can serve traffic.
 //
 // The distinction from liveness matters: the database is required, so losing it
-// makes the service not ready. Redis and the quant service are not required —
-// the platform degrades without them — so they are reported but do not fail
+// makes the service not ready. Redis and the quant service are not required --
+// the platform degrades without them -- so they are reported but do not fail
 // the probe.
 //
 // # Why trading state is reported here and does not fail the probe
@@ -524,7 +524,7 @@ type readinessResponse struct {
 // An HTTP server and a database that are both alive say NOTHING about whether
 // this system's records agree with the venue. Reporting "ready" on that basis
 // is how an operator comes to believe a halted account is trading, so the
-// trading verdict is reported alongside — HEALTHY, DEGRADED,
+// trading verdict is reported alongside -- HEALTHY, DEGRADED,
 // RECONCILIATION_REQUIRED or TRADING_HALTED.
 //
 // It deliberately does NOT make the probe fail. A halted account is a state

@@ -1,7 +1,7 @@
 # Control plane image.
 #
 # Two stages. The final image contains the binary, CA certificates and nothing
-# else — no shell, no package manager, no Go toolchain. A compromised process
+# else -- no shell, no package manager, no Go toolchain. A compromised process
 # therefore has no interpreter to pivot with, and there is no `apt` with which
 # to fetch one.
 #

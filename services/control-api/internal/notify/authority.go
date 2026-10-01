@@ -11,7 +11,7 @@ import (
 // AuthorityExpiring warns that a trading authority is about to lapse, or has.
 //
 // Nothing warned before. The development seed grants three years, so the
-// condition is far away and completely invisible until the day it arrives —
+// condition is far away and completely invisible until the day it arrives --
 // and on that day the platform stops trading in a way that looks exactly like
 // a strategy finding nothing: the authority row is still returned by
 // `ActiveAuthorityForAccount`, which does not filter on `valid_until`,
@@ -38,7 +38,7 @@ func (a *Alerter) AuthorityExpiring(ctx context.Context, accountID uuid.UUID,
 		title = "Trading authority has expired"
 		body = fmt.Sprintf(
 			"The trading authority for this account expired at %s. No order can be placed "+
-				"— autonomous or manual — until it is renewed. This is why nothing is "+
+				"autonomous or manual, until it is renewed. This is why nothing is "+
 				"trading.",
 			validUntil.UTC().Format(time.RFC3339))
 	}

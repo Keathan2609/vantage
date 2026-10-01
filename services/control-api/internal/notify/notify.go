@@ -11,7 +11,7 @@
 // is detected every two seconds; a broker outage is detected on every call.
 // Without a cooldown, the first minute of an incident writes hundreds of
 // identical rows, the notification list becomes unreadable, and the operator
-// learns to ignore it — which is worse than having no alerting at all.
+// learns to ignore it -- which is worse than having no alerting at all.
 //
 // Each event therefore has a key and a per-key cooldown. The first occurrence
 // alerts immediately; repeats inside the window are counted and suppressed;
@@ -132,7 +132,7 @@ type Event struct {
 	Kind     Kind
 	Severity Severity
 	Category Category
-	// Key distinguishes instances within a kind — an instrument id, an
+	// Key distinguishes instances within a kind -- an instrument id, an
 	// account id, a provider name. Events with the same kind and key share a
 	// cooldown window.
 	Key string
@@ -278,7 +278,7 @@ func (a *Alerter) Raise(ctx context.Context, e Event) {
 // Resolve reports that a previously raised condition has cleared, once.
 //
 // Without this, an operator cannot tell "still broken" from "recovered", and
-// the only signal is the absence of new alerts — which is indistinguishable
+// the only signal is the absence of new alerts -- which is indistinguishable
 // from the detector having died.
 func (a *Alerter) Resolve(ctx context.Context, kind Kind, key string, title, body string, accountID *uuid.UUID) {
 	a.mu.Lock()
@@ -315,7 +315,7 @@ func (a *Alerter) Active(kind Kind, key string) bool {
 // recipients resolves who is told.
 //
 // An account-scoped event goes to that account's owner. A system event goes to
-// every enabled user who could act on it — a viewer cannot fix a broker
+// every enabled user who could act on it -- a viewer cannot fix a broker
 // outage, but they are entitled to know the numbers on their screen are stale.
 func (a *Alerter) recipients(ctx context.Context, e Event) ([]uuid.UUID, error) {
 	if e.AccountID != nil {

@@ -58,7 +58,7 @@ are produced on demand.
 
 That is only safe because generation is deterministic. `GENERATOR_VERSION` plus
 a seed plus a bar count fix the output exactly, and the dataset hash covers the
-bars *and* the identity that produced them — so a version bump invalidates old
+bars *and* the identity that produced them -- so a version bump invalidates old
 hashes even if the bars happened to coincide. A hash recorded in a report today
 still identifies the same bars tomorrow.
 
@@ -107,7 +107,7 @@ Evidence is graded on `effective_n`, never raw:
 
 Grading on the effective count while building confidence intervals on the raw
 one states a precision the data has not got. Every interval therefore resamples
-**episodes**, not signals — a cluster bootstrap, 2000 resamples, fixed seed. For
+**episodes**, not signals -- a cluster bootstrap, 2000 resamples, fixed seed. For
 a strategy with 1214 signals in 404 episodes this widens the interval by
 roughly √(1214/404) ≈ 1.7, and that factor is the difference between a
 relationship that excludes zero and one that does not.
@@ -125,7 +125,7 @@ checks is load-bearing.
 
 1. **Role first.** A veto is asked a different question from a directional
    alpha. `pre_event_blackout` never emits a direction, so
-   "does its score predict return" has no answer and it is `NOT_APPLICABLE` —
+   "does its score predict return" has no answer and it is `NOT_APPLICABLE` --
    not short of data. `grid_martingale_research` is `RESEARCH_ONLY`.
 2. **Unobserved before constant.** A strategy that never signalled has a span
    of zero, and reporting `NON_INFORMATIVE_SCORE` there would be a claim about
@@ -135,8 +135,8 @@ checks is load-bearing.
    large sample of identical scores cannot pass.
 4. **Evidence class.**
 5. **Monotonicity, affirmatively.** `READY_FOR_CALIBRATION` requires a
-   demonstrated ordering. `INSUFFICIENT_EVIDENCE` — fewer than three usable
-   quantile bins, which happens when a score concentrates — is *not*
+   demonstrated ordering. `INSUFFICIENT_EVIDENCE` -- fewer than three usable
+   quantile bins, which happens when a score concentrates -- is *not*
    monotonicity, and treating it as such once produced a false ready verdict.
 6. **Interval excludes zero.**
 7. **Net outcome survives costs.**
@@ -165,7 +165,7 @@ behind it; `atr_volatility_regime` carried it with 20. It is now split.
 | `RESEARCH_ONLY` | Not evaluated as directional alpha by role. |
 | `NOT_APPLICABLE` | A veto emits no directional opinion, so there is no question to be short of. |
 
-Two of those — `INSUFFICIENT_DATA` and `INSUFFICIENT_INDEPENDENT_EPISODES` —
+Two of those -- `INSUFFICIENT_DATA` and `INSUFFICIENT_INDEPENDENT_EPISODES` --
 are the only ones where waiting for more data is the right response. The set
 is exported as `NEEDS_MORE_DATA`, and its counterpart `SCORE_IS_THE_PROBLEM`
 names the verdicts where waiting would spend a milestone re-learning what is
@@ -176,16 +176,16 @@ already known.
 A bad score is not a bad trading hypothesis, so a second, independent flag
 records which one to revisit:
 
-- `SCORE_REDESIGN_CANDIDATE` — the entry rule produces a net outcome whose
+- `SCORE_REDESIGN_CANDIDATE` -- the entry rule produces a net outcome whose
   interval excludes zero while its score fails to rank those same signals.
-- `SIGNAL_RESEARCH_REQUIRED` — neither the outcome nor the ordering is
+- `SIGNAL_RESEARCH_REQUIRED` -- neither the outcome nor the ordering is
   established, so the hypothesis itself is the open question.
 
 Nothing is redesigned on the strength of the flag; it marks where to look.
 
 ### Prior runs are translated, not rewritten
 
-Milestone E's records keep their original labels — they are the record of what
+Milestone E's records keep their original labels -- they are the record of what
 was concluded at the time. `verdict.map_legacy` translates them on the way out,
 and where the old label is genuinely ambiguous and no counts accompany it, it
 returns nothing and says why. A migration that guesses is indistinguishable
@@ -196,7 +196,7 @@ from one that knows.
 `tests/test_research_leakage.py` holds the guards. The research package may not
 be imported by strategy code: a strategy that could read a forward outcome
 could fit against a future it never saw. Outcomes are computed strictly from
-bars after the signal bar, and the eligible-bar denominator is measured — a
+bars after the signal bar, and the eligible-bar denominator is measured -- a
 signal rate against the wrong denominator produces a required-data estimate
 wrong by the same factor.
 
@@ -224,14 +224,14 @@ re-run under the corrected taxonomy, not an edit of that one.
 | `donchian_breakout` | breakout | 2 211 | 409 | 25.61% | 0.999 | `ORDERING_NOT_ESTABLISHED` | **score redesign** |
 | `session_london_breakout` | breakout | 1 214 | 404 | 14.06% | 0.999 | `ORDERING_NOT_ESTABLISHED` | **score redesign** |
 | `bollinger_zscore_reversion` | mean reversion | 1 213 | 376 | 13.80% | 1.000 | `COST_NEGATIVE` | signal research |
-| `rsi_mean_reversion` | mean reversion | 1 096 | 110 | 12.70% | 0.999 | `INSUFFICIENT_INDEPENDENT_EPISODES` | — |
-| `multi_timeframe_trend` | directional | 205 | 201 | 2.44% | 0.465 | `INSUFFICIENT_DATA` | — |
-| `ma_trend_crossover` | directional | 113 | 113 | 1.31% | 0.440 | `INSUFFICIENT_DATA` | — |
-| `atr_volatility_regime` | breakout | 102 | 20 | 1.22% | 0.777 | `INSUFFICIENT_DATA` | — |
-| `grid_martingale_research` | high-risk | 6 539 | 441 | 71.76% | 0.000 | `RESEARCH_ONLY` | — |
-| `ensemble_weighted_vote` | ensemble | 0 | 0 | 0% | — | `INSUFFICIENT_DATA` | — |
-| `ml_direction_filter` | model filter | 0 | 0 | 0% | — | `INSUFFICIENT_DATA` | — |
-| `pre_event_blackout` | risk filter | 0 | 0 | 0% | — | `NOT_APPLICABLE` | — |
+| `rsi_mean_reversion` | mean reversion | 1 096 | 110 | 12.70% | 0.999 | `INSUFFICIENT_INDEPENDENT_EPISODES` | -- |
+| `multi_timeframe_trend` | directional | 205 | 201 | 2.44% | 0.465 | `INSUFFICIENT_DATA` | -- |
+| `ma_trend_crossover` | directional | 113 | 113 | 1.31% | 0.440 | `INSUFFICIENT_DATA` | -- |
+| `atr_volatility_regime` | breakout | 102 | 20 | 1.22% | 0.777 | `INSUFFICIENT_DATA` | -- |
+| `grid_martingale_research` | high-risk | 6 539 | 441 | 71.76% | 0.000 | `RESEARCH_ONLY` | -- |
+| `ensemble_weighted_vote` | ensemble | 0 | 0 | 0% | -- | `INSUFFICIENT_DATA` | -- |
+| `ml_direction_filter` | model filter | 0 | 0 | 0% | -- | `INSUFFICIENT_DATA` | -- |
+| `pre_event_blackout` | risk filter | 0 | 0 | 0% | -- | `NOT_APPLICABLE` | -- |
 
 **Nothing is `READY_FOR_CALIBRATION`.** No calibration may be fitted.
 
@@ -241,11 +241,11 @@ Eight strategies carried the single label `MORE_DATA_REQUIRED`. Under the
 corrected taxonomy they separate into three different situations needing three
 different responses:
 
-- **five are genuinely short of data** (`INSUFFICIENT_DATA`) — collect more bars,
+- **five are genuinely short of data** (`INSUFFICIENT_DATA`) -- collect more bars,
 - **one is short of INDEPENDENCE, not volume** (`rsi_mean_reversion`: 1 096
-  signals in 110 episodes) — more bars help only if they contain new episodes,
+  signals in 110 episodes) -- more bars help only if they contain new episodes,
 - **two have been measured and cannot be resolved** (`ORDERING_NOT_ESTABLISHED`)
-  — collecting more bars would spend a milestone re-learning what is known.
+  -- collecting more bars would spend a milestone re-learning what is known.
 
 The last two are also both `SCORE_REDESIGN_CANDIDATE`: their entry rules produce
 a net outcome whose interval excludes zero while the score fails to rank those
@@ -257,9 +257,9 @@ The working hypothesis had been a signal rate near 2%. Measured, the rates
 span 1.22% to 71.76%: five strategies produce over a thousand observations each
 and `macd_momentum` reaches 750 *effective* observations, comfortably a
 `CALIBRATION_CANDIDATE` on count alone. The shortage was never the headline
-constraint. Three strategies are genuinely starved — `atr_volatility_regime`
+constraint. Three strategies are genuinely starved -- `atr_volatility_regime`
 would need about 41 000 eligible bars for 500 observations, `ma_trend_crossover`
-about 38 000 — but the rest have enough data and still fail, which is a more
+about 38 000 -- but the rest have enough data and still fail, which is a more
 useful answer than "collect more".
 
 ### What actually blocks calibration
@@ -268,10 +268,10 @@ useful answer than "collect more".
   score is `FLAT` at all three horizons: ρ between 0.014 and 0.028, mean net
   return indistinguishable from zero. Measured, not unmeasured.
 - `session_london_breakout` has a rank correlation that survives clustering
-  (ρ ≈ 0.10–0.12, interval excluding zero) and a positive net outcome, but its
+  (ρ ≈ 0.10 -- 0.12, interval excluding zero) and a positive net outcome, but its
   score concentrates into **two usable quantile bins out of five**, so
   monotonicity cannot be established. What it needs is score *spread*, not more
-  bars — which is precisely what `ORDERING_NOT_ESTABLISHED` now says.
+  bars -- which is precisely what `ORDERING_NOT_ESTABLISHED` now says.
 - `bollinger_zscore_reversion` orders outcomes weakly positively and still
   loses money after costs at every horizon.
 - `rsi_mean_reversion` orders them **backwards**: higher score, worse outcome
@@ -294,7 +294,7 @@ decoration.
 ### Components often rank better than the combined score
 
 Exploratory, unadjusted for multiple comparisons, and reported for the whole
-grid rather than its best cell — but consistent with what
+grid rather than its best cell -- but consistent with what
 `score_inventory.py` predicted. `atr_volatility_regime`'s `range_position`
 component reaches ρ = +0.50 where its combined score reaches −0.04.
 `macd_momentum`'s `strength_atr` reaches +0.065 against a combined +0.014. In
@@ -309,7 +309,7 @@ up to 2.37× (`rsi_mean_reversion`, medium horizon: 1 096 signals but 110
 episodes, its largest containing 82 signals). Where signals really are
 independent the correction changes nothing: `ma_trend_crossover` has 113
 signals in 113 episodes and its interval width ratio is exactly 1.00. A few
-ratios fall marginally below 1.0 — bootstrap noise at 500 resamples, not a
+ratios fall marginally below 1.0 -- bootstrap noise at 500 resamples, not a
 narrowing.
 
 Before the correction, `session_london_breakout` was reported
@@ -331,7 +331,7 @@ loudly rather than reaching for a network. Acquiring data is a human decision
 with licensing attached to it.
 
 `python -m vantage_quant.research datasets` reports what is present and, when
-nothing is, prints the exact specification needed — instrument, timeframe,
+nothing is, prints the exact specification needed -- instrument, timeframe,
 minimum bars, required and optional columns, accepted file types and the
 timezone requirement. The minimum bar count is derived from the longest
 registered warm-up plus the episode target, not picked.
@@ -345,7 +345,7 @@ RESEARCH     a normalized dataset that passed quality and was partitioned.
 ```
 
 Kept separate so that "was that in the file, or did we do it?" stays
-answerable — the first question anyone asks of a surprising result. Both hashes
+answerable -- the first question anyone asks of a surprising result. Both hashes
 travel into every report.
 
 ## One door
@@ -354,7 +354,7 @@ A dataset is addressed by **name**, inside an allowlisted directory. Never by a
 path: an arbitrary path parameter is a file-read primitive pointed at the host.
 The name is rejected if it contains a separator, `..`, a drive letter or a
 leading dot, and the resolved path is then checked for containment with
-`is_relative_to` — a string prefix would accept `research-data-elsewhere`.
+`is_relative_to` -- a string prefix would accept `research-data-elsewhere`.
 
 The file itself is untrusted input. It is bounded in size, its header is
 checked for duplicate columns *before* pandas silently disambiguates them, a
@@ -392,7 +392,7 @@ quotes. A dataset with any of these is `REJECTED` and cannot enter a run.
 `WARNING` findings mean it can, with the reader told what they are working
 with: assumed timezone, absent spread, irregular spacing, large gaps, abnormal
 ranges or spreads, suspected flatlining, Saturday bars, low coverage. This is
-the common and correct outcome for real market data — a validator that refused
+the common and correct outcome for real market data -- a validator that refused
 everything imperfect would refuse every real market file in existence.
 
 Status: `IMPORTED` → `VALIDATING` → `VALID` / `VALID_WITH_WARNINGS` /
@@ -402,7 +402,7 @@ destroys the evidence that the input was broken.
 ## Coverage
 
 A market clock modelled on `fx_metals_24x5` distinguishes a closed venue from a
-provider that lost data — counting the weekend as missing makes a complete
+provider that lost data -- counting the weekend as missing makes a complete
 dataset look broken and hides the one that is. Coverage is measured between the
 first and last bar present, so truncation at either end is invisible by
 construction; nothing in a file can say the series ought to have continued.
@@ -438,7 +438,7 @@ differences are partly methodological.
 
 Synthetic and historical results are never averaged. A number averaged across
 the two describes no market that exists, and it would destroy the single most
-useful thing this work can produce — the discovery that a relationship was an
+useful thing this work can produce -- the discovery that a relationship was an
 artefact of the generator. Disagreements are classified instead:
 `SYNTHETIC_ONLY_RELATIONSHIP`, `HISTORICAL_ONLY_RELATIONSHIP`,
 `DIRECTION_REVERSAL`, `SCORE_RANGE_MISMATCH`, `COST_SURVIVAL_MISMATCH`,
@@ -454,7 +454,7 @@ Measured on constructed fixture bars, because throughput is a property of the
 code rather than the market: **41.3 bars/sec** and 110 observations/sec across
 12 workers, against 9.4 bars/sec single-threaded before the run was
 parallelised. That is roughly 2.5 minutes per year of hourly TRAIN data, or
-about 12 minutes for five years — multi-year work is practical.
+about 12 minutes for five years -- multi-year work is practical.
 
 Workers re-import each dataset by name inside the worker rather than receiving
 a pickled frame: the re-read costs milliseconds against seconds of strategy

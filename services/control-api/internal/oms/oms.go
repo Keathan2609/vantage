@@ -3,7 +3,7 @@
 //
 // # The pipeline
 //
-// Every order — manual, strategy-generated or autopilot — passes through the
+// Every order -- manual, strategy-generated or autopilot -- passes through the
 // same ordered sequence of gates. There is no second entry point, no "internal"
 // bypass, and no way for strategy or model code to reach a broker adapter
 // directly, because nothing outside this package holds a reference to one.
@@ -32,8 +32,8 @@
 //
 // Holding a transaction open across the broker call would put a network round
 // trip inside a lock on financial rows. Splitting them means a crash between C
-// and D leaves an order in a known, recoverable state — FAILED, awaiting
-// reconciliation — rather than a lock nobody can clear.
+// and D leaves an order in a known, recoverable state -- FAILED, awaiting
+// reconciliation -- rather than a lock nobody can clear.
 package oms
 
 import (
@@ -1028,7 +1028,7 @@ func (s *Service) applyAckTx(ctx context.Context, tx pgx.Tx, req PlaceOrderReque
 		// position, the fill or the ledger. See store.LockAccountTx for the
 		// deadlock this prevents: without it, the FK on `fills` takes an
 		// implicit KEY SHARE on this row early and the explicit FOR UPDATE
-		// arrives late, with the positions lock in between — which is a cycle
+		// arrives late, with the positions lock in between -- which is a cycle
 		// that Postgres resolves by killing one of the transactions.
 		if err := s.store.Accounts.LockAccountTx(ctx, tx, account.ID); err != nil {
 			return err
@@ -1175,7 +1175,7 @@ type BrokerErrorDecision struct {
 //
 // It is the branch table on which "never retry an unknown outcome" rests, and
 // getting one case wrong means an order that reached the market is recorded as
-// refused — after which its risk budget is released and the position it opened
+// refused -- after which its risk budget is released and the position it opened
 // is invisible. The previous audit noted that three of these six branches were
 // reached by no test at all.
 //

@@ -28,7 +28,7 @@ import (
 //  2. The evidence behind a decision is gone once the loop moves on, so an
 //     issue records a summary rather than what was actually observed.
 //  3. Reconciliation is not reproducible. Given the same divergence, a second
-//     run could classify it differently depending on timing — which for a
+//     run could classify it differently depending on timing -- which for a
 //     process that writes to the ledger is not acceptable.
 //
 // Capturing both sides first makes a run a pure function of two snapshots plus

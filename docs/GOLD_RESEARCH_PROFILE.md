@@ -70,15 +70,15 @@ quietly. `TestTheSpreadWidensOutsideLiquidHours` asserts it stays that way.
 ## Sessions
 
 The venue calendar is `fx_metals_24x5`: Sunday 17:00 New York to Friday 17:00
-New York, with a daily maintenance break 17:00–18:00 New York, Monday to
+New York, with a daily maintenance break 17:00 -- 18:00 New York, Monday to
 Thursday.
 
 | Session | Local window | What it means for gold |
 | --- | --- | --- |
-| Sydney | 07:00–16:00 Australia/Sydney | Thin. Wide spreads, little follow-through. |
-| Tokyo | 09:00–18:00 Asia/Tokyo | Physical-demand flow; ranges more often than trends. |
-| London | 08:00–16:30 Europe/London | The main liquidity session for metals. |
-| New York | 08:00–17:00 America/New_York | US data and rates flow. |
+| Sydney | 07:00 -- 16:00 Australia/Sydney | Thin. Wide spreads, little follow-through. |
+| Tokyo | 09:00 -- 18:00 Asia/Tokyo | Physical-demand flow; ranges more often than trends. |
+| London | 08:00 -- 16:30 Europe/London | The main liquidity session for metals. |
+| New York | 08:00 -- 17:00 America/New_York | US data and rates flow. |
 | **Overlap** | London afternoon / New York morning | The deepest book of the day, and where most directional moves resolve. |
 
 Two practical points:
@@ -111,7 +111,7 @@ the same rule meaningful for a $2,650 gold price and a 1.08 EURUSD price:
 | otherwise | `UNKNOWN` |
 
 `UNKNOWN` is a real answer and is never coerced. A strategy that declares
-itself valid only in trends does not run in a market nobody can characterise —
+itself valid only in trends does not run in a market nobody can characterise --
 see `domain.Regime` and the consensus policy.
 
 **A stop sized for a compressed market is not a stop in an expanded one.** This
@@ -184,14 +184,14 @@ This is not a toy: it is the constraint that makes every refusal path real.
 
 At seeded prices, on `XAUUSD.m` (1 oz, 0.5% margin):
 
-- 0.01 lots is roughly $0.13 of margin — affordable
+- 0.01 lots is roughly $0.13 of margin -- affordable
 - but the **minimum quantity** and **step** decide whether a risk-derived size
   can be expressed at all
 - and a risk budget of 1% of 500 ZAR is 5 ZAR, which at a typical ATR stop
   distance often sizes below the instrument minimum
 
 **When a risk-derived size rounds below the instrument minimum, the answer is
-NO TRADE.** Not the minimum size — that would take more risk than the account
+NO TRADE.** Not the minimum size -- that would take more risk than the account
 permits, which is the one thing sizing may never do. `risk.Size` returns
 infeasible with the reason, and for this account that is the common outcome.
 
@@ -209,7 +209,7 @@ the correct output is a refusal with its arithmetic shown.
   concentration are per-instrument, so gold and silver currently count as
   diversification when they are frequently one trade. Named in
   `docs/RISK_ENGINE.md` and in the engineering report as a real gap.
-- **Physical-market structure** — lease rates, ETF flows, central-bank
+- **Physical-market structure** -- lease rates, ETF flows, central-bank
   purchases. Not available to this build and not simulated.
 - **The futures basis and roll.** This is a spot CFD model; there is no
   contract to roll.

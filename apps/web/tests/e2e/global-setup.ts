@@ -8,8 +8,8 @@ import { request, type FullConfig } from "@playwright/test";
 /**
  * Signs in once per run and saves the session for the suite to reuse.
  *
- * This is not a convenience. The login rate limit is a real control — burst
- * ten, then two per minute — and a suite that signs in per test exhausts it
+ * This is not a convenience. The login rate limit is a real control -- burst
+ * ten, then two per minute -- and a suite that signs in per test exhausts it
  * and then reports "sign-in is broken" for twenty tests. The first run of this
  * suite did exactly that: 29 login attempts, 18 of them refused with 429.
  *
@@ -41,9 +41,9 @@ const TERMINAL_TITLE_MARKER = "Vantage";
  * output reads exactly like a broken login: no error mentions the port, the
  * other application, or the fact that the terminal was never reached.
  *
- * That is not hypothetical. It cost a full 12-minute run on this machine —
+ * That is not hypothetical. It cost a full 12-minute run on this machine --
  * 31 failures, all of them in the application's own code by appearance, none
- * of them real — against a page titled "FORGE — distributed workflow
+ * of them real -- against a page titled "FORGE -- distributed workflow
  * orchestration". Checking the title costs one request and names the problem
  * in the first line of output instead of the last.
  */
@@ -62,7 +62,7 @@ async function requireTheTerminal(baseURL: string): Promise<void> {
       throw new Error(
         `${baseURL} is not the Vantage terminal. It answered ${res.status()} with a page ` +
           `titled ${title ? `"${title}"` : "(no title)"}. Another application is almost ` +
-          `certainly holding that port — set VANTAGE_E2E_BASE_URL to the port the terminal ` +
+          `certainly holding that port. Set VANTAGE_E2E_BASE_URL to the port the terminal ` +
           `actually got, and set VANTAGE_PUBLIC_WEB_ORIGIN to match before restarting the API.`,
       );
     }

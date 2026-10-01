@@ -189,7 +189,7 @@ export default function AuthorityPage() {
       {!current && !authority.loading ? (
         <Notice tone="warn">
           {authority.data?.message ??
-            "No active trading authority exists for this account. Every order — manual or automated — will be refused until one is granted."}
+            "No active trading authority exists for this account. Every order, manual or automated, will be refused until one is granted."}
         </Notice>
       ) : null}
 
@@ -338,11 +338,11 @@ export default function AuthorityPage() {
             <div className="panel-body">
               <dl className="kv">
                 <dt>Account</dt>
-                <dd>{account?.name ?? "—"}</dd>
+                <dd>{account?.name ?? "-"}</dd>
                 <dt>Mode</dt>
-                <dd>{account?.mode ?? "—"}</dd>
+                <dd>{account?.mode ?? "-"}</dd>
                 <dt>Broker</dt>
-                <dd>{account?.broker_name ?? "—"}</dd>
+                <dd>{account?.broker_name ?? "-"}</dd>
                 <dt>Account enabled</dt>
                 <dd>
                   <Status
@@ -368,7 +368,7 @@ export default function AuthorityPage() {
               </div>
               <p className="tiny muted" style={{ marginBottom: 0 }}>
                 Three separate things can stop an order: the account&rsquo;s trading flag, the
-                authority, and a kill switch. They are deliberately not combined — an operator
+                authority, and a kill switch. They are deliberately not combined, because an operator
                 needs to be able to suspend one account without revoking a mandate they will
                 want back in ten minutes.
               </p>
@@ -381,7 +381,7 @@ export default function AuthorityPage() {
             <div className="panel-body">
               {current ? (
                 <Notice tone="warn">
-                  An active authority already exists. Only one can be active per account —
+                  An active authority already exists. Only one can be active per account --
                   revoke the current one before granting a replacement.
                 </Notice>
               ) : null}
@@ -536,7 +536,7 @@ export default function AuthorityPage() {
                   <dd>
                     {reconciliation.data.last_run
                       ? `${reconciliation.data.last_run.OrdersCompared} order(s), ${reconciliation.data.last_run.PositionsCompared} position(s)`
-                      : "—"}
+                      : "-"}
                   </dd>
                 </dl>
               ) : (

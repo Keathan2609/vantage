@@ -95,16 +95,16 @@ export default function MarketsPage() {
                     <td className="muted truncate">{instrument.name}</td>
                     <td className="muted tiny">{instrument.asset_class}</td>
                     <td className="mono right">
-                      {quote ? decimal(quote.bid, instrument.price_precision) : "—"}
+                      {quote ? decimal(quote.bid, instrument.price_precision) : "-"}
                     </td>
                     <td className="mono right">
-                      {quote ? decimal(quote.ask, instrument.price_precision) : "—"}
+                      {quote ? decimal(quote.ask, instrument.price_precision) : "-"}
                     </td>
                     <td className="mono right muted">
-                      {quote ? percent(quote.spread_fraction, 4) : "—"}
+                      {quote ? percent(quote.spread_fraction, 4) : "-"}
                     </td>
                     <td className="mono right muted">
-                      {quote ? age(quote.age_seconds) : "—"}
+                      {quote ? age(quote.age_seconds) : "-"}
                     </td>
                     <td>
                       {feed ? (
@@ -188,7 +188,7 @@ export default function MarketsPage() {
         <div className="panel-body">
           <p className="tiny muted" style={{ margin: 0 }}>
             Only a fully healthy feed is tradable by automation. Degraded, stale and invalid
-            feeds all fail closed — a strategy that can act in milliseconds must not act on a
+            feeds all fail closed, because a strategy that can act in milliseconds must not act on a
             price the platform no longer trusts. A manual order may still proceed on a
             degraded feed, because the person placing it can see this table.
           </p>

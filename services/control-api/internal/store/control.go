@@ -513,7 +513,7 @@ func (s *ControlStore) AppendAudit(ctx context.Context, q pgx.Tx, e domain.Audit
 	// TIMESTAMPTZ stores microsecond precision, so a Go timestamp carrying
 	// nanoseconds is silently rounded on the way in. Hashing the unrounded
 	// value would produce a hash that can never be recomputed from what the
-	// database returns, which makes the whole chain unverifiable — a failure
+	// database returns, which makes the whole chain unverifiable -- a failure
 	// that looks exactly like tampering.
 	e.OccurredAt = e.OccurredAt.UTC().Truncate(time.Microsecond)
 	e.Sequence = headSeq + 1

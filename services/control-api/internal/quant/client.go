@@ -5,13 +5,13 @@
 // credentials for the control plane, has no route to the order API, and reads
 // the database through a role that cannot see users, orders, credentials or the
 // ledger. Research can therefore be wrong, slow, or compromised without being
-// able to move money — the worst it can do is produce a bad signal, which then
+// able to move money -- the worst it can do is produce a bad signal, which then
 // faces every gate in the order pipeline like any other.
 //
 // Everything this client returns is treated as UNTRUSTED INPUT: sizes are
 // re-derived, prices re-validated, and confidences clamped. A compromised
 // research service that returns "buy 10,000 lots with 99% confidence" produces
-// exactly the same outcome as one returning nonsense — a refusal.
+// exactly the same outcome as one returning nonsense -- a refusal.
 package quant
 
 import (
@@ -380,7 +380,7 @@ type BacktestResponse struct {
 	Metrics     map[string]any        `json:"metrics"`
 	EquityCurve []map[string]any      `json:"equity_curve"`
 	Trades      []BacktestTradeResult `json:"trades"`
-	// Warnings surface methodology problems — too few trades, a suspiciously
+	// Warnings surface methodology problems -- too few trades, a suspiciously
 	// high win rate, an unrealistic cost model. They are shown next to the
 	// results rather than buried, because a backtest without its caveats is a
 	// marketing document.

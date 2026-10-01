@@ -7,7 +7,7 @@
 //
 // Two backends exist. Redis is used when configured, so limits hold across
 // instances. Otherwise an in-process limiter applies, which is correct for a
-// single instance and is documented as such — a multi-instance deployment
+// single instance and is documented as such -- a multi-instance deployment
 // without Redis would divide each limit by the instance count.
 package ratelimit
 

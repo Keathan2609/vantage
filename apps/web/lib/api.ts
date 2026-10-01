@@ -7,8 +7,8 @@
  *   No token is ever held in JavaScript, so an XSS bug in this app cannot
  *   exfiltrate a session.
  * - Every state-changing request echoes the readable CSRF cookie into a header.
- *   The pair — an HttpOnly session cookie plus a header only same-origin script
- *   can set — is what makes a cross-site request fail.
+ *   The pair -- an HttpOnly session cookie plus a header only same-origin script
+ *   can set -- is what makes a cross-site request fail.
  * - Money and prices arrive as STRINGS and stay strings. Parsing "0.1" into a
  *   float to render it would reintroduce the precision problem the backend
  *   went to some trouble to avoid. Numbers are formatted, not computed, here.
@@ -622,7 +622,7 @@ export interface ReconciliationIssue {
   /**
    * Sent by the server rather than derived here. The repair policy is enforced
    * server-side, and a terminal that re-implemented it would eventually offer
-   * an action the server refuses — which reads to an operator as a broken
+   * an action the server refuses -- which reads to an operator as a broken
    * button rather than as a rule.
    */
   automatic_repair_allowed: boolean;

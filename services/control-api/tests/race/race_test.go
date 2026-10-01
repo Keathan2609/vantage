@@ -69,7 +69,7 @@ func setup(t *testing.T) (*client, string) {
 // idempotency mechanism exists for.
 //
 // Sixteen requests with ONE key leave together. The desired outcome is not
-// "no error" — it is exactly one order in the book. A 409 or a replayed 200
+// "no error" -- it is exactly one order in the book. A 409 or a replayed 200
 // are both correct answers for the losers; a second order is not.
 func TestSameKeyConcurrentlyProducesExactlyOneOrder(t *testing.T) {
 	c, accountID := setup(t)
@@ -88,7 +88,7 @@ func TestSameKeyConcurrentlyProducesExactlyOneOrder(t *testing.T) {
 	// The authoritative check is the book, not the response codes: a bug that
 	// wrote two rows and returned one 201 would pass the check above.
 	//
-	// Zero rows is a legitimate outcome — a pre-persistence refusal (risk,
+	// Zero rows is a legitimate outcome -- a pre-persistence refusal (risk,
 	// exposure, a stale quote) never creates an order. What must not happen is
 	// TWO. That is the whole property.
 	orders := c.ordersWithKey(accountID, key)
@@ -174,7 +174,7 @@ func TestDistinctKeysConcurrentlyAreAllIndependent(t *testing.T) {
 //
 // There is a real window here and the test does not pretend otherwise: an
 // order that passed the kill-switch gate microseconds before the switch was
-// written is allowed through, and that is correct — the switch stops NEW
+// written is allowed through, and that is correct -- the switch stops NEW
 // decisions, it does not reach into flight and retract one.
 //
 // The property that must hold is the one after the race settles: once the
@@ -251,8 +251,8 @@ func TestAuthorityRevocationDuringSubmissionSettlesClosed(t *testing.T) {
 	// The first version of this test registered it afterwards and then failed
 	// on an unrelated assertion, so the cleanup never ran: the authority
 	// stayed revoked, and every subsequent test in the suite got HTTP 403 on
-	// every order. The platform was entirely correct — no authority means no
-	// trading — but the suite looked broken for twenty minutes.
+	// every order. The platform was entirely correct -- no authority means no
+	// trading -- but the suite looked broken for twenty minutes.
 	//
 	// The payload must be the full mandate, too. An authority with only a
 	// daily-loss limit is refused (an empty instrument allow-list would permit
@@ -475,7 +475,7 @@ func TestConcurrentStrategyRunsDoNotDoubleTrade(t *testing.T) {
 
 	// Whatever the runs did, the invariants hold: no duplicate idempotency
 	// keys, and the ledger adds up. The first is the real anti-double-trade
-	// guarantee — a strategy order carries a deterministic key derived from
+	// guarantee -- a strategy order carries a deterministic key derived from
 	// the signal, so two runs of the same bar collapse to one order.
 	c.assertNoDuplicateKeys(accountID)
 	c.assertLedgerConsistent(accountID)
@@ -616,7 +616,7 @@ func (c *client) assertLedgerConsistent(accountID string) {
 
 // assertNoUnknownOutcomeIsHidden is the invariant behind the deadlock fix.
 //
-// An order may legitimately be FAILED — that is what "outcome unknown" looks
+// An order may legitimately be FAILED -- that is what "outcome unknown" looks
 // like, and it is the safe state. What must never happen is an order left in a
 // pre-submission state after the venue accepted it, because nothing would ever
 // reconcile it. A FAILED order must also carry a reject code, or the
@@ -626,7 +626,7 @@ func (c *client) assertNoUnknownOutcomeIsHidden(accountID string) {
 	id := quoteSQL(accountID)
 	// The states are the real ones from domain.OrderStatus. The first version
 	// of this assertion looked for 'PENDING' and 'NEW', neither of which this
-	// system has, so it could never fail — and it passed happily while six
+	// system has, so it could never fail -- and it passed happily while six
 	// orders sat stranded in ACCEPTED.
 	//
 	// An order older than a minute and still in a pre-submission state is

@@ -43,7 +43,7 @@ func TestASpoofedForwardedHeaderDoesNotSurviveTheMiddlewareStack(t *testing.T) {
 				t.Fatalf("clientIP = %q after the middleware stack; the %s header "+
 					"was honoured without a trusted proxy.\n"+
 					"The login limiter keys on this value, so a caller could present "+
-					"a fresh address per request and get a fresh full token bucket — "+
+					"a fresh address per request and get a fresh full token bucket, "+
 					"removing the only cost control on an endpoint that runs Argon2id "+
 					"at 64 MiB per attempt.", seen, header)
 			}

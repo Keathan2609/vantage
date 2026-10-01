@@ -25,7 +25,7 @@ import type { Bar } from "@/lib/api";
  * Vantage's own store through Vantage's own API; the library is never asked
  * where the market is, and the browser never talks to a data provider. That
  * separation is the point of the whole market-data layer behind this
- * component — if the chart fetched its own prices, the platform would be
+ * component -- if the chart fetched its own prices, the platform would be
  * showing one thing and trading on another.
  *
  * # Why the chart is built once and fed imperatively
@@ -34,7 +34,7 @@ import type { Bar } from "@/lib/api";
  * whenever React re-renders would throw away the user's zoom and pan on every
  * market tick, which is the single most irritating thing a trading chart can
  * do. So the chart instance lives in a ref for the lifetime of the mount, and
- * data arrives through `setData`/`update` — the same way the library expects.
+ * data arrives through `setData`/`update` -- the same way the library expects.
  */
 
 export interface ChartMarker {
@@ -84,7 +84,7 @@ function palette() {
  * This is the one place a price is allowed to become a float, and it is
  * allowed because a pixel coordinate is presentational and never returns to
  * the server. Nothing derived from these numbers is submitted, stored or
- * compared — see the money conventions in ENGINEERING_GUIDE.md.
+ * compared -- see the money conventions in ENGINEERING_GUIDE.md.
  */
 function toCandles(bars: Bar[]): CandlestickData<Time>[] {
   const out: CandlestickData<Time>[] = [];

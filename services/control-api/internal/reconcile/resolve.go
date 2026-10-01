@@ -26,7 +26,7 @@ import (
 //
 // Instead each action is a named, bounded operation whose effect is derived
 // from the issue's own evidence. IMPORT_BROKER_FILL books the execution the
-// venue reported — not an execution the caller supplies. MARK_NOT_EXECUTED
+// venue reported -- not an execution the caller supplies. MARK_NOT_EXECUTED
 // closes out an order the venue does not have. The caller chooses WHICH
 // remedy, never WHAT the resulting numbers are.
 
@@ -94,7 +94,7 @@ func (s *Service) Resolve(ctx context.Context, account domain.Account,
 
 	// Scoped read. The account is part of the query rather than checked after
 	// it, so an issue id belonging to another account returns not-found rather
-	// than data — and an authorisation check written as a later `if` is one
+	// than data -- and an authorisation check written as a later `if` is one
 	// refactor away from being dropped.
 	issue, err := s.store.Reconcile.IssueForAccount(ctx, account.ID, req.IssueID)
 	if err != nil {
@@ -226,7 +226,7 @@ func (s *Service) resolveByRecheck(ctx context.Context, account domain.Account,
 		}, nil
 	}
 
-	// Still diverging. The issue is NOT closed — that is the honest outcome,
+	// Still diverging. The issue is NOT closed -- that is the honest outcome,
 	// and closing it because someone asked for a re-check would be exactly the
 	// silent guess this subsystem exists to prevent.
 	detail := fmt.Sprintf(
@@ -330,8 +330,8 @@ func (s *Service) resolveByStatus(ctx context.Context, account domain.Account,
 // resolveByLink attaches a venue order id to a Vantage order.
 //
 // The judgement only a person can make: "this venue order and that Vantage
-// order are the same order". Vantage cannot prove it — that is precisely why
-// the issue exists — so the operator asserts it and the assertion is recorded
+// order are the same order". Vantage cannot prove it -- that is precisely why
+// the issue exists -- so the operator asserts it and the assertion is recorded
 // as an assertion.
 //
 // The link is refused if the id already belongs to a different Vantage order.
@@ -414,8 +414,8 @@ func (s *Service) resolveByLink(ctx context.Context, account domain.Account,
 
 // executionFromEvidence rebuilds the venue execution an issue recorded.
 //
-// Reads the issue's own stored broker snapshot. If the evidence is not there —
-// because the issue is not about a specific execution — the action is refused
+// Reads the issue's own stored broker snapshot. If the evidence is not there --
+// because the issue is not about a specific execution -- the action is refused
 // rather than the caller being asked to supply the numbers.
 func executionFromEvidence(issue store.Issue) (broker.ExecutionReport, error) {
 	var raw struct {

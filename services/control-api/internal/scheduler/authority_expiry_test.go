@@ -26,7 +26,7 @@ func TestExpiryHorizonsAreNarrowestFirst(t *testing.T) {
 	}
 }
 
-// A declaration written out of order must still produce an ordered result —
+// A declaration written out of order must still produce an ordered result --
 // which is the only reason orderedHorizons sorts rather than trusting the slice.
 func TestHorizonOrderDoesNotDependOnDeclarationOrder(t *testing.T) {
 	original := authorityExpiryHorizons

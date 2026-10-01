@@ -214,7 +214,7 @@ func TestOnlyTheThreeKnownSourcesAreValid(t *testing.T) {
 //
 // The same guard the OMS has, for the same reason: a booking service that
 // would happily write live fills is one configuration mistake from doing so,
-// and this build has no live adapter to make that mistake meaningful — which
+// and this build has no live adapter to make that mistake meaningful -- which
 // is exactly why the guard must not be the only thing standing in the way.
 func TestTheBookingServiceRefusesAnyModeButPaper(t *testing.T) {
 	for _, mode := range []domain.ExecutionMode{domain.ModeLive, domain.ModeDemo, ""} {

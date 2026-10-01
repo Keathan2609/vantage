@@ -12,8 +12,8 @@ Two properties matter more than any individual formula:
     indicator that fails that test makes every backtest using it fiction.
 
 2.  **Explicit warm-up.** A moving average of period 20 has no value before the
-    twentieth observation. Returning a partial average there — which some
-    libraries do by default — silently produces confident values from
+    twentieth observation. Returning a partial average there -- which some
+    libraries do by default -- silently produces confident values from
     insufficient data, and a strategy reading them trades noise at the start of
     every series.
 

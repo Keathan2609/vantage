@@ -142,8 +142,8 @@ export default function ScannerPage() {
       <Panel title="Autopilot" flush>
         <div className="panel-body">
           <p className="small" style={{ marginTop: 0 }}>
-            Autopilot — letting Vantage choose among permitted markets rather than requiring
-            an instrument to be picked by hand — is designed but not enabled in this build.
+            Autopilot, letting Vantage choose among permitted markets rather than requiring
+            an instrument to be picked by hand, is designed but not enabled in this build.
             The pipeline it would use already exists and is exercised by the scheduler:
           </p>
           <p className="small mono muted" style={{ marginBottom: 8 }}>

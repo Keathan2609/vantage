@@ -1,4 +1,4 @@
-"""Long, deterministic research datasets — and what they are NOT.
+"""Long, deterministic research datasets -- and what they are NOT.
 
 The previous experiment produced 460 observations across 900 bars and could not
 answer its own question: no strategy reached the hundred observations a rank

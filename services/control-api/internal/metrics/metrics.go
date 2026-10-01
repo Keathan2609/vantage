@@ -5,8 +5,8 @@
 // refusing trades, and why? Is market data fresh? Is the venue answering? Has
 // anything been suppressed as a duplicate? Is anyone failing to log in?
 //
-// Cardinality is kept deliberately low. Labels are bounded sets — symbols,
-// reject codes, sources — never user identifiers, order identifiers or free
+// Cardinality is kept deliberately low. Labels are bounded sets -- symbols,
+// reject codes, sources -- never user identifiers, order identifiers or free
 // text, which would turn a metrics backend into an unbounded index.
 package metrics
 
@@ -132,7 +132,7 @@ var (
 		Help: "Reconciliation runs skipped because one was already in progress.",
 	})
 
-	// DuplicateCommandsSuppressed rising is healthy — it means idempotency is
+	// DuplicateCommandsSuppressed rising is healthy -- it means idempotency is
 	// doing its job. It rising sharply means a client is retrying too eagerly.
 	DuplicateCommandsSuppressed = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "trading", Name: "duplicate_commands_suppressed_total",

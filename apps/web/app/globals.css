@@ -16,7 +16,7 @@
  *
  *   Colour carries meaning only. The palette is graphite with ONE accent
  *   (muted gold, for the primary market). Green and red mean profit and loss
- *   and nothing else — never "primary button". A gradient would be decoration
+ *   and nothing else -- never "primary button". A gradient would be decoration
  *   competing with data.
  *
  *   Hairline separators, not cards. Structure comes from 1px rules and
@@ -587,14 +587,14 @@ button[data-variant="sell"][data-selected="true"] {
  * The only two shadows in this terminal.
  *
  * Both reference interfaces were measured for this. The exchange terminal has
- * exactly two box-shadows on its entire page — a green glow on BUY and a red
- * one on SELL — and zero elevation anywhere else. That is not a style choice
+ * exactly two box-shadows on its entire page -- a green glow on BUY and a red
+ * one on SELL -- and zero elevation anywhere else. That is not a style choice
  * dressed up as a principle: shadow there is a category marker meaning "this
  * action cannot be undone", and it works because nothing else competes for it.
  *
  * `data-commit` is set only on the control that actually places the order,
  * after the operator has reviewed it. Not on the side toggle, not on Review,
- * not on Cancel — all of those are reversible.
+ * not on Cancel -- all of those are reversible.
  *
  * Adding a third shadow anywhere is a claim that a third thing is
  * irreversible. If that is ever true, say so here and say what it is.
@@ -1020,7 +1020,7 @@ select:disabled {
    An issue is a small dossier rather than a table row: it carries a
    description, the classification, the reasoning behind that classification,
    both sides' evidence, and the actions an operator may take. A table would
-   force all of that into columns and make the important part — the evidence —
+   force all of that into columns and make the important part -- the evidence --
    the hardest thing to read.
 
    The left border encodes severity, so a critical divergence is identifiable

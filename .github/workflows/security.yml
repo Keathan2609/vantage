@@ -2,7 +2,7 @@
 #
 # Scope: this repository and the images built from it. NOTHING here scans an
 # external system. Exness, MetaQuotes, Trading Economics and every third-party
-# provider are explicitly out of scope and must never be probed — see
+# provider are explicitly out of scope and must never be probed -- see
 # docs/THREAT_MODEL.md.
 #
 # The ZAP baseline job runs only against a stack this workflow started itself,

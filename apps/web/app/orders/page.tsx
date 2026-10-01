@@ -109,7 +109,7 @@ export default function OrdersPage() {
                     <td className="mono right">
                       {Number.parseFloat(order.avg_fill_price) > 0
                         ? decimal(order.avg_fill_price, 2)
-                        : "—"}
+                        : "-"}
                     </td>
                     <td>
                       <Status value={order.status.toLowerCase()} label={order.status} />
@@ -172,7 +172,7 @@ export default function OrdersPage() {
                   <dt>Stop / target</dt>
                   <dd>
                     {detail.data.order.stop_loss ?? "none"} /{" "}
-                    {detail.data.order.take_profit ?? "—"}
+                    {detail.data.order.take_profit ?? "-"}
                   </dd>
                   <dt>Broker order</dt>
                   <dd>{detail.data.order.broker_order_id ?? "not assigned"}</dd>
@@ -183,7 +183,7 @@ export default function OrdersPage() {
                 </dl>
                 {detail.data.order.reject_reason ? (
                   <Notice tone="bad">
-                    <strong>{humanise(detail.data.order.reject_code)}</strong> —{" "}
+                    <strong>{humanise(detail.data.order.reject_code)}</strong> --{" "}
                     {detail.data.order.reject_reason}
                   </Notice>
                 ) : null}
@@ -235,7 +235,7 @@ export default function OrdersPage() {
                   <tbody>
                     {detail.data.transitions.map((transition, index) => (
                       <tr key={`${transition.OccurredAt}-${index}`}>
-                        <td className="muted">{transition.FromStatus ?? "—"}</td>
+                        <td className="muted">{transition.FromStatus ?? "-"}</td>
                         <td>{transition.ToStatus}</td>
                         <td className="muted truncate" title={transition.Reason ?? ""}>
                           {transition.Reason ?? ""}

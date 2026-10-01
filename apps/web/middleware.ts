@@ -17,7 +17,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * work with this stack. Next 16's Turbopack build emits its bootstrap and
  * chunk `<script src>` tags WITHOUT the nonce, so under
  * `script-src 'nonce-…' 'strict-dynamic'` the browser blocked every chunk and
- * the terminal rendered nothing — all thirty end-to-end tests failed. Adding
+ * the terminal rendered nothing -- all thirty end-to-end tests failed. Adding
  * `'unsafe-inline'` alongside a nonce does not help: a browser that honours
  * the nonce ignores `'unsafe-inline'` by specification.
  *
@@ -29,7 +29,7 @@ import { NextResponse, type NextRequest } from "next/server";
  *
  *  1. Next propagating the nonce to Turbopack-emitted script tags. Then delete
  *     `'unsafe-inline'`, add `'nonce-…' 'strict-dynamic'`, and set the CSP on
- *     the REQUEST headers too — Next reads the nonce from there, not from a
+ *     the REQUEST headers too -- Next reads the nonce from there, not from a
  *     custom header.
  *  2. Serving the terminal behind a proxy that rewrites the tags.
  *

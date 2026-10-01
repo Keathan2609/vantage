@@ -2,8 +2,8 @@
 
 Two responsibilities live in `internal/marketdata`, deliberately separate:
 
-- **ingestion** — getting prices in, from whatever provider supplies them
-- **quality** — deciding whether what arrived can be acted on
+- **ingestion** -- getting prices in, from whatever provider supplies them
+- **quality** -- deciding whether what arrived can be acted on
 
 The second is not a filter applied at the edge. It is a *verdict recorded
 alongside the data*, consulted by the order pipeline and surfaced in the UI. A
@@ -23,7 +23,7 @@ type Provider interface {
 Implementations are swappable and nothing downstream knows which is in use. In
 this build there is one: a deterministic development generator that produces a
 plausible two-sided market with a realistic spread. It is labelled as `mock` in
-every quote row, every health record and the Connections page — a synthetic
+every quote row, every health record and the Connections page -- a synthetic
 price that looks authoritative is worse than an obviously synthetic one.
 
 ## Ingestion
@@ -36,13 +36,13 @@ Polling rather than streaming, for now, is a considered choice: this build's
 data updates every couple of seconds, a 2-second poll of a small set of
 instruments is cheap, and it has no reconnect semantics to get wrong. A
 streaming provider is the right answer at higher frequency, and swapping one in
-changes the ingestor only — not the store, the risk engine or any page.
+changes the ingestor only -- not the store, the risk engine or any page.
 
 Bars are aggregated into `market_bars` per timeframe: `1m`, `5m`, `15m`, `1h`,
 `4h`, `1d`. Only **completed** bars are served to research. The current,
 still-forming bar is excluded, because an indicator computed on a partial bar
 changes as the bar develops and produces a signal that could not have been
-acted on at the time — the most common form of look-ahead bias in retail
+acted on at the time -- the most common form of look-ahead bias in retail
 systems.
 
 ## Quality: five states
@@ -54,7 +54,7 @@ move is exhaustively unit-testable.
 | State | Meaning | Automation |
 | --- | --- | --- |
 | `ok` | Fresh, sane, two-sided | Permitted |
-| `degraded` | Suspect but usable — e.g. older than 3s | **Refused for automation; a manual order is allowed with the state shown** |
+| `degraded` | Suspect but usable -- e.g. older than 3s | **Refused for automation; a manual order is allowed with the state shown** |
 | `stale` | Older than the maximum age | Refused |
 | `invalid` | Structurally wrong: crossed book, non-positive price, regressed or future timestamp | Refused |
 | `no_data` | Nothing has arrived | Refused |
@@ -89,8 +89,8 @@ rather than `degraded` for that reason.
 ## The market clock
 
 `domain.MarketClock` answers whether an instrument's market is open, and it
-resolves session boundaries in the venue's IANA time zone — New York for the FX
-and metals calendar — rather than in UTC with a fixed offset. That is what
+resolves session boundaries in the venue's IANA time zone -- New York for the FX
+and metals calendar -- rather than in UTC with a fixed offset. That is what
 makes the weekly open and close move correctly across daylight-saving changes
 instead of drifting by an hour twice a year.
 
@@ -108,7 +108,7 @@ overlap) are reported for context and used by session-based strategies. The over
 reported explicitly because it is where volume and spread behaviour change
 most.
 
-Holidays are data, in `market_holidays`, keyed by calendar id — not hardcoded
+Holidays are data, in `market_holidays`, keyed by calendar id -- not hardcoded
 dates in Go.
 
 ## FX conversion
@@ -126,7 +126,7 @@ guessed rate is worse than no check because it looks like one.
 
 ## What the browser sees
 
-One polling loop in `lib/store.tsx` feeds the whole terminal — quotes, health
+One polling loop in `lib/store.tsx` feeds the whole terminal -- quotes, health
 and market status every 2 seconds; the portfolio every 5. A dozen panels each
 on their own timer would produce a dozen times the requests and a UI where
 different panels disagree about the current price.

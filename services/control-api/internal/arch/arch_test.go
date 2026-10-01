@@ -3,7 +3,7 @@
 //
 // These exist because the platform's most important safety properties are
 // structural. "Python cannot reach a broker" and "every order goes through one
-// pipeline" are not behaviours that a unit test can pin down — they are facts
+// pipeline" are not behaviours that a unit test can pin down -- they are facts
 // about which package may import which, and about how many call sites exist.
 // A comment asserting them is a convention; a test asserting them is a
 // constraint.
@@ -106,7 +106,7 @@ func packageImports(t *testing.T) map[string][]string {
 // internal/oms, which is where the nineteen gates live.
 //
 // If this fails, a second execution path has been created. That is not a test
-// to update — it is the thing the architecture exists to prevent.
+// to update -- it is the thing the architecture exists to prevent.
 func TestOnlyTheOMSCanPlaceABrokerOrder(t *testing.T) {
 	root := repoRoot(t)
 	adapterCall := regexp.MustCompile(`\badapter\.PlaceOrder\(|\bAdapter\)\.PlaceOrder\(`)
@@ -205,7 +205,7 @@ func TestBookingHoldsNoBrokerAdapter(t *testing.T) {
 			t.Errorf("internal/booking references %q.\n"+
 				"It is on the broker import allowlist ONLY because it uses the "+
 				"ExecutionReport data type. Holding an adapter, or calling one, would "+
-				"make it a second path to a venue -- which is the thing internal/oms "+
+				"make it a second path to a venue, which is the thing internal/oms "+
 				"exists to be the only one of.", forbidden)
 		}
 	}
@@ -267,8 +267,8 @@ func TestOnlyBookingAppendsFills(t *testing.T) {
 
 	if len(offenders) > 0 {
 		t.Fatalf("a fill is appended outside internal/booking: %v\n"+
-			"Every execution -- returned by a PlaceOrder call or discovered by "+
-			"reconciliation after a lost response -- must go through the one accounting "+
+			"Every execution, returned by a PlaceOrder call or discovered by "+
+			"reconciliation after a lost response, must go through the one accounting "+
 			"path, so the position, ledger and audit invariants hold for both.",
 			offenders)
 	}
@@ -518,7 +518,7 @@ func TestPaperOnlyGuaranteeIsStillCompiledIn(t *testing.T) {
 //
 // Go's type system carries the rule in memory: money.Amount wraps a decimal
 // and there is no constructor from a float64 in the authoritative path. The
-// schema is where that could silently be undone — a single DOUBLE PRECISION
+// schema is where that could silently be undone -- a single DOUBLE PRECISION
 // column would make every value passing through it lossy, and nothing in Go
 // would complain.
 func TestNoFloatingPointColumnsInTheSchema(t *testing.T) {

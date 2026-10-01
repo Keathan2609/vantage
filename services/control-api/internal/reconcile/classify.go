@@ -15,7 +15,7 @@ import (
 //
 // This file contains NO I/O and NO repairs. It is a pure function from
 // (local, broker) to []Finding, which is what makes every branch below
-// reachable from a unit test with hand-built snapshots — including the ones a
+// reachable from a unit test with hand-built snapshots -- including the ones a
 // live venue almost never produces, like a venue reporting the opposite side
 // for an order it agrees exists.
 //
@@ -174,7 +174,7 @@ func classifyExecutions(local LocalSnapshot, remote BrokerSnapshot) []Finding {
 			f.Description = fmt.Sprintf(
 				"The venue re-reported execution %s with different content: it now says "+
 					"%s %s @ %s, and Vantage booked %s %s @ %s. The execution id was "+
-					"correctly refused as a duplicate, so nothing was written twice -- but "+
+					"correctly refused as a duplicate, so nothing was written twice, but "+
 					"one of the two records is wrong about a trade that happened, and "+
 					"deduplication cannot say which.",
 				exec.BrokerFillID, exec.Side, exec.Quantity, exec.Price,
@@ -203,8 +203,8 @@ func classifyExecutions(local LocalSnapshot, remote BrokerSnapshot) []Finding {
 					exec.BrokerFillID)
 				f.Description = fmt.Sprintf(
 					"Execution %s arrived with a timestamp earlier than one already seen "+
-						"for the same venue order. Booking is commutative -- the fill "+
-						"aggregate is recomputed from the fills rather than incremented -- "+
+						"for the same venue order. Booking is commutative, because the fill "+
+						"aggregate is recomputed from the fills rather than incremented, "+
 						"so this is recorded rather than treated as an error.",
 					exec.BrokerFillID)
 				f.BrokerExecutionID = exec.BrokerFillID
@@ -413,7 +413,7 @@ func classifyOrders(local LocalSnapshot, remote BrokerSnapshot,
 			repairable := domain.CanRepairTransition(order.Status, venueStatus)
 			if !repairable {
 				// The venue reports a state the repair machine will not move
-				// to — in practice, contradicting a terminal state Vantage has
+				// to -- in practice, contradicting a terminal state Vantage has
 				// already recorded. That is a contradiction to investigate.
 				f.Severity = domain.SeverityCriticalIssue
 				f.Description = fmt.Sprintf(
@@ -555,7 +555,7 @@ func classifyMissingAtBroker(order domain.Order) []Finding {
 // classifyUnknownOutcomes reports orders Vantage cannot resolve at all.
 //
 // An order flagged for reconciliation which the venue does not appear in
-// either direction — no order record, no execution — is genuinely unknown. It
+// either direction -- no order record, no execution -- is genuinely unknown. It
 // is NOT collapsed into a tidy state: recording it as rejected would free risk
 // budget for a position that may exist, and recording it as filled would
 // invent one that may not.
@@ -598,7 +598,7 @@ func classifyUnknownOutcomes(local LocalSnapshot, remote BrokerSnapshot) []Findi
 //
 // In a paper build with a single mock venue this should not happen, and it
 // happening is a signal worth a critical issue. In a future world where a user
-// can act in the broker's own terminal, this is what that looks like — and
+// can act in the broker's own terminal, this is what that looks like -- and
 // Vantage must report it as external activity rather than adopt it as its own.
 func classifyVenueOnlyOrders(local LocalSnapshot, remote BrokerSnapshot) []Finding {
 	var out []Finding
@@ -677,7 +677,7 @@ func classifyPositions(local LocalSnapshot, remote BrokerSnapshot) []Finding {
 			f.Description = fmt.Sprintf(
 				"Vantage holds %s %s of %s; the venue reports %s %s. A position is the "+
 					"consequence of executions, so it is never written to match a "+
-					"snapshot -- the repair is to book the executions that explain the "+
+					"snapshot. The repair is to book the executions that explain the "+
 					"difference.",
 				position.Side, position.Quantity, position.InstrumentID,
 				venue.Side, venue.Quantity)

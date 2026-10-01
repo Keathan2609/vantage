@@ -20,7 +20,7 @@ import (
 // cracking of a stolen hash is expensive, low enough that a login request is
 // not itself a denial-of-service amplifier. The parameters are encoded into
 // every hash, so they can be raised later without invalidating existing
-// passwords — an old hash still verifies under its own recorded parameters.
+// passwords -- an old hash still verifies under its own recorded parameters.
 const (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // 64 MiB

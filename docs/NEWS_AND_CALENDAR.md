@@ -19,7 +19,7 @@ An `Ingestor` pulls from both and upserts by `(source, external_id)`, so a
 refresh is idempotent: running it a hundred times produces the same rows rather
 than a hundred copies of the calendar. The scheduler refreshes every 15
 minutes, and the development seed uses the same ingestion path rather than
-holding a second copy of the fixtures — a duplicate set in the seed would be a
+holding a second copy of the fixtures -- a duplicate set in the seed would be a
 second source of truth that could disagree with the provider.
 
 A failed refresh is logged and retried on the next tick. It leaves the last
@@ -28,7 +28,7 @@ the safer failure: a stale blackout costs a trade, a missing one costs a
 position.
 
 The Calendar page states that the data is deterministic development fixture
-data rather than a licensed feed. That is not modesty — a calendar that looks
+data rather than a licensed feed. That is not modesty -- a calendar that looks
 authoritative and is not is *worse* than no calendar, because an operator would
 plan around it.
 
@@ -119,7 +119,7 @@ instruments and currencies, an optional sentiment score and topics.
 Sentiment is displayed as a number with no interpretation attached, and nothing
 in the trading path consumes it. A sentiment score from a mock provider driving
 a real order would be theatre. When a licensed feed with a defensible sentiment
-model is attached, that becomes a design decision to make deliberately — and
+model is attached, that becomes a design decision to make deliberately -- and
 it should be backtested like any other feature before it influences anything.
 
 ## What is missing
@@ -129,7 +129,7 @@ it should be backtested like any other feature before it influences anything.
   does not currently model the trading implications of a revision separately
   from the original.
 - **No news-driven halt.** Only scheduled calendar events produce a blackout.
-  An unscheduled headline — a central-bank intervention, a geopolitical event —
+  An unscheduled headline -- a central-bank intervention, a geopolitical event --
   is not detected, and the honest mitigation for that is the spread check and
   the data-health check, both of which react to the market rather than to the
   news.

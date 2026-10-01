@@ -12,7 +12,7 @@ import (
 const (
 	// quoteHistoryRetention bounds the raw tick log.
 	//
-	// market_quotes is write-only in production — one INSERT, no SELECT — and
+	// market_quotes is write-only in production -- one INSERT, no SELECT -- and
 	// gains roughly 179 000 rows a day at the 2-second ingest interval across
 	// six instruments, about 27 MB a day and 10 GB a year. It is kept at all
 	// because it is the record of what the platform actually saw, which is
@@ -31,8 +31,8 @@ const (
 	// outboxRetention bounds PUBLISHED events only.
 	//
 	// An unpublished row is still owed to a consumer and is never touched.
-	// A week is far beyond any retry schedule — the backoff caps at about 17
-	// minutes — and leaves a published event visible long enough to answer
+	// A week is far beyond any retry schedule -- the backoff caps at about 17
+	// minutes -- and leaves a published event visible long enough to answer
 	// "was this dispatched?".
 	outboxRetention = 7 * 24 * time.Hour
 )
@@ -42,7 +42,7 @@ const (
 //
 // Failures are logged and swallowed on purpose. This runs inside the hourly
 // cleanup lease alongside the daily roll and the account metrics, and a
-// retention sweep that could not delete is a housekeeping problem — returning
+// retention sweep that could not delete is a housekeeping problem -- returning
 // an error from here would abandon the roll, which is not housekeeping. The
 // next hour tries again.
 //
@@ -76,7 +76,7 @@ func (s *Scheduler) pruneTelemetry(ctx context.Context) {
 		}
 		if removed > 0 {
 			// Logged at INFO with the count, so a sweep that is hitting its
-			// per-run cap every hour — meaning the backlog is not shrinking —
+			// per-run cap every hour -- meaning the backlog is not shrinking --
 			// is visible rather than silent.
 			s.deps.Log.Info("pruned", "what", sweep.what, "rows", removed)
 		}

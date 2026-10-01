@@ -558,7 +558,7 @@ func conditionScenarios() []scenario {
 				}
 				accepted := psqlInt(t, decisionsInRun(runID, `d.outcome = 'accepted'`))
 				t.Logf("scenario I: %d decisions, %d exposure refusals, %d accepted "+
-					"— and every accepted one was reducing, or the check above "+
+					"-- and every accepted one was reducing, or the check above "+
 					"would have failed", o.Decisions, exposure, accepted)
 			},
 		},

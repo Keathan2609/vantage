@@ -238,7 +238,7 @@ func TestOneDecisionKeyPerAccountInstrumentAndBar(t *testing.T) {
 	if containsAny(a, "trend", "reversion", "breakout") {
 		t.Errorf("the key %q names a strategy. The strategy an order is "+
 			"attributed to is whichever counted opinion was strongest, and that "+
-			"can differ between two evaluations of one bar -- so a key naming it "+
+			"can differ between two evaluations of one bar, so a key naming it "+
 			"would let a second order through.", a)
 	}
 

@@ -27,7 +27,7 @@ COPY apps/web/ ./
 
 # The API origin is baked into the client bundle at build time, because
 # NEXT_PUBLIC_ variables are compiled in. A deployment pointing at a different
-# control plane therefore needs its own build — which is the honest behaviour
+# control plane therefore needs its own build -- which is the honest behaviour
 # rather than pretending it can be changed at runtime.
 ARG NEXT_PUBLIC_VANTAGE_API_BASE_URL=http://localhost:8080
 ENV NEXT_PUBLIC_VANTAGE_API_BASE_URL=${NEXT_PUBLIC_VANTAGE_API_BASE_URL}

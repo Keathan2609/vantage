@@ -57,8 +57,8 @@ func (s *AccountStore) AccountForUser(ctx context.Context, userID, accountID uui
 }
 
 // AccountByIDUnscoped loads an account without an ownership predicate. It
-// exists for system paths that have already established authorisation —
-// reconciliation, the scheduler — and must never be reached from a request
+// exists for system paths that have already established authorisation --
+// reconciliation, the scheduler -- and must never be reached from a request
 // handler using a caller-supplied id.
 func (s *AccountStore) AccountByIDUnscoped(ctx context.Context, accountID uuid.UUID) (domain.Account, error) {
 	row := s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM accounts WHERE id = $1`, accountID)
@@ -163,11 +163,11 @@ func (s *AccountStore) AppendTransactionTx(ctx context.Context, tx pgx.Tx, t dom
 //
 // This is the OUTERMOST lock for every transaction that writes anything
 // belonging to an account. It must be taken BEFORE any other row in that
-// account's graph — before positions, before fills, before the ledger.
+// account's graph -- before positions, before fills, before the ledger.
 //
 // That rule is not stylistic. It was written after a concurrency test placed
 // eight orders at once on one account and six of them died with
-// "deadlock detected (SQLSTATE 40P01)", surfaced to the client as HTTP 500 —
+// "deadlock detected (SQLSTATE 40P01)", surfaced to the client as HTTP 500 --
 // on an order-placement call, which is the worst possible place to return an
 // answer that means nothing.
 //
@@ -189,7 +189,7 @@ func (s *AccountStore) AppendTransactionTx(ctx context.Context, tx pgx.Tx, t dom
 // there is no cycle left to detect.
 //
 // The cost is real and accepted: writes to one account serialise. For a
-// single-operator platform that is the correct trade — a lost fill is
+// single-operator platform that is the correct trade -- a lost fill is
 // unrecoverable, a queued one is merely slower.
 func (s *AccountStore) LockAccountTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID) error {
 	var locked uuid.UUID

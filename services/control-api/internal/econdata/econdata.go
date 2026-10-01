@@ -34,7 +34,7 @@ import (
 // Event is one scheduled macroeconomic release, as a provider reports it.
 //
 // Actual, Forecast and Previous are STRINGS. Releases are published in mixed
-// units — "4.50%", "185K", "-73.8B" — and coercing them to numbers discards
+// units -- "4.50%", "185K", "-73.8B" -- and coercing them to numbers discards
 // the unit, after which something will eventually compare payrolls of "185K"
 // to the number 185.
 type Event struct {
@@ -189,7 +189,7 @@ func (i *Ingestor) Refresh(ctx context.Context, now time.Time) (Result, error) {
 // Run refreshes on an interval until the context ends.
 //
 // A failed refresh is logged and retried on the next tick. Stale calendar data
-// is a degradation, not a reason to stop the service — and the event-risk check
+// is a degradation, not a reason to stop the service -- and the event-risk check
 // reads what is in the database, so a failed refresh leaves the last known
 // calendar in force rather than silently removing the blackouts.
 func (i *Ingestor) Run(ctx context.Context, every time.Duration, now func() time.Time) {

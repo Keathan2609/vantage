@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Runs, in order: Go unit tests, Python unit tests, the web typecheck and
-    production build, and — with -Smoke — the end-to-end smoke suites against a
+    production build, and -- with -Smoke -- the end-to-end smoke suites against a
     running stack.
 
     Continues past a failing suite so one run reports everything that is

@@ -66,11 +66,11 @@ func TestPasswordPolicy(t *testing.T) {
 		{"digits only", "1234567890123456", true},
 		{"common", "password123", true},
 		{"contains email local part", "trader.one-secure-9", true},
-		{"contains display name", "Keathan-secure-42xx", true},
+		{"contains display name", "Marlowe-secure-42xx", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := ValidatePassword(c.password, "trader.one@example.com", "Keathan")
+			err := ValidatePassword(c.password, "trader.one@example.com", "Marlowe")
 			if c.wantErr && err == nil {
 				t.Errorf("expected %q to be rejected", c.password)
 			}

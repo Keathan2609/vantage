@@ -90,7 +90,7 @@ type IssueEvent struct {
 // Fingerprint builds the identity of a real-world problem, independent of the
 // run that found it.
 //
-// Deliberately excludes anything that changes between detections — timestamps,
+// Deliberately excludes anything that changes between detections -- timestamps,
 // observed quantities, the run id. Including an observed value would make
 // every re-detection a new problem, which is the bug this function exists to
 // prevent.
@@ -511,7 +511,7 @@ func (s *ReconciliationStore) IssueHistory(ctx context.Context, issueID uuid.UUI
 //
 // The trading verdict is NOT stored here: it is derived from open issues so it
 // cannot drift out of agreement with them. What is stored is what cannot be
-// derived — whether the account has ever been reconciled, and from where to
+// derived -- whether the account has ever been reconciled, and from where to
 // resume polling executions.
 type AccountState struct {
 	AccountID           uuid.UUID
@@ -641,7 +641,7 @@ func (s *TradingStore) OrdersRequiringReconciliation(ctx context.Context,
 // # Why this is not TransitionOrderWithCodeTx with a flag
 //
 // It uses domain.CanRepairTransition, which permits moves the normal state
-// machine forbids — ACCEPTED -> FILLED being the important one. Making that
+// machine forbids -- ACCEPTED -> FILLED being the important one. Making that
 // reachable through the ordinary transition function would mean every OMS call
 // site could reach it too, and the state machine's job is to catch exactly
 // that kind of mistake during normal execution.

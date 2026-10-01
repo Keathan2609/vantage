@@ -18,8 +18,8 @@
 //
 // # What this package does NOT decide
 //
-// Whether an execution SHOULD be booked. Attribution — does this execution
-// belong to this order — is a question about evidence and is answered before
+// Whether an execution SHOULD be booked. Attribution -- does this execution
+// belong to this order -- is a question about evidence and is answered before
 // anything gets here, by the reconciliation classifier or by the OMS holding
 // the venue's direct response. This package validates that what it was handed
 // is internally consistent, and refuses it otherwise.
@@ -44,8 +44,8 @@ import (
 
 // Source records how an execution reached Vantage.
 //
-// Stored on the fill. The accounting is identical either way — that is the
-// point — but "we were told at the time" and "we discovered this afterwards"
+// Stored on the fill. The accounting is identical either way -- that is the
+// point -- but "we were told at the time" and "we discovered this afterwards"
 // are different facts about the same number, and the ledger should be able to
 // answer which one applies.
 type Source string
@@ -141,7 +141,7 @@ var (
 // duplicate execution id. Those constraints are the last line and they stay.
 // But a constraint violation arrives as an aborted transaction with a
 // constraint name, which tells an operator nothing about which of several
-// executions was wrong or why — and during a reconciliation run that aborts
+// executions was wrong or why -- and during a reconciliation run that aborts
 // the repair of every other issue in the same transaction.
 //
 // Checking first turns "the transaction failed" into "this execution claims to

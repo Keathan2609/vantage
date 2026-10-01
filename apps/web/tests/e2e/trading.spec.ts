@@ -59,7 +59,7 @@ test.beforeEach(async () => {
   // Flatten before EVERY test, not just once before the file.
   //
   // Exposure accumulates within a single run: the suite places a dozen 0.01
-  // lot orders that fill, and the per-instrument ceiling is 1500 ZAR — about
+  // lot orders that fill, and the per-instrument ceiling is 1500 ZAR -- about
   // three lots of gold. Flattening only in beforeAll meant the later tests
   // were refused with "Exposure to XAUUSD.m would be 1939.26 ZAR against a
   // limit of 1500.00 ZAR", which is the risk engine working correctly on a
@@ -150,7 +150,7 @@ test.describe("the order ticket", () => {
     // the CORRECT outcome, and waiting the full test timeout for it turns a
     // pass into a 45-second failure.
     await confirm.click({ force: true, timeout: 2000 }).catch(() => {
-      /* already gone or disabled — both are correct */
+      /* already gone or disabled -- both are correct */
     });
     await page.waitForTimeout(2500);
 
@@ -439,7 +439,7 @@ test.describe("broker faults", () => {
     expect(order, `expected an order record, got ${JSON.stringify(payload)}`).toBeTruthy();
     expect(
       order.status,
-      "an unknown outcome must be FAILED — not REJECTED, which would claim nothing happened",
+      "an unknown outcome must be FAILED, not REJECTED, which would claim nothing happened",
     ).toBe("FAILED");
 
     // Reconciliation is what resolves it, and it must find the order the venue

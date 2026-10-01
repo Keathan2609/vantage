@@ -5,7 +5,7 @@
  *
  * The page states plainly, next to the button, that a kill switch stops NEW
  * orders and does not close anything. Conflating the two is how an operator
- * hits "stop" in an incident and is surprised either way — expecting
+ * hits "stop" in an incident and is surprised either way -- expecting
  * liquidation and not getting it, or not expecting it and getting it.
  */
 
@@ -173,7 +173,7 @@ export default function RiskPage() {
                             Number.parseFloat(portfolio.gross_exposure) /
                             Number.parseFloat(portfolio.equity)
                           ).toFixed(2)}x`
-                        : "—"
+                        : "-"
                     }
                   />
                   <LimitRow
@@ -256,7 +256,7 @@ export default function RiskPage() {
               <Notice tone="warn">
                 A kill switch stops NEW orders within its scope. It does <strong>not</strong>{" "}
                 close open positions. Automatic liquidation on an alarm would dump positions
-                into exactly the conditions that raised the alarm — closing a position is the
+                into exactly the conditions that raised the alarm, since closing a position is the
                 separate, confirmed Flatten action.
               </Notice>
 
@@ -369,7 +369,7 @@ function LimitRow({
             <span className="tiny muted">{(fraction * 100).toFixed(0)}%</span>
           </>
         ) : (
-          <span className="tiny muted">—</span>
+          <span className="tiny muted"> · </span>
         )}
       </td>
     </tr>

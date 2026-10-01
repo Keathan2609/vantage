@@ -6,7 +6,7 @@
  * Flatten is presented as a distinct, confirmed action rather than a row
  * button that fires on one click. Closing a position at market is irreversible
  * and costs the spread; it deserves a moment of friction. The kill switch,
- * which stops new orders, is deliberately NOT this — see the Risk page.
+ * which stops new orders, is deliberately NOT this -- see the Risk page.
  */
 
 import { useState } from "react";
@@ -59,7 +59,7 @@ export default function PositionsPage() {
       {portfolio && portfolio.unvalued_positions > 0 ? (
         <Notice tone="warn">
           {portfolio.unvalued_positions} position(s) could not be priced. The exposure and
-          equity figures below therefore UNDERSTATE risk — an unvalued position is shown as
+          equity figures below therefore UNDERSTATE risk, because an unvalued position is shown as
           unvalued rather than as zero.
         </Notice>
       ) : null}
@@ -116,7 +116,7 @@ export default function PositionsPage() {
                     {position.stop_loss ? decimal(position.stop_loss, 2) : "none"}
                   </td>
                   <td className="mono right muted">
-                    {position.take_profit ? decimal(position.take_profit, 2) : "—"}
+                    {position.take_profit ? decimal(position.take_profit, 2) : "-"}
                   </td>
                   <td className="mono right">{money(position.notional_value, currency)}</td>
                   <td className="mono right">{money(position.margin_used, currency)}</td>
@@ -158,7 +158,7 @@ export default function PositionsPage() {
         <Notice tone="warn">
           Flattening closes the position at the current market price, crossing the spread.
           It passes through the ordinary order pipeline, so it is refused if the market is
-          closed or the feed is untrusted — Flatten is an order, not an override.
+          closed or the feed is untrusted. Flatten is an order, not an override.
         </Notice>
       ) : null}
 

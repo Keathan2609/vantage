@@ -3,7 +3,7 @@
 /**
  * Connections: what Vantage is talking to, and in which mode.
  *
- * The page exists to make one thing impossible to be wrong about — which
+ * The page exists to make one thing impossible to be wrong about -- which
  * broker adapter is loaded. A trading system whose operator has to guess
  * whether orders are simulated has a much worse problem than a missing page.
  *
@@ -32,7 +32,7 @@ export default function ConnectionsPage() {
         {version?.live_trading_available ? (
           <>
             <strong>This build reports that live execution is available.</strong> That should
-            be impossible here — treat it as a defect and stop trading until it is explained.
+            be impossible here, so treat it as a defect and stop trading until it is explained.
           </>
         ) : (
           <>
@@ -94,10 +94,10 @@ export default function ConnectionsPage() {
                       </td>
                       <td className="mono right muted">
                         {connection.latency_ms === undefined
-                          ? "—"
+                          ? "-"
                           : `${connection.latency_ms} ms`}
                       </td>
-                      <td className="wrap muted small">{connection.detail ?? "—"}</td>
+                      <td className="wrap muted small">{connection.detail ?? "-"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -208,11 +208,11 @@ export default function ConnectionsPage() {
             <div className="panel-body">
               <dl className="kv">
                 <dt>Version</dt>
-                <dd>{version?.version ?? "—"}</dd>
+                <dd>{version?.version ?? "-"}</dd>
                 <dt>Commit</dt>
-                <dd className="tiny">{version?.commit ?? "—"}</dd>
+                <dd className="tiny">{version?.commit ?? "-"}</dd>
                 <dt>Execution mode</dt>
-                <dd>{version?.execution_mode ?? "—"}</dd>
+                <dd>{version?.execution_mode ?? "-"}</dd>
                 <dt>Simulated funds</dt>
                 <dd className={version?.simulated_funds ? "profit" : "loss"}>
                   {version?.simulated_funds ? "yes" : "no"}
@@ -222,7 +222,7 @@ export default function ConnectionsPage() {
                   {version?.live_trading_available ? "AVAILABLE" : "not available"}
                 </dd>
                 <dt>Account broker</dt>
-                <dd>{account?.broker_name ?? "—"}</dd>
+                <dd>{account?.broker_name ?? "-"}</dd>
               </dl>
             </div>
           </Panel>
@@ -243,7 +243,7 @@ export default function ConnectionsPage() {
                 <dd className="mono">{fullDateTime(marketStatus?.server_time)}</dd>
                 <dt>Next close</dt>
                 <dd>
-                  {marketStatus?.next_close ? relative(marketStatus.next_close) : "—"}
+                  {marketStatus?.next_close ? relative(marketStatus.next_close) : "-"}
                 </dd>
               </dl>
               <p className="tiny muted" style={{ marginBottom: 0 }}>
@@ -260,7 +260,7 @@ export default function ConnectionsPage() {
                 No credential, API key, account number or endpoint secret is returned by this
                 API or rendered by this page. Broker credentials are held encrypted, are
                 readable only by the control plane, and are excluded from logs, error
-                responses, decision snapshots and audit metadata by construction — the
+                responses, decision snapshots and audit metadata by construction. The
                 response types have no field for them.
               </p>
               <p className="small muted" style={{ marginBottom: 0 }}>

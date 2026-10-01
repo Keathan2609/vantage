@@ -244,7 +244,7 @@ function ChartView() {
         <div className="kv-grid" data-testid="market-data-provenance">
           <div>
             <dt>Provider</dt>
-            <dd>{provider?.provider ?? "—"}</dd>
+            <dd>{provider?.provider ?? "-"}</dd>
           </div>
           <div>
             <dt>Feed status</dt>
@@ -253,7 +253,7 @@ function ChartView() {
           <div>
             <dt>Last provider success</dt>
             <dd>
-              {provider?.last_success_at ? time(provider.last_success_at) : "—"}
+              {provider?.last_success_at ? time(provider.last_success_at) : "-"}
             </dd>
           </div>
           <div>
@@ -261,7 +261,7 @@ function ChartView() {
             <dd>
               {provider?.last_market_timestamp
                 ? time(provider.last_market_timestamp)
-                : "—"}
+                : "-"}
             </dd>
           </div>
           <div>
@@ -274,7 +274,7 @@ function ChartView() {
           </div>
           <div>
             <dt>Bars held</dt>
-            <dd>{held ? held.bars.toLocaleString() : "—"}</dd>
+            <dd>{held ? held.bars.toLocaleString() : "-"}</dd>
           </div>
           <div>
             <dt>Gaps</dt>
@@ -295,7 +295,7 @@ function ChartView() {
         </div>
         {provider && !provider.configured && (
           <p className="note" data-testid="provider-unconfigured">
-            TWELVE_DATA_CONFIGURATION_REQUIRED — no API key is configured, so no
+            TWELVE_DATA_CONFIGURATION_REQUIRED: no API key is configured, so no
             new history can be acquired. Everything already stored still works.
           </p>
         )}

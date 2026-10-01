@@ -253,7 +253,7 @@ func TestAnInterruptedRunIsListedWithAResumeVerdict(t *testing.T) {
 			t.Errorf("run %s carries no verdict, so an operator cannot tell "+
 				"whether resuming it is safe", run.ID)
 		}
-		t.Logf("interrupted run %s on %s at instant %d: resumable=%t — %s",
+		t.Logf("interrupted run %s on %s at instant %d: resumable=%t -- %s",
 			run.ID, run.DatasetID, run.Cursor, run.Resumable, run.Reason)
 	}
 }

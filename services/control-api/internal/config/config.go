@@ -5,7 +5,7 @@
 // three independent places, so no single mistake can undo it:
 //
 //  1. BuildAllowsLiveExecution is a compile-time false. Turning it on requires
-//     a code change, review and a rebuild — not an environment variable.
+//     a code change, review and a rebuild -- not an environment variable.
 //  2. Load rejects any execution mode other than "paper", and rejects any
 //     broker adapter other than the mock, before the server starts.
 //  3. No live broker adapter exists in the binary. Even a forged configuration

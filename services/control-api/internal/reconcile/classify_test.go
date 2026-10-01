@@ -304,7 +304,7 @@ func TestAnUnattributableExecutionIsNeverAutomaticallyRepaired(t *testing.T) {
 
 // TestAnAmbiguousExecutionIsNotResolvedByTakingTheFirstMatch.
 //
-// Two local orders hold the same venue order id — which should not happen, and
+// Two local orders hold the same venue order id -- which should not happen, and
 // is precisely why it must not be resolved silently. Returning the first match
 // would turn an ambiguous attribution into a confident wrong one.
 func TestAnAmbiguousExecutionIsNotResolvedByTakingTheFirstMatch(t *testing.T) {
@@ -967,7 +967,7 @@ func TestEveryFindingCarriesAFingerprintAndADescription(t *testing.T) {
 //
 // FetchOpenOrders returns only OPEN orders, which is the correct contract. But
 // an order the venue FILLED is no longer open, so it is absent from that list
-// — and the classifier concluded "the venue never heard of this, mark it not
+// -- and the classifier concluded "the venue never heard of this, mark it not
 // executed". That releases the risk budget for a position that exists.
 //
 // It happened on a real lost-response order: the venue held it as filled with

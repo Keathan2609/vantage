@@ -19,7 +19,7 @@ is how a reconciliation subsystem starts inventing trades.
 The governing rule:
 
 > Repair automatically only where the correct repair is **provable** from the
-> evidence. Not likely, not usually — provable. Everything else waits for an
+> evidence. Not likely, not usually -- provable. Everything else waits for an
 > operator, and an operator who is shown the evidence rather than a summary of
 > it.
 
@@ -32,7 +32,7 @@ ledger, which is not.
 1. take the account's reconciliation lock, or decline to run
 2. capture the **venue's** snapshot
 3. capture **Vantage's** snapshot
-4. classify the differences — a pure function, no I/O, no repairs
+4. classify the differences -- a pure function, no I/O, no repairs
 5. persist each as an issue, deduplicated by fingerprint
 6. apply the repairs the policy calls provable
 7. close issues whose divergence has gone
@@ -45,7 +45,7 @@ and the third is the serious one:
 - a repair changes local state, so a later comparison in the same run sees a
   different local view and the run is not self-consistent
 - the evidence behind a decision is gone once the loop moves on
-- **the run is not reproducible** — given the same divergence, two runs could
+- **the run is not reproducible** -- given the same divergence, two runs could
   classify it differently depending on timing, which for a process that writes
   to the ledger is not acceptable
 
@@ -56,7 +56,7 @@ database and no venue, which is where most of its test coverage lives
 
 ### One trap worth naming
 
-`FetchOpenOrders` returns only OPEN orders, which is the correct contract — but
+`FetchOpenOrders` returns only OPEN orders, which is the correct contract -- but
 an order the venue **filled** is no longer open, so it is absent from that
 list. Concluding "the venue never heard of this" from that absence would
 release the risk budget for a position that exists.
@@ -73,7 +73,7 @@ absence from a filtered list is not.
 Thirteen types, deliberately narrow. An earlier version recorded
 `fill_quantity_mismatch` for both "the venue has an execution we can prove
 belongs to order X" and "the venue has an execution we cannot attribute to
-anything" — one of which is safely repairable and one of which must never be
+anything" -- one of which is safely repairable and one of which must never be
 touched automatically. Collapsing them meant neither could be handled.
 
 | Type | Repair class | Halts | What it means |
@@ -100,7 +100,7 @@ the server enforces rather than re-implementing it.
 
 ### Why each automatic repair is safe
 
-**`FILL_MISSING_LOCALLY`** — the execution carries a venue order id that maps
+**`FILL_MISSING_LOCALLY`** -- the execution carries a venue order id that maps
 to exactly one Vantage order, and its instrument and side agree with that
 order. Booking is idempotent on the venue's execution id (a unique index on
 `(broker_name, broker_fill_id)`), so applying it twice is impossible.
@@ -108,18 +108,18 @@ Attribution is conjunctive and strict: a venue reporting the *opposite side*
 for an order id we recognise is describing a mapping error, and booking it
 would move the position the wrong way, so it is refused rather than attributed.
 
-**`ORDER_MISSING_AT_BROKER`** — safe *only* on the strength of a direct
+**`ORDER_MISSING_AT_BROKER`** -- safe *only* on the strength of a direct
 client-id lookup returning not-found, and *only* for an order holding no venue
 identifier. That combination proves the order never reached the market. An
 order that **does** hold a venue id the venue denies is a `VENUE_ID_MISMATCH`
 instead, and closing it out would free risk budget for a position that may
 exist.
 
-**`ORDER_STATUS_MISMATCH`** — the venue is authoritative about its own order
+**`ORDER_STATUS_MISMATCH`** -- the venue is authoritative about its own order
 states, but adoption requires that the **filled quantities already agree**. A
 status difference accompanied by a quantity difference is a *missing
 execution*, and relabelling the order would leave it marked FILLED with no
-fills behind it — breaking the invariant that position quantity equals
+fills behind it -- breaking the invariant that position quantity equals
 fill-derived quantity. That case is classified `PARTIAL_FILL_MISMATCH` and
 repaired by booking the execution, not by relabelling.
 
@@ -134,7 +134,7 @@ wrong one.
 consequence of executions; a balance is the running total of an append-only
 ledger. Writing either to match a snapshot would produce a value nothing
 explains. The repair is to find and book the executions that account for the
-difference — which is a different issue type. No action available for a
+difference -- which is a different issue type. No action available for a
 position or balance mismatch writes financial state, and a test asserts that.
 
 **External activity.** Vantage cannot invent the risk decision, authority check
@@ -144,7 +144,7 @@ though Vantage had placed it.
 
 ## Fill ingestion: one accounting path
 
-An execution can reach Vantage two ways — returned by a `PlaceOrder` call, or
+An execution can reach Vantage two ways -- returned by a `PlaceOrder` call, or
 discovered later by reconciliation. **Those two paths must produce identical
 accounting**, and "must" is not a strong enough guarantee when the code exists
 twice.
@@ -158,9 +158,9 @@ The specific failure this prevents: a reconciliation importer with its own
 constraint ties a position to a transaction, so the schema would not object,
 and the account would carry a position no money movement explains.
 
-Every imported execution is validated before anything is written — identifier
+Every imported execution is validated before anything is written -- identifier
 present, account and instrument match, side matches, quantity and price
-positive, no overfill — because a constraint violation arrives as an aborted
+positive, no overfill -- because a constraint violation arrives as an aborted
 transaction that also rolls back the repair of every other issue in the same
 unit of work.
 
@@ -172,7 +172,7 @@ divergence.
 
 ## Repair transitions are distinguishable from normal ones
 
-Reconciliation needs moves the normal state machine forbids — `ACCEPTED →
+Reconciliation needs moves the normal state machine forbids -- `ACCEPTED →
 FILLED` being the important one, because that is the state a lost response
 leaves behind.
 
@@ -186,7 +186,7 @@ path.
 So recovery has its **own** table (`domain.CanRepairTransition`). Every normal
 transition is also a legal repair; the converse does not hold. What stays
 forbidden either way: **leaving a terminal state.** A FILLED order does not
-become CANCELLED because a snapshot disagreed — that is a contradiction to
+become CANCELLED because a snapshot disagreed -- that is a contradiction to
 investigate, not a state to overwrite.
 
 Every repair records the previous state, the new state, the issue id, the
@@ -199,7 +199,7 @@ later from a snapshot".
 ## Unknown execution state
 
 `FAILED` means "Vantage does not know the venue-side outcome". That is
-correct, and it is why FAILED is not terminal — but the name reads as a closed
+correct, and it is why FAILED is not terminal -- but the name reads as a closed
 failure, and an operator needs to see uncertainty **as** uncertainty.
 
 So orders carry `reconciliation_required`, set in the same transaction that
@@ -209,7 +209,7 @@ execution in order to describe an exceptional condition.
 
 An order in that state:
 
-- blocks nothing from being retried, because it is **never** retried — a retry
+- blocks nothing from being retried, because it is **never** retried -- a retry
   of an unknown outcome is how one intended trade becomes two positions
 - appears in the operations view and in `GET /reconciliation/{id}/issues`
 - counts toward the account's readiness verdict
@@ -244,7 +244,7 @@ be right either, and that is not a state to trade automatically from.
 
 **Blast radius is the minimum necessary.** An uncertain gold execution on one
 account halts that account; it does not stop an unrelated one. The single
-exception is `VENUE_ID_MISMATCH`, which halts the whole broker connection —
+exception is `VENUE_ID_MISMATCH`, which halts the whole broker connection --
 every other repair on that connection relies on the identifier mapping being
 sound, so while it is in doubt none of them can be trusted. No issue type halts
 all trading globally; a global stop is a kill switch, applied deliberately.
@@ -268,7 +268,7 @@ book known to be wrong.
 
 So the OMS re-reads the halt **inside** the transaction that persists the
 order, after taking the account row lock that a repair also takes. Either the
-order commits before the issue exists, or it sees the issue — decided by
+order commits before the issue exists, or it sees the issue -- decided by
 PostgreSQL's serialisation rather than by luck.
 
 ## Start-up and periodic runs
@@ -290,7 +290,7 @@ holds both indefinitely, and reconciliation silently stops happening while
 reporting no error at all.
 
 The lock is **session-scoped**, because a run spans several transactions by
-design — it reads a snapshot with no transaction open, then repairs each issue
+design -- it reads a snapshot with no transaction open, then repairs each issue
 in its own unit of work so one failure does not roll back the others. A
 transaction-scoped lock would be released in exactly the window a second run
 must not enter. It is an advisory lock rather than a row so that PostgreSQL
@@ -305,7 +305,7 @@ clean.
 
 ## Idempotence
 
-Reconciliation runs every five minutes, so "converges once" is not enough — it
+Reconciliation runs every five minutes, so "converges once" is not enough -- it
 has to converge and then stop.
 
 - an **issue** is identified by the problem, not the run that found it. A
@@ -321,7 +321,7 @@ has to converge and then stop.
   agree, and nothing would ever revisit the original issue
 
 An ordinary execution **replay** is not recorded at all. The execution cursor
-overlaps by a minute on purpose, so every poll re-sees recent executions — that
+overlaps by a minute on purpose, so every poll re-sees recent executions -- that
 is the expected steady state, not an event. An earlier version raised an info
 issue for each one, which produced dozens an hour that said nothing and made
 the run report's repair count meaningless. What *is* recorded is the venue
@@ -352,7 +352,7 @@ API refuses the action by name and says why.
 
 The caller chooses **which remedy, never what the numbers are.**
 `IMPORT_BROKER_FILL` books the execution reconstructed from the issue's own
-stored evidence — not one the caller supplies. A caller able to name the
+stored evidence -- not one the caller supplies. A caller able to name the
 quantity and price would be writing arbitrary values into the ledger with an
 operator's authority attached.
 
@@ -361,7 +361,7 @@ Every action:
 - requires the admin role, enforced at the route rather than inside the handler
 - must be in the issue type's `allowed_actions`, so a fill cannot be imported
   against a balance mismatch
-- requires a reason of at least ten characters — the only durable record of
+- requires a reason of at least ten characters -- the only durable record of
   **why** a financial repair was applied
 - is refused if the issue is already resolved (`409`), so two operators
   clicking at once cannot both act
@@ -369,7 +369,7 @@ Every action:
   success: an audit trail that records only successes cannot answer "did anyone
   try"
 - loads the issue scoped to the account, so a forged id from another account is
-  not-found rather than data — and not-found rather than forbidden, because
+  not-found rather than data -- and not-found rather than forbidden, because
   distinguishing them would confirm the id exists
 
 `LINK_BROKER_ORDER` is refused if the venue id already belongs to a different
@@ -385,7 +385,7 @@ to the role that is barred from trading.
 
 One consequence had to be handled explicitly: an admin owns no trading account
 in this build, so scoping the reconciliation routes by ownership made them
-unreachable for the only role permitted to use them — every call answered
+unreachable for the only role permitted to use them -- every call answered
 "Account not found". Those routes resolve the account with an
 operations-scoped lookup that widens to any account for an admin, and an
 architecture test asserts that every reconciliation handler uses it. Every use
@@ -402,8 +402,8 @@ an append-only ledger on the strength of a venue snapshot is worth knowing
 about *especially* when it is correct: an operator who never hears about
 repairs cannot notice that they have started happening every day.
 
-Storms are avoided by keying each alert on the thing it is about — an issue
-type per account, a repair per action — and by a per-kind cooldown. A
+Storms are avoided by keying each alert on the thing it is about -- an issue
+type per account, a repair per action -- and by a per-kind cooldown. A
 reconciliation *failure* is rate-limited because a venue that is down fails
 every scheduled run; the suppressed count still reports how many, so "it has
 been failing for an hour" stays visible.
@@ -422,7 +422,7 @@ Vantage supplies `command_id` as the client order id on every order it places.
 That is what makes a venue order carrying no client order id recognisable as
 **external** activity rather than a lost record.
 
-A future adapter may weaken these guarantees — a venue that does not echo a
+A future adapter may weaken these guarantees -- a venue that does not echo a
 client order id, or reuses execution ids across days. `Capabilities`
 (`SupportsClientOrderID`) exists to say so, and an adapter whose guarantee is
 weaker must implement its own deduplication and declare it. Nothing in this
@@ -439,7 +439,7 @@ exists because it will:
 
 Such state is reported as `EXTERNAL_BROKER_ACTIVITY`, classified unresolvable,
 and **never** recorded as though Vantage had originated it. Every downstream
-record — decision snapshot, risk check, authority — would be a fabrication. It
+record -- decision snapshot, risk check, authority -- would be a fabrication. It
 is acknowledged by an operator, and the venue's position book is treated as
 authoritative for risk purposes without claiming Vantage placed the trade.
 

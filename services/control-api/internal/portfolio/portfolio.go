@@ -1,8 +1,8 @@
 // Package portfolio derives account state from the ledger and open positions.
 //
 // Nothing here stores a running balance. Equity, margin and exposure are
-// computed from immutable facts — the ledger's transactions and the position
-// book — every time they are asked for. That makes them reproducible and
+// computed from immutable facts -- the ledger's transactions and the position
+// book -- every time they are asked for. That makes them reproducible and
 // auditable: a balance that disagrees with the ledger is a bug that shows up
 // immediately, not a slow drift nobody notices until a withdrawal.
 package portfolio

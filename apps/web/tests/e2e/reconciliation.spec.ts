@@ -147,7 +147,7 @@ async function createLostFill(): Promise<string> {
     throw new Error(
       `the order was refused with ${res.status()} before reaching the venue, so no ` +
         `divergence was created. This is a fixture problem, not a reconciliation ` +
-        `failure -- check exposure, risk limits and feed health. ${body}`,
+        `failure, check exposure, risk limits and feed health. ${body}`,
     );
   }
   return key;
@@ -328,7 +328,7 @@ test.describe("operator control: authorisation", () => {
   test("a TRADER cannot resolve an issue either", async () => {
     // The interesting case. A trader may place orders and flatten positions,
     // but resolving a divergence can book an execution into an append-only
-    // ledger — so it belongs to the role that is barred from trading.
+    // ledger -- so it belongs to the role that is barred from trading.
     // Separation of duties runs in both directions.
     const res = await ctx.post(
       `/api/v1/reconciliation/${accountId}/issues/` +
@@ -516,7 +516,7 @@ test.describe("operator control: input validation", () => {
         data: { action: "ACKNOWLEDGE", reason: payload },
       },
     );
-    // Accepted as text (it is a reason field), or refused — but never a 500,
+    // Accepted as text (it is a reason field), or refused -- but never a 500,
     // and the orders table must still be there afterwards.
     expect([200, 409, 422]).toContain(res.status());
 
@@ -618,7 +618,7 @@ test.describe("the operations view", () => {
 
   test("a trader is offered no resolution controls", async ({ page }) => {
     // The UI does not OFFER what the role may not do. The endpoint refuses it
-    // regardless — that is asserted separately against the API — but a button
+    // regardless -- that is asserted separately against the API -- but a button
     // that always fails is a worse experience than no button.
     await signIn(page);
     await page.goto("/operations");

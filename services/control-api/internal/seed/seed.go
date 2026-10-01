@@ -84,7 +84,7 @@ func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 //
 // XAUUSD is the primary market and its specification mirrors a typical retail
 // CFD venue: 100 troy ounces per lot, 0.01 lot minimum, 0.5% margin. Nothing in
-// the platform's logic depends on these values — they are data.
+// the platform's logic depends on these values -- they are data.
 var instrumentSeeds = []domain.Instrument{
 	{
 		ID: "XAUUSD", Symbol: "XAUUSD", Name: "Gold vs US Dollar",
@@ -106,7 +106,7 @@ var instrumentSeeds = []domain.Instrument{
 		//
 		// This instrument exists because of an arithmetic fact rather than a
 		// preference. A 100-ounce contract has a 0.01-lot minimum, which is one
-		// whole ounce — roughly R48,000 of notional at current prices. A R500
+		// whole ounce -- roughly R48,000 of notional at current prices. A R500
 		// account cannot hold that, and the risk engine correctly refuses it.
 		// With a 1-ounce contract the same 0.01-lot minimum is R480 of notional
 		// and R2.40 of margin, which a small account can actually carry.
@@ -432,7 +432,7 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 	// R500, the small-account case the platform is explicitly designed to
 	// survive. At this size most gold trades are simply not affordable, and
 	// the correct behaviour is to decline them.
-	const accountName = "Paper — Gold (R500)"
+	const accountName = "Paper -- Gold (R500)"
 	result.AccountName = accountName
 
 	accounts, err := d.Store.Accounts.ListAccountsForUser(ctx, traderID)
@@ -571,7 +571,7 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 	existingAuthority, authErr := d.Store.Control.ActiveAuthorityForAccount(ctx, account.ID)
 	if authErr == nil {
 		// An authority already exists. Re-seeding does not silently widen a
-		// mandate — that would defeat the point of it being a control — but it
+		// mandate -- that would defeat the point of it being a control -- but it
 		// does reconcile the development grant to the seed's current intent,
 		// and the change is written to the authority history like any other.
 		wanted := []string{"XAUUSD.m", "XAUUSD", "TEST_XAU"}

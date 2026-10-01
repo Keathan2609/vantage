@@ -34,7 +34,7 @@ took five defects, four of them in code the previous milestones had passed.
 
 ---
 
-## 0. Requirement matrix — current state
+## 0. Requirement matrix -- current state
 
 This section is a standing inventory of what the platform is required to do and
 what is actually known about each requirement. It is written from the
@@ -60,13 +60,13 @@ result names a run recorded in §0.12.
 |---|---|---|---|
 | MD-1 | One provider seam, several implementations behind it | VERIFIED | `internal/marketdata/provider.go`, `replay.go`, `twelvedata.go`, registered in `internal/app/app.go`. 127 tests in the package, all run. |
 | MD-2 | Bars keep advancing; live quotes fold into 15m, 1h and 4h | VERIFIED | `internal/marketdata/aggregate.go`, with `Aggregator.Seed` wired in `internal/app/app.go`. Observed resuming 18 forming bars across a restart. |
-| MD-3 | Quality gating: stale or absent data refuses rather than guesses | VERIFIED | `/health/ready` and `/market/health`; smoke asserts the refusal on a stale feed. Observed again this session — the venue's maintenance break produces `no_data`, not a fabricated quote. |
-| MD-4 | Historical acquisition: backfill, sync and repair through one path | PARTIAL | `internal/marketdata/sync.go`. `internal/marketdata/acquisition_integration_test.go` (16 tests) drives the real `Syncer` against a fake server implementing Twelve Data's **documented** contract. Never run against the provider itself — see MD-9. |
-| MD-5 | A large range is chunked and fully covered | VERIFIED | `TestALargeRangeIsChunkedAndFullyCovered` — 9 000 bars over three requests, with no hole at the seams. |
+| MD-3 | Quality gating: stale or absent data refuses rather than guesses | VERIFIED | `/health/ready` and `/market/health`; smoke asserts the refusal on a stale feed. Observed again this session -- the venue's maintenance break produces `no_data`, not a fabricated quote. |
+| MD-4 | Historical acquisition: backfill, sync and repair through one path | PARTIAL | `internal/marketdata/sync.go`. `internal/marketdata/acquisition_integration_test.go` (16 tests) drives the real `Syncer` against a fake server implementing Twelve Data's **documented** contract. Never run against the provider itself -- see MD-9. |
+| MD-5 | A large range is chunked and fully covered | VERIFIED | `TestALargeRangeIsChunkedAndFullyCovered` -- 9 000 bars over three requests, with no hole at the seams. |
 | MD-6 | Re-acquisition is idempotent | VERIFIED | `TestReacquiringTheSameRangeChangesNothing`; `market_bars` is keyed on `(instrument_id, timeframe, open_time)` with `ON CONFLICT DO UPDATE` in `internal/store/market.go`. |
 | MD-7 | A forming bar never overwrites a finished one | VERIFIED | The `WHERE NOT (market_bars.complete AND NOT EXCLUDED.complete)` guard in `internal/store/market.go`; `TestAFormingBarNeverOverwritesAFinishedOne`, `TestAProviderMayStillCorrectItsOwnFinishedBar`. **This was BROKEN at the start of this session**; it is the defect the new integration suite found. |
 | MD-8 | Repair never fabricates a bar the provider does not have | VERIFIED | `TestRepairNeverFabricatesABarTheProviderDoesNotHave`. A closed-market range is left alone, which is what made the first version of that fixture wrong rather than the platform. |
-| MD-9 | The Twelve Data provider works against Twelve Data | UNVERIFIED | `internal/marketdata/twelvedata.go`. No API key is configured on this machine and the provider has never been contacted. What is verified: the request shape against the published documentation, and the response handling against a fake that follows it. The Individual plan's licence is personal, internal and non-commercial — recorded here because it constrains what any acquired data may later be used for. |
+| MD-9 | The Twelve Data provider works against Twelve Data | UNVERIFIED | `internal/marketdata/twelvedata.go`. No API key is configured on this machine and the provider has never been contacted. What is verified: the request shape against the published documentation, and the response handling against a fake that follows it. The Individual plan's licence is personal, internal and non-commercial -- recorded here because it constrains what any acquired data may later be used for. |
 | MD-10 | Provenance: what was asked for, and what came back | VERIFIED | `market_data_segments`; `TestProvenanceRecordsWhatWasAskedAndWhatCameBack`. A short answer is recorded PARTIAL with a warning rather than silently accepted. |
 | MD-11 | The API key never reaches a response, a log or the database | VERIFIED | `scrub` and `transportCause` in `internal/marketdata/twelvedata.go`; `TestATransportFailureDoesNotCarryTheKey`, `TestTheProviderHealthNeverCarriesTheKey`, `TestAFailedAcquisitionNeverPersistsTheKey`. This was a real leak, found by probing rather than by reading. |
 | MD-12 | The provider base URL is fixed configuration, never caller-steered | VERIFIED | `NewTwelveDataProvider` requires https and takes the base URL from configuration only; no handler passes one through. |
@@ -78,7 +78,7 @@ result names a run recorded in §0.12.
 |---|---|---|---|
 | RS-1 | The research plane cannot reach a broker | VERIFIED | `TestTheQuantBridgeCannotReachExecution` in `internal/arch/arch_test.go`; no broker client exists under `services/quant`. |
 | RS-2 | No look-ahead in any indicator or backtest | VERIFIED | `services/quant/tests/test_research_leakage.py` (15 tests); `marketdata.ReplayProvider` never returns a bar past the cursor. |
-| RS-3 | Backtests report honestly — costs, slippage, out-of-sample | VERIFIED | `services/quant/tests/test_backtest.py` (25 tests). |
+| RS-3 | Backtests report honestly -- costs, slippage, out-of-sample | VERIFIED | `services/quant/tests/test_backtest.py` (25 tests). |
 | RS-4 | A source type is never assumed across the process boundary | VERIFIED | `internal/marketdata/snapshot.go` writes the CSV under a temporary name and renames it only once `.manifest.json` is down; `services/quant/vantage_quant/research/historical.py` refuses an export-shaped file with no manifest, and refuses an unrecognised value. `test_research_historical.py` (72 tests). |
 | RS-5 | The evidence taxonomy distinguishes "not enough data" from "the score is the problem" | VERIFIED | `research/verdict.py`, `research/requirements.py`; `test_research_expansion.py` (40 tests), `test_score_inventory.py` (9). |
 | RS-6 | Regime classification is consistent across its own bands | VERIFIED | `services/quant/vantage_quant/scanner.py`; `test_regime.py` (7 tests). Corrected this milestone: a market going nowhere is a range at any ADX. |
@@ -101,7 +101,7 @@ result names a run recorded in §0.12.
 | ST-1 | Strategies are registered, versioned and promoted one lifecycle stage at a time | VERIFIED | `services/quant/vantage_quant/strategies.py`; `test_strategies.py` (21 tests). A seeded database carries 12 registered, 5 at PAPER. |
 | ST-2 | Consensus is a pure, versioned policy: vetoes before votes, never a majority | VERIFIED | `internal/orchestrator/consensus.go`, with `aggregate.go` as its only production caller, pinned by `TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict`. 76 tests in the package. |
 | ST-3 | Ten deterministic market scenarios exercise the decision layer | VERIFIED | `internal/orchestrator/scenario_test.go`. |
-| ST-4 | The strategies produce an actionable signal when the market suits them | VERIFIED | A `trend-clean` replay through the real pipeline now produces **46 actionable signals** — 26 buy (mean 0.453) and 20 sell (mean 0.700) — beside 73 genuine abstentions. The previous revision recorded this row as BROKEN on the strength of 130 signals all at confidence 0.000; **266 of those were strategies that had been handed fewer bars than they require and could not form an opinion at all**, recorded as opinions. Section 30o. |
+| ST-4 | The strategies produce an actionable signal when the market suits them | VERIFIED | A `trend-clean` replay through the real pipeline now produces **46 actionable signals** -- 26 buy (mean 0.453) and 20 sell (mean 0.700) -- beside 73 genuine abstentions. The previous revision recorded this row as BROKEN on the strength of 130 signals all at confidence 0.000; **266 of those were strategies that had been handed fewer bars than they require and could not form an opinion at all**, recorded as opinions. Section 30o. |
 | ST-5 | An actionable signal that survives the policy becomes an order | **BROKEN** | The same replay produced 39 decisions, every regime correctly TRENDING, and **no order**. The cause is now measurable rather than inferred: the only strategy clearing the policy's 0.55 floor (`rsi_mean_reversion`, 0.700) declares itself valid only in RANGING, so the regime gate correctly discards it; the strategies that ARE valid in a trend peak at 0.538 (`macd_momentum`) and 0.441 (`donchian_breakout`) because the score is a raw average with hard-coded constants. On a trending market the set that can clear the floor and the set permitted to act do not intersect. Calibrating the scale is research; moving the threshold would answer it dishonestly. |
 
 ### 0.5 Risk
@@ -109,10 +109,10 @@ result names a run recorded in §0.12.
 | # | Requirement | Class | Evidence |
 |---|---|---|---|
 | RK-1 | The risk engine is a pure function with no database reach | VERIFIED | `TestRiskEngineDoesNotReachTheDatabase`; `internal/risk/engine.go`. 54 tests in the package. |
-| RK-2 | A check that limits exposure or loss never refuses a reducing order | VERIFIED | `internal/risk/reducing_matrix_test.go` covers both halves of the rule — opposite side *and* quantity no greater than the open position — and the side-flip case. |
+| RK-2 | A check that limits exposure or loss never refuses a reducing order | VERIFIED | `internal/risk/reducing_matrix_test.go` covers both halves of the rule -- opposite side *and* quantity no greater than the open position -- and the side-flip case. |
 | RK-3 | Risk may only reduce a requested size | VERIFIED | `internal/risk/sizing.go`. No path increases a request. |
 | RK-4 | Trading authority is a technical control with a date range and a scope | VERIFIED | `internal/risk/authority_boundary_test.go`. Observed: a 2027 replay against a 90-day authority skipped 610 runs with "Trading authority has expired". |
-| RK-5 | Fail closed — a missing rate or a stale quote refuses | VERIFIED | Asserted by smoke; `internal/fx` returns a refusal, never a guess. |
+| RK-5 | Fail closed -- a missing rate or a stale quote refuses | VERIFIED | Asserted by smoke; `internal/fx` returns a refusal, never a guess. |
 
 ### 0.6 OMS
 
@@ -121,7 +121,7 @@ result names a run recorded in §0.12.
 | OM-1 | Only the OMS holds a broker adapter | VERIFIED | `TestOnlyTheOMSCanPlaceABrokerOrder`, `TestBrokerAdapterIsHeldByAnAllowlistOfPackagesOnly`. |
 | OM-2 | Every order placement goes through one method | VERIFIED | `TestEveryOrderPlacementGoesThroughTheSameOMSMethod`. |
 | OM-3 | Only `internal/booking` appends a fill, and it holds no adapter | VERIFIED | `TestOnlyBookingAppendsFills`, `TestBookingHoldsNoBrokerAdapter`; 12 tests in `internal/booking`. |
-| OM-4 | Idempotent under concurrency — a duplicate request cannot double-fill | VERIFIED | `tests/race`, **15 pass 0 fail against the running stack for this revision**; `go test -race ./internal/...` clean. |
+| OM-4 | Idempotent under concurrency -- a duplicate request cannot double-fill | VERIFIED | `tests/race`, **15 pass 0 fail against the running stack for this revision**; `go test -race ./internal/...` clean. |
 | OM-5 | The order state machine refuses illegal transitions | VERIFIED | `internal/domain` (145 tests). |
 | OM-6 | Autopilot halts only the autonomous pipeline; the kill switch halts everything | VERIFIED | Both are enforced inside the order transaction. Smoke asserts that manual trading, cancel and flatten survive Autopilot OFF. |
 
@@ -130,7 +130,7 @@ result names a run recorded in §0.12.
 | # | Requirement | Class | Evidence |
 |---|---|---|---|
 | RC-1 | Snapshot both sides, classify with a pure function | VERIFIED | `internal/reconcile`, `domain.PolicyFor`; 34 tests. |
-| RC-2 | Only provable divergence is repaired; the ambiguous halts for an operator | VERIFIED — **and observed live** | Two orphan venue executions injected by the smoke suite were classified `EXTRA_BROKER_FILL`, severity `critical`, `OPERATOR_ACTION_REQUIRED`, and held the account in `TRADING_HALTED` for two hours until the database was reset. Automatically-safe classes beside them were repaired. That is the rule working, read out of the live database rather than out of a test. |
+| RC-2 | Only provable divergence is repaired; the ambiguous halts for an operator | VERIFIED -- **and observed live** | Two orphan venue executions injected by the smoke suite were classified `EXTRA_BROKER_FILL`, severity `critical`, `OPERATOR_ACTION_REQUIRED`, and held the account in `TRADING_HALTED` for two hours until the database was reset. Automatically-safe classes beside them were repaired. That is the rule working, read out of the live database rather than out of a test. |
 | RC-3 | "Not re-detected" means "fixed", never "no longer examined" | VERIFIED | `closeVanishedIssues` together with the frozen execution cursor in `reconcile.runLocked`; unit tests in `internal/reconcile`. |
 | RC-4 | Reconciliation endpoints are reachable by the role permitted to use them | VERIFIED | `TestEveryReconciliationHandlerUsesTheOperationsScope`; `apps/web/tests/e2e/reconciliation.spec.ts` (21 tests). |
 | RC-5 | Position quantities are never written to match the venue | VERIFIED | No such path exists. `reconcile.Resolve` exposes named actions only, and there is no generic "set order status" endpoint. |
@@ -151,7 +151,7 @@ result names a run recorded in §0.12.
 |---|---|---|---|
 | UI-1 | The terminal holds no business rules; every refusal comes from the API with a machine-readable code | VERIFIED | `apps/web`; `trading.spec.ts` asserts the codes rather than the prose. |
 | UI-2 | Charts render from Vantage's own bars, not a third party's feed | VERIFIED | `apps/web/components/PriceChart.tsx` uses `lightweight-charts` as a renderer only; the bars come from `/market/bars`. `chart.spec.ts` (6 tests). |
-| UI-3 | Authentication, MFA and session handling in the browser | VERIFIED | `auth.spec.ts` (9 tests). The whole Playwright suite — 57 tests — passed against the terminal for this revision. |
+| UI-3 | Authentication, MFA and session handling in the browser | VERIFIED | `auth.spec.ts` (9 tests). The whole Playwright suite -- 57 tests -- passed against the terminal for this revision. |
 | UI-4 | Reconciliation review and repair from the terminal | VERIFIED | `reconciliation.spec.ts` (21 tests). |
 | UI-5 | No `Date.now()` during render | VERIFIED | The `useNow` hook in `lib/store.tsx`. |
 | UI-6 | Accessibility | MISSING | There is no automated accessibility suite: no axe run, no keyboard-navigation test. Nothing in this report should be read as a claim about it. |
@@ -161,7 +161,7 @@ result names a run recorded in §0.12.
 | # | Requirement | Class | Evidence |
 |---|---|---|---|
 | SC-1 | No cryptographic primitive is implemented here | VERIFIED | `internal/crypto` composes the standard library; 11 tests. |
-| SC-2 | No secrets in the repository, a log, a response, a decision snapshot or audit metadata | VERIFIED | gitleaks: 0 findings. MD-11 closed the one real leak this session. **The browser bundle is verified against the COMPILED artifact, not the source**: grepping `.next/static` and the standalone copy for env-var-shaped strings returns exactly two — `NEXT_PUBLIC_VANTAGE_API_BASE_URL`, and `TWELVE_DATA_CONFIGURATION_REQUIRED`, which is the operator-facing notice rendered *because* no key is configured and is the inverse of a leak. A second pass for inlined credential VALUES rather than names — the dev role passwords, the quant service token, the provider host, the literal `apikey` — returns zero files. Source-grepping cannot show this; a key could be inlined as a bare value with no name beside it. |
+| SC-2 | No secrets in the repository, a log, a response, a decision snapshot or audit metadata | VERIFIED | gitleaks: 0 findings. MD-11 closed the one real leak this session. **The browser bundle is verified against the COMPILED artifact, not the source**: grepping `.next/static` and the standalone copy for env-var-shaped strings returns exactly two -- `NEXT_PUBLIC_VANTAGE_API_BASE_URL`, and `TWELVE_DATA_CONFIGURATION_REQUIRED`, which is the operator-facing notice rendered *because* no key is configured and is the inverse of a leak. A second pass for inlined credential VALUES rather than names -- the dev role passwords, the quant service token, the provider host, the literal `apikey` -- returns zero files. Source-grepping cannot show this; a key could be inlined as a bare value with no name beside it. |
 | SC-3 | Authorisation is enforced server-side, per role | VERIFIED | `internal/httpapi` (29 tests), `internal/auth` (11); `auth.spec.ts`. |
 | SC-4 | Authentication lifetimes read real time, never the trading clock | VERIFIED | `TestAuthenticationUsesRealTimeNotTheTradingClock`. |
 | SC-5 | CSRF, CORS and security headers | VERIFIED | `internal/httpapi`. CORS allows exactly one origin. |
@@ -213,7 +213,7 @@ Every command below was run on this machine on 2026-09-30 and its output read.
 | `./scripts/dev-up.ps1 -Reset -Seed`, four times | 20 migrations applied each time; 11 790 bars, 12 strategies, 5 at PAPER. One seed per stack-dependent suite, because the daily-loss budget and the exposure ceilings are finite fixture resources |
 | `GET /health/ready` | `ready`, `paper`, quant `ok`, reconciliation `HEALTHY` |
 | A full `trend-clean` replay through the real pipeline, both planes rebuilt | 140/140 rows, 81 evaluation instants, 0 errors. `strategy_runs`: 551 skipped (266 of them insufficient history, naming both numbers), 73 no_signal, **46 succeeded**. 39 decisions, all TRENDING, no order |
-| `git push` to a public GitHub repository, then three CI rounds | First run: **both workflows red**, six defects `actionlint` cannot see. Third run: **both green** — CI 5/5 jobs, Security 11/11. Section 30q |
+| `git push` to a public GitHub repository, then three CI rounds | First run: **both workflows red**, six defects `actionlint` cannot see. Third run: **both green** -- CI 5/5 jobs, Security 11/11. Section 30q |
 
 Not executed, and therefore not claimed:
 
@@ -263,7 +263,7 @@ notional and quantity gates.
 
 The Python service has no broker client, no credential pointing back at the
 control plane, and a database role granted `SELECT` on market and research
-tables only — nothing on `users`, `sessions`, `accounts`, `orders`, `fills`,
+tables only -- nothing on `users`, `sessions`, `accounts`, `orders`, `fills`,
 `transactions`, `trading_authorities`, `kill_switches` or
 `broker_connections`.
 
@@ -283,7 +283,7 @@ a replayed key returns the original outcome.
 
 ## 5. Risk engine
 
-A pure function: 18 checks, all evaluated, all failures reported. Risk may only
+A pure function: 26 checks, all evaluated, all failures reported. Risk may only
 reduce a requested size.
 
 **Verified:** 22 unit tests written this session, including that concentration
@@ -300,7 +300,7 @@ twice yields an identical verdict.
 "0 ZAR". Cross-currency arithmetic returns `ErrCurrencyMismatch`.
 
 **Verified:** the `money` package's tests pass. Conversion refuses rather than
-guessing — a risk evaluation with no available FX rate does not approve.
+guessing -- a risk evaluation with no available FX rate does not approve.
 
 ## 7. Order state machine
 
@@ -354,7 +354,7 @@ lockout with exponential backoff to 15 minutes.
 
 **Verified:** the `auth` and `crypto` package tests pass. A sign-in MFA
 challenge stage was added this session so enabling MFA cannot lock the operator
-out — the prior build showed a message and offered no way to complete the
+out -- the prior build showed a message and offered no way to complete the
 challenge.
 
 ## 13. CSRF, CORS and headers
@@ -391,7 +391,7 @@ unlabelled tail rows dropped; every score reported against the majority-class
 baseline; Brier score reported because calibration matters more than accuracy
 for a filter; inference failure produces NO TRADE.
 
-**Verified:** on a random walk, no model beats the baseline — the correct
+**Verified:** on a random walk, no model beats the baseline -- the correct
 result and a check that the harness is not leaking. Model versions record
 algorithm, seed, dataset hash, code SHA and dependency versions.
 
@@ -400,7 +400,7 @@ algorithm, seed, dataset hash, code SHA and dependency versions.
 Five seams, each with a mock: `marketdata.Provider`, `broker.Adapter`,
 `econdata.CalendarProvider`, `econdata.NewsProvider`, `fx.RateSource`.
 
-The two calendar/news interfaces were **built this session** — previously the
+The two calendar/news interfaces were **built this session** -- previously the
 data was read straight from seeded tables while the documentation claimed an
 interface existed. The seed now uses the same ingestion path rather than
 holding a second copy of the fixtures.
@@ -416,7 +416,7 @@ not a human; `stale` and `invalid` block both.
 
 **Verified:** the risk engine's tests cover the degraded/stale boundary. A
 transient smoke failure this session was traced to an order placed in the
-two-second window after a reseed, before the ingestor's first tick — the
+two-second window after a reseed, before the ingestor's first tick -- the
 platform was correct to refuse, and the **test** was fixed to wait for a
 tradable feed and to assert on it.
 
@@ -708,7 +708,7 @@ feeds the whole terminal.
 **Verified:** typecheck, lint and production build clean; all 18 pages walked
 in a browser against the live stack and observed rendering real data.
 
-## 22. Next.js upgrade — a critical vulnerability found and fixed
+## 22. Next.js upgrade -- a critical vulnerability found and fixed
 
 Trivy found the pinned Next.js 15.1.6 carried **CVE-2025-55182, a
 pre-authentication remote code execution** via unsafe deserialization in React
@@ -739,7 +739,7 @@ for an event 8 minutes away.
 
 `mypy` was configured but had never actually run: it failed on missing pandas
 stubs, so nothing was checked. Adding `pandas-stubs` and targeting 3.12
-revealed **16 real typing gaps** — a `Literal` action erased to `str` in eleven
+revealed **16 real typing gaps** -- a `Literal` action erased to `str` in eleven
 places, and `float | None` used as `float` in the backtester's exit path.
 
 Fixed by typing the strategy sides as `Action` and by carrying the level that
@@ -765,7 +765,7 @@ no `.env`, key material, model artefact or dataset.
 ## 26. Static analysis
 
 Semgrep across `security-audit`, `golang`, `python`, `typescript`, `react` and
-`dockerfile`: initially 7 findings, all false positives on inspection —
+`dockerfile`: initially 7 findings, all false positives on inspection --
 `math/rand` in the *simulation* (seeded deliberately so tests assert exact
 fills), `Secure` set from the environment rather than a literal, and
 `HttpOnly: false` on the CSRF cookie, which the double-submit pattern requires.
@@ -783,7 +783,7 @@ attribute, meaning they were not actually being scanned; that was fixed too.
 | `govulncheck` | 0 reachable. One module-level advisory (GO-2026-5932, `x/crypto/openpgp`, unmaintained, no fix) accepted: the module is required for Argon2id and that package is never imported |
 | `npm audit` | 0 vulnerabilities |
 | Trivy filesystem | 0 HIGH/CRITICAL in npm and gomod |
-| Trivy config | **carried — not re-run** | 0 misconfigurations across three Dockerfiles |
+| Trivy config | **carried -- not re-run** | 0 misconfigurations across three Dockerfiles |
 | Trivy image | 0 HIGH/CRITICAL in all three, **under CI's `--ignore-unfixed`** |
 
 That last row needs its qualifier stated, not buried. Re-scanned on 2026-09-08
@@ -801,8 +801,8 @@ module-level openpgp advisory), web 0 at every severity, research 173 (3
 CRITICAL, 51 HIGH, 57 MEDIUM, 57 LOW, 5 UNKNOWN) plus the 3 accepted
 application-level findings in pip's vendored tree.
 
-Every one of those 54 HIGH/CRITICAL has an **empty fixed-version field** —
-Debian has not published a fix — and the Dockerfile already runs `apt-get upgrade -y`, so
+Every one of those 54 HIGH/CRITICAL has an **empty fixed-version field** --
+Debian has not published a fix -- and the Dockerfile already runs `apt-get upgrade -y`, so
 there is nothing to apply. None is added to `.trivyignore`, deliberately:
 suppressing those ids would also hide them once fixes land, which is precisely
 when they should reappear.
@@ -811,18 +811,18 @@ The exposure is bounded rather than absent. The research service holds no
 broker client and no credentials pointing back at the control plane, its
 database role is read-only, it runs non-root on a read-only root filesystem,
 and nothing in uvicorn or the numeric stack executes perl, mount helpers or
-ncurses. The real fix is a minimal base — about 750 MB of that 813 MB image is
-not needed at runtime — and that is recorded as remaining work, not attempted
+ncurses. The real fix is a minimal base -- about 750 MB of that 813 MB image is
+not needed at runtime -- and that is recorded as remaining work, not attempted
 at the end of an audit.
 
 Getting the images this far required real work: bumping stale base tags,
 applying distribution security updates in the final stage, and **removing npm
-from the web runtime image** — the server never installs a package, and a
+from the web runtime image** -- the server never installs a package, and a
 package manager in a production container is a way for anything that gets a
 shell to fetch its next stage.
 
 `.trivyignore` records the two accepted application-level findings. Both are
-inside pip's own `_vendor` tree — `msgpack==1.1.2` and `setuptools==70.3.0` in
+inside pip's own `_vendor` tree -- `msgpack==1.1.2` and `setuptools==70.3.0` in
 `pip/_vendor/vendor.txt`, confirmed by reading the file in the built image.
 They are not importable by the application and are reachable only while pip
 itself runs, which the service never does. This is also why
@@ -856,7 +856,7 @@ rather than left standing:
 - the event blackout was documented as binding manual orders; it binds
   automated ones only, and the terminal said the wrong thing too
 - the calendar and news provider interfaces were documented but did not exist
-  — they were built
+  -- they were built
 - "there is deliberately no default" for the encryption keys was wrong: the
   template ships recognisable development keys and the loader refuses them in
   staging and production, which is the better design and is now what the docs
@@ -897,7 +897,7 @@ conflict.
 ### 1. A deadlock on concurrent order placement, which silently created phantom fills
 
 Six of eight simultaneous orders on one account died with `deadlock detected
-(SQLSTATE 40P01)` and returned HTTP 500 — the least useful answer an
+(SQLSTATE 40P01)` and returned HTTP 500 -- the least useful answer an
 order-placement API can give, because the caller cannot tell whether the order
 exists.
 
@@ -917,7 +917,7 @@ T1  SELECT account   -> FOR UPDATE, conflicts with T2's KEY SHARE -> cycle
 
 The 500 was not the worst of it. The mock venue had already committed and
 **filled** those orders; Phase D rolled back. Reconciliation later reported
-exactly that — `Vantage 0, venue 0.01` — so six real executions existed that
+exactly that -- `Vantage 0, venue 0.01` -- so six real executions existed that
 the ledger knew nothing about. The orders themselves sat in `ACCEPTED`
 permanently: uncancellable (`order_not_at_venue`, because Phase D never wrote
 the venue id) while still consuming the pending-order budget, until the account
@@ -927,7 +927,7 @@ Fixed by declaring a lock order and taking it first. `store.LockAccountTx` is
 now the outermost lock for every transaction that writes anything belonging to
 an account, and the comment there records the cycle so the rule is not
 mistaken for style. `40P01` is classified (`store.ErrDeadlock`), Phase D
-retries once, and — the part that matters most — a Phase D failure after venue
+retries once, and -- the part that matters most -- a Phase D failure after venue
 acceptance now routes to `failOrder`, marking the outcome UNKNOWN for
 reconciliation instead of returning a bare error that left the order stranded.
 A Prometheus counter that must stay at zero guards the regression.
@@ -940,12 +940,12 @@ orders could grow past the per-order cap and then become **impossible to
 close**. The control that exists to contain risk prevented shedding it, and the
 larger the position the harder the exit.
 
-The engine already had a `reducing` concept — and applied it to exactly one of
+The engine already had a `reducing` concept -- and applied it to exactly one of
 the checks. It now applies to the notional and net-exposure checks too.
 
 Its definition was also too permissive, which was the more dangerous half:
 "opposite side" alone let an account long 0.08 lots SELL 5.00 and skip the
-gross-exposure, per-instrument and concentration checks entirely — 0.08 of that
+gross-exposure, per-instrument and concentration checks entirely -- 0.08 of that
 is a close and 4.92 is a large new short taken with the limits switched off.
 Reducing now means opposite side **and** no larger than the position held. Four
 tests pin both halves.
@@ -963,7 +963,7 @@ It answers 409 now.
 
 Reconciliation flagged it critical and stopped there. There is no endpoint to
 resolve a discrepancy by hand, and cancellation refuses an order with no venue
-id — so it was permanently wedged. Reconciliation now closes out an open order
+id -- so it was permanently wedged. Reconciliation now closes out an open order
 that holds no venue identifier **and** that the venue does not recognise by
 client id, on the same evidence the FAILED branch already used: a direct lookup,
 not a gap in a paginated list. An order holding a venue id the venue denies
@@ -974,7 +974,7 @@ thing.
 
 `POST /strategies/{id}/run` passed `instrument_id` straight through. A missing
 or unknown value came back as `strategy_runs_instrument_id_fkey rejected the
-write` and was reported as HTTP 500 "The strategy could not be evaluated" — an
+write` and was reported as HTTP 500 "The strategy could not be evaluated" -- an
 internal error for a plainly bad request. Validated up front, answered 422.
 
 ### 6. A data-leakage hole in the research plane
@@ -987,7 +987,7 @@ validation number measures nothing.
 
 The defaults (horizon 1, embargo 2) were always safe. The combination was one
 HTTP request away. An embargo narrower than the horizon is now refused rather
-than silently widened — a caller who asked for a 2-bar embargo on a 10-bar
+than silently widened -- a caller who asked for a 2-bar embargo on a 10-bar
 label has a mistaken mental model, and quietly giving them a different split
 than the one recorded in the model's provenance hides that instead of
 correcting it. The "zero embargo" warning that could no longer fire was
@@ -996,7 +996,7 @@ replaced rather than left as decoration.
 ### And the documented setup path, which did not work on a fresh clone
 
 `.env.example` never defined `VANTAGE_MIGRATION_DATABASE_URL`, and
-`dev-up.ps1` never loaded `.env` for its own `go run` calls — so
+`dev-up.ps1` never loaded `.env` for its own `go run` calls -- so
 `./scripts/dev-up.ps1 -Reset -Seed` failed with `permission denied for schema
 public` on any machine where the operator had not exported the variables by
 hand. `DEVELOPMENT.md` had documented the variable for a year without anything
@@ -1004,7 +1004,7 @@ supplying it.
 
 The same script also aborted mid-teardown, because PowerShell 5.1 wraps a
 native command's stderr in an ErrorRecord and `docker compose` reports progress
-there — so `$ErrorActionPreference = 'Stop'` turned normal output into a fatal
+there -- so `$ErrorActionPreference = 'Stop'` turned normal output into a fatal
 error. `2>&1` does not fix that in 5.1; the preference has to be relaxed around
 the call and restored after.
 
@@ -1525,7 +1525,7 @@ unavailable", the circuit breaker opened, the replay stepped happily to the end
 of the dataset, and the account finished exactly as it started. The digests
 matched perfectly and the suite reported speed invariance. Two things were
 wrong: there was no precondition on the research plane, and the vacuity guard
-read the account's TOTAL decision count rather than what the run added — so the
+read the account's TOTAL decision count rather than what the run added -- so the
 restored snapshot's own rows satisfied it. Both fixed: `/health/ready` must
 report `quant: ok` before any scenario runs, and every vacuity guard now
 measures against a baseline taken from the restored snapshot.
@@ -1533,7 +1533,7 @@ measures against a baseline taken from the restored snapshot.
 **2. The determinism suite skipped the preflight the scenario matrix makes.**
 It started runs through `control` directly rather than through the harness's
 `start`, so it never saw the warning that says a run cannot trade. On a freshly
-seeded database — where Autopilot is correctly OFF by default — this reproduced
+seeded database -- where Autopilot is correctly OFF by default -- this reproduced
 defect 1 exactly, with the research service perfectly healthy. The check is now
 extracted and every path that starts a run calls it.
 
@@ -1556,8 +1556,8 @@ correlation matrix it belongs with.
 **5. A partial fill was not representable at all.** Every order the R500
 account produces is 0.01 lots, which on XAUUSD.m is simultaneously the minimum
 quantity AND the quantity step, so 40% of one order is 0.004 lots and the venue
-correctly declined to split it. The path that books a split execution — order
-state machine, position, weighted average price, fee accrual, ledger — was
+correctly declined to split it. The path that books a split execution -- order
+state machine, position, weighted average price, fee accrual, ledger -- was
 therefore untested. Fixed with a development-only synthetic instrument whose
 finer step makes 0.10 split into 0.04 and 0.06, inside the authority's existing
 0.10-lot ceiling. Nothing under test was relaxed.
@@ -1573,7 +1573,7 @@ instrument) and each call routed its own signal into the OMS independently.
 This was not only structural. **Measured on one run of the condition matrix:**
 the strategy set produced opposing actions on the same bar at 38 instants per
 dataset, and on two of those datasets the platform FILLED both a buy and a sell
-on XAUUSD.m at the same bar — 19 instants on one, 31 on the other. Sample:
+on XAUUSD.m at the same bar -- 19 instants on one, 31 on the other. Sample:
 `2027-07-27 08:00`, `buy:FILLED, sell:FILLED`. On the fixture built to provoke
 disagreement it was 38 of 38.
 
@@ -1581,7 +1581,7 @@ In that fixture it happened to net +7.34 ZAR across 32 ledger entries, because
 commission on the seeded instrument is zero and the trend was rising. That is
 luck, not design: on any venue charging commission, opening and closing the
 same instrument at one instant is a guaranteed cost, and it is precisely what
-`consensus.go`'s own comment says must not happen — "netting opposing signals
+`consensus.go`'s own comment says must not happen -- "netting opposing signals
 into whichever side has more weight is how a system ends up trading its own
 indecision". It did not even net; it took both sides.
 
@@ -1598,7 +1598,7 @@ Four properties were designed in rather than discovered afterwards:
 - Aggregation never traps a position. A no-trade verdict still lets through a
   COUNTED opinion that opposes an open position, capped at that position's size
   so it is strictly reducing. Without this, the change meant to stop the
-  account hedging itself would have stopped it UNWINDING — the same inversion
+  account hedging itself would have stopped it UNWINDING -- the same inversion
   rule 8 has already had to be applied to three separate checks. A veto is no
   exception: a release inside the blackout window is an argument for being able
   to close.
@@ -1608,8 +1608,8 @@ Four properties were designed in rather than discovered afterwards:
 - It down-weights a crowded family. Two trend strategies are one read of the
   market counted twice.
 
-The verdict is recorded on the decision snapshot — a new `consensus` column,
-migration 0018 — with the action, confidence, policy version, vetoes, rationale
+The verdict is recorded on the decision snapshot -- a new `consensus` column,
+migration 0018 -- with the action, confidence, policy version, vetoes, rationale
 and every contribution INCLUDING the discarded ones. A no-trade verdict now
 writes its own snapshot; the table has always permitted `outcome='no_trade'`
 with null strategy columns, because a verdict is not attributable to one
@@ -1624,7 +1624,7 @@ FIXED.
 A trading authority is described throughout this repository as a technical
 control, and it carries `MaxOrderQuantity`, `MaxOrderNotional`,
 `MaxPositionExposure`, `MaxLeverage` and `MaxDailyLoss`. Only `MaxLeverage` was
-compared against anything — `risk.Evaluate` takes `decimal.Min` of it and the
+compared against anything -- `risk.Evaluate` takes `decimal.Min` of it and the
 account's limit. The other four were stored, returned by the API, and written
 into every decision snapshot's `authority_state`, and were never read by the
 risk engine, the OMS or the orchestrator. An operator who narrowed
@@ -1632,9 +1632,9 @@ risk engine, the OMS or the orchestrator. An operator who narrowed
 on every decision, and was not protected by it. That is worse than not having
 the field, because it creates confidence that nothing supports.
 
-**The fix.** Each now reports its OWN named risk check —
+**The fix.** Each now reports its OWN named risk check --
 `authority_max_order_quantity`, `authority_max_order_notional`,
-`authority_max_position_exposure`, `authority_max_daily_loss` — rather than
+`authority_max_position_exposure`, `authority_max_daily_loss` -- rather than
 being folded into the account's with a `min()`. Two checks that must both pass
 are arithmetically the same bound and they say which one was hit, which a fold
 cannot: "Order quantity 0.50 against a limit of 0.10" does not tell an operator
@@ -1643,17 +1643,17 @@ fixes and different audit trails.
 
 All four carry the reducing exemption. For notional, position exposure and
 daily loss that mirrors the account-level check beside them. For order quantity
-it does NOT — **the account's own `max_order_quantity` check has no reducing
-exemption** — and the difference is deliberate: a per-order size cap limits
+it does NOT -- **the account's own `max_order_quantity` check has no reducing
+exemption** -- and the difference is deliberate: a per-order size cap limits
 exposure, so rule 8 applies, and without it narrowing the authority would make
 a position opened while it was wider impossible to close in one order. That is
 the flatten trap the notional cap, the event blackout and the daily-loss limit
 each had to be rescued from, and adding a fifth place for it to appear is not
 an acceptable price for enforcement.
 
-An unset ceiling REFUSES. It cannot reach the engine from the database — every
+An unset ceiling REFUSES. It cannot reach the engine from the database -- every
 column is `NOT NULL` with a `> 0` CHECK and the create handler rejects a
-non-positive value — so a zero means the authority was not loaded, and "no
+non-positive value -- so a zero means the authority was not loaded, and "no
 bound" is the most permissive reading available.
 
 The decision snapshot now records all five rather than one, because a refusal
@@ -1661,7 +1661,7 @@ has to be reconstructible from the snapshot alone: the authority is versioned
 and may have been narrowed since the decision was taken.
 
 `TestTheAuthoritysNumericCeilingsAreDocumentedAsEnforcedOrNot` was UPDATED, not
-deleted. Its purpose was never to describe the gap — it is there so that adding
+deleted. Its purpose was never to describe the gap -- it is there so that adding
 a sixth ceiling without enforcing it is a deliberate act with a failing test in
 front of it, and a record thrown away once it reads "all enforced" protects
 nothing.
@@ -1680,15 +1680,15 @@ and closing it changes a bound that was not in scope.
 **8. The seed refused to complete, correctly.** Adding the synthetic instrument
 broke `control-api seed`: it generates historical bars for every enabled
 instrument and had no starting price for the new one. It refused rather than
-skipping, which is right — an instrument in the tradable universe with no
-history is a trap — and it caught the omission on the first run.
+skipping, which is right -- an instrument in the tradable universe with no
+history is a trap -- and it caught the omission on the first run.
 
 **9. A decision never recorded which bar it was taken on.**
 `decision_snapshots.bar_time` has existed since the schema was written and
 nothing ever set it: 168 snapshots, none with a value, while all 1488 strategy
 signals carried one. So a decision could not be joined to the signal that
 produced it, "which bar did this trade come from" was unanswerable, and the
-result digest coalesced every decision's bar to `'none'` — two decisions
+result digest coalesced every decision's bar to `'none'` -- two decisions
 differing only in their bar were indistinguishable in it. Found by scenario G,
 which returned nothing because grouping by `bar_time` put every row in one NULL
 bucket. Fixed: the OMS request carries the bar, nil for a manual order.
@@ -1699,7 +1699,7 @@ were plain bools and ints assigned unconditionally from the decoded request,
 while every other field falls back to the stored value. A PUT that meant to
 tighten one exposure ceiling and said nothing else therefore set
 `require_stop_loss` to false, `block_on_high_impact_events` to false and both
-blackout minutes to zero — which is what a zero-valued bool and a zero int
+blackout minutes to zero -- which is what a zero-valued bool and a zero int
 decode to. That is the opposite of what a risk endpoint should do with silence.
 Fixed: they are pointers, so omitting one leaves it alone and turning a
 protection off has to be said out loud. Nothing in the terminal sends this
@@ -1715,7 +1715,7 @@ defect this whole exercise is built to catch:
   exposure ceilings by design, and must be: refusing a flatten during a
   high-impact release, or because the ceiling is tight, traps the position in
   exactly the conditions the control exists to avoid. Both now assert what the
-  controls actually guarantee — for D, that no decision whose `event_risk`
+  controls actually guarantee -- for D, that no decision whose `event_risk`
   check FAILED was accepted and that nothing accepted had zero open positions
   to reduce; for I, that every accepted order opposed the net exposure it saw,
   so exposure never grew.
@@ -1734,7 +1734,7 @@ cost time to diagnose:
   the recovery scenarios and then the market matrix in a single `go test` left
   the matrix measuring an exhausted account: 285 strategy runs, all skipped, no
   decision, and scenario B reporting "every decision recorded the same regime
-  (map[])" — which is what an empty set looks like rather than a broken
+  (map[])" -- which is what an empty set looks like rather than a broken
   classifier. The obvious suspect is wrong: the per-bar watermark is not the
   cause, because a replay's `start` already purges `strategy_runs` for the
   window it is about to play. The shared account's 15 ZAR daily-loss limit and
@@ -1743,12 +1743,12 @@ cost time to diagnose:
 - **The pacing cap makes every finite speed identical on long timeframes.** The
   engine caps the per-instant sleep at two seconds, so on 1h bars 1x, 10x and
   100x all pace identically; only `max` differs. An uncapped 1x on this dataset
-  would take 140 hours, so the cap is right — but the speed NAMES overstate
+  would take 140 hours, so the cap is right -- but the speed NAMES overstate
   what they control.
 - **A paced replay cannot be hand-stepped through the API.** The pacing sleep
   happens inside the step request and the router gives every handler 30
   seconds, so any batch large enough to be useful blows the deadline and
-  surfaces as `context deadline exceeded` from whichever query was in flight —
+  surfaces as `context deadline exceeded` from whichever query was in flight --
   a database error for what is arithmetic. Paced runs use the background
   `advance` control, which is what an operator would use anyway.
 
@@ -1758,7 +1758,7 @@ fixed, deliberately, and it is the most important thing this milestone found.
 Wiring `Decide` in (finding 6) applied two gates for the first time: a 0.55
 confidence floor, and the strategy's own declared regime validity.
 `StrategyVersion.ValidRegimes` had exactly the same shape as the authority
-ceilings — stored, served, and read by nothing. Verified by grep: before this
+ceilings -- stored, served, and read by nothing. Verified by grep: before this
 change the only non-plumbing reader of `ValidRegimes` did not exist.
 
 **Measured on a freshly seeded stack, across every fixture played:**
@@ -1768,8 +1768,8 @@ change the only non-plumbing reader of `ValidRegimes` did not exist.
 | `rsi_mean_reversion` | sells | 0.66-0.73 | discarded: declares RANGING/LOW_VOLATILITY, regime is TRENDING |
 | `macd_momentum` | buys | 0.51-0.54 | discarded: below the 0.55 floor |
 | `donchian_breakout` | buys | 0.31-0.44 | discarded: below the 0.55 floor |
-| `ma_trend_crossover` | none | — | produced no actionable signal |
-| `bollinger_zscore_reversion` | none | — | produced no actionable signal |
+| `ma_trend_crossover` | none | -- | produced no actionable signal |
+| `bollinger_zscore_reversion` | none | -- | produced no actionable signal |
 
 Every verdict is therefore "no strategy offered an actionable opinion that
 survived the policy". On `trend-clean`, which placed 33 orders before the
@@ -1787,8 +1787,8 @@ the scale the policy was written against, or whether the seeded strategies are
 genuinely this unconvinced. That is a research question and needs evidence, not
 a constant.
 
-**Consequence for the scenarios, stated plainly:** scenario G PASSES — 38
-instants split the strategy set, 0 produced orders on both sides — but it
+**Consequence for the scenarios, stated plainly:** scenario G PASSES -- 38
+instants split the strategy set, 0 produced orders on both sides -- but it
 passes with ZERO orders, which is weaker evidence than passing with orders, and
 the test logs that in those words. D and I now SKIP: each measures how an order
 was refused, and no order is placed. Three scenario guards had to be updated
@@ -1833,14 +1833,14 @@ Nine scenarios, each stepping its dataset to the end:
 each one was before, because the corrections are the finding.
 
 | A clean trend | PASS |
-| B range | was FAIL — corrected. It asserted "decisions > 0", which on a range asserts the opposite of the point: the registry describes this dataset as the market "on which a trend strategy should not churn". It now asserts the strategies were REACHED |
-| C volatility shock | was FAIL — corrected, same reason. A shock suppressing every actionable signal is a defensible response, not a defect |
+| B range | was FAIL -- corrected. It asserted "decisions > 0", which on a range asserts the opposite of the point: the registry describes this dataset as the market "on which a trend strategy should not churn". It now asserts the strategies were REACHED |
+| C volatility shock | was FAIL -- corrected, same reason. A shock suppressing every actionable signal is a defensible response, not a defect |
 | E spread spike | PASS |
 | H drawdown | PASS |
 | K trend reversal | PASS |
 | L false breakout | PASS |
-| M correlated opportunities | was FAIL — no decision recorded the `portfolio_correlation` check. Fixture lengthened to 180 instants: the correlation matrix needs paired history of its own |
-| T day and session boundary | was FAIL — no decision at all. At 90 instants, 30 remain past the warm-up, which is not enough for a strategy to act under the data floor. Fixture lengthened to 180 |
+| M correlated opportunities | was FAIL -- no decision recorded the `portfolio_correlation` check. Fixture lengthened to 180 instants: the correlation matrix needs paired history of its own |
+| T day and session boundary | was FAIL -- no decision at all. At 90 instants, 30 remain past the warm-up, which is not enough for a strategy to act under the data floor. Fixture lengthened to 180 |
 
 **All four failures trace to one cause, and it is the price of the isolation
 milestone's data floor.** A strategy now sees only the replay's own bars; before
@@ -1857,7 +1857,7 @@ A real `Stop-Process` and a real restart, not an in-process reset. Four cases:
 | Case | Result |
 | --- | --- |
 | Restart mid-run (scenario S) | PASS. 33 decisions, 33 orders, 28 fills, 15 ledger entries and the balance all unchanged. The run is `interrupted`, the clock is disengaged, `active` and `engaged` are both false, and no (strategy, bar) pair was evaluated twice. A run started afterwards reports `phase=warmup` with 3 of 3 instants in warm-up and 0 in evaluation, so the engine inherited no window or cursor from the process that died |
-| Unknown outcome (`timeout`) | PASS. The order was FAILED with 0 fills before and REJECTED with 0 fills after. No fill was invented and it did not become FILLED — the platform did not resolve an uncertainty it had no evidence for, in either direction |
+| Unknown outcome (`timeout`) | PASS. The order was FAILED with 0 fills before and REJECTED with 0 fills after. No fill was invented and it did not become FILLED -- the platform did not resolve an uncertainty it had no evidence for, in either direction |
 | Lost execution (`lost_response`) | PASS. The venue held 13 executions against 12 local fills; after the restart exactly **1** was imported, none twice, no reconciliation issue left open, and the balance reconciled at 497.95 against the ledger-derived total |
 | Interrupted runs are discoverable | PASS. Three abandoned runs listed with a resume verdict each, naming the cursor, the total, and the fact that the cursor is persisted at most every two seconds so a resume may re-play a few instants the per-bar guard will produce nothing for |
 
@@ -1867,18 +1867,18 @@ A real `Stop-Process` and a real restart, not an in-process reset. Four cases:
 was left red for a whole milestone, and the failure was the finding: the
 platform ended single instants holding non-rejected orders on both sides of one
 instrument, because `orchestrator.Decide` had no production caller. It was kept
-red rather than skipped, softened or deleted — a skip would have reported "not
+red rather than skipped, softened or deleted -- a skip would have reported "not
 exercised" for something that was exercised and failed, and a softer assertion
 would have reported a pass for a platform trading its own indecision.
 
 It PASSES now: 38 instants split the strategy set and 0 produced orders on both
 sides. Read the qualification in finding 12 before treating that as strong
-evidence — it passes with zero orders placed, and the test says so in its own
+evidence -- it passes with zero orders placed, and the test says so in its own
 log rather than leaving a reader to assume otherwise.
 
 Anyone running the replay suite should now expect no failures. Several subtests
-SKIP — D and I in the condition matrix, and all three classes in the
-determinism suite — and every one of them says in its own message what was
+SKIP -- D and I in the condition matrix, and all three classes in the
+determinism suite -- and every one of them says in its own message what was
 shown and what was not.
 
 ## 30h. Defects the authorisation milestone found
@@ -2096,7 +2096,7 @@ data, not looser rules.
 
 `research/datasets.py` generates sixteen market conditions from a seed, laid end
 to end and non-overlapping, at a declared `GENERATOR_VERSION`. The bars are NOT
-committed — rule 15 — so determinism is what makes that safe, and the dataset
+committed -- rule 15 -- so determinism is what makes that safe, and the dataset
 hash covers the generator identity as well as the bars. `research/expansion.py`
 holds the statistics; `research/historical.py` is the allowlisted seam for real
 bars, which reports `REAL_MARKET_VALIDATION_PENDING` because there are none and
@@ -2111,7 +2111,7 @@ Full results in `docs/SIGNAL_RESEARCH.md`.
 **The working hypothesis was wrong in a useful direction.** Signal rates were
 expected near 2%; measured they span 1.22% to 71.76%. Five strategies produce
 over a thousand observations each. `macd_momentum` reaches 750 *effective*
-observations — comfortably a calibration candidate on count alone — and still
+observations -- comfortably a calibration candidate on count alone -- and still
 fails, which is a more useful answer than "collect more".
 
 **Nothing is `READY_FOR_CALIBRATION`.** No calibration was fitted.
@@ -2124,7 +2124,7 @@ rather than by a test failing.
 
 1. **`readiness` blocked only on the literal `NON_MONOTONIC`.** The session
    strategy's score concentrates into two usable quantile bins out of five, so
-   `classify_monotonicity` returned `INSUFFICIENT_EVIDENCE` — and that sailed
+   `classify_monotonicity` returned `INSUFFICIENT_EVIDENCE` -- and that sailed
    through the gate as though monotonicity had been demonstrated. A monotone
    calibration map requires a monotone ordering to exist; "could not establish
    one" is not that. The gate now requires an affirmative verdict.
@@ -2461,8 +2461,8 @@ start writing real bars into `market_bars` through a code path **that had never
 been executed**. Grepping the tree for callers of `Backfill`, `Sync`, `Repair`
 and `Snapshot` inside `internal/marketdata/*_test.go` returned nothing at all.
 Every `Syncer` test exercised a pure helper: chunk arithmetic, symbol mapping,
-gap detection on a slice. The acquisition path itself — provider to store to
-provenance record — had no test.
+gap detection on a slice. The acquisition path itself -- provider to store to
+provenance record -- had no test.
 
 That is the blocker, because of what the data is for. Bars acquired here become
 the evidence a strategy is judged on. A chunking bug that drops the bar at each
@@ -2480,7 +2480,7 @@ contract, and drive the real `Syncer` and the real store against it.
 
 The alternatives were worse. Mocking the `Provider` interface tests the
 `Syncer`'s view of a provider rather than the provider, and the provider is
-half the risk. Calling Twelve Data from a test is not available — no key — and
+half the risk. Calling Twelve Data from a test is not available -- no key -- and
 would be the wrong shape anyway, since a test that needs the internet is a test
 that is sometimes skipped. So: a real HTTP server, in the test, answering the
 way the documentation says Twelve Data answers.
@@ -2518,7 +2518,7 @@ provider; they collide on `(instrument_id, timeframe, open_time)`; and the
 unconditional `ON CONFLICT DO UPDATE` let whichever arrived last win. In a
 development database the aggregator always arrives last, so a real backfill
 would have left one truncated bar per instrument per timeframe at the boundary
-between history and live data — exactly where a strategy's newest bar is.
+between history and live data -- exactly where a strategy's newest bar is.
 
 The fix is one clause in `internal/store/market.go`:
 
@@ -2540,7 +2540,7 @@ platform "bug report" if nobody checks the calendar.
 Nothing here has spoken to Twelve Data. The request shape is verified against
 the published documentation and pinned by a test; the response handling is
 verified against a fake that follows it. The first real response may differ,
-and if it does the failure will be in the parsing, not in the pipeline —
+and if it does the failure will be in the parsing, not in the pipeline --
 which is the point of doing it in this order.
 
 Two things to carry forward when a key is configured: the provider's Individual
@@ -2557,7 +2557,7 @@ the same one as everything else in this section: a check that exists, passes,
 and is looking at the wrong thing.
 
 `playwright.config.ts` defaults `baseURL` to `http://localhost:3000`. On this
-machine another project — FORGE, a workflow orchestrator — now holds that
+machine another project -- FORGE, a workflow orchestrator -- now holds that
 port. The suite loaded FORGE's landing page and then failed every test at
 sign-in, waiting for a `.topbar` that page has never had:
 
@@ -2577,8 +2577,8 @@ refuse to run if the server-rendered HTML is not this terminal's. It costs one
 request and turns the whole failure into its first line of output:
 
     Error: http://localhost:3000 is not the Vantage terminal. It answered 200
-    with a page titled "FORGE — distributed workflow orchestration". Another
-    application is almost certainly holding that port — set
+    with a page titled "FORGE -- distributed workflow orchestration". Another
+    application is almost certainly holding that port -- set
     VANTAGE_E2E_BASE_URL to the port the terminal actually got, and set
     VANTAGE_PUBLIC_WEB_ORIGIN to match before restarting the API.
 
@@ -2597,7 +2597,7 @@ minutes**. The same suite, the same code, against the right application.
 
 One consequence worth stating plainly: the smoke suite sends an `Origin` header
 that must equal `VANTAGE_PUBLIC_WEB_ORIGIN`, so moving the terminal off :3000
-made `smoke.py` fail its first order with `csrf_origin_mismatch` — the CSRF
+made `smoke.py` fail its first order with `csrf_origin_mismatch` -- the CSRF
 control working exactly as designed. `VANTAGE_SMOKE_WEB_ORIGIN` is how that is
 told where the terminal went, and with it the suite reports 66 passed, 0 failed.
 
@@ -2611,9 +2611,9 @@ wrong is the same shape as every other finding in this report.
 
 ### The one number that should have been suspicious
 
-Five strategies, five different families, five unrelated formulas — a moving
+Five strategies, five different families, five unrelated formulas -- a moving
 average crossover, a channel breakout, an RSI fade, a MACD histogram and a
-z-score — and every one of them returned exactly 0.000. Independent methods do
+z-score -- and every one of them returned exactly 0.000. Independent methods do
 not agree to three decimal places. A uniform answer across unrelated code is
 the signature of a shared precondition failing, not of five judgements.
 
@@ -2626,13 +2626,13 @@ The orchestrator loads up to 300 bars and refuses below **50** of its own.
 Between 50 and 120 it did everything: loaded the bars, resolved the session and
 event risk, called the research service, received an answer, recorded it, and
 handed it to the consensus policy. The answer was
-`no_trade("... requires 120 bars and received 63")` at confidence 0 — a refusal
+`no_trade("... requires 120 bars and received 63")` at confidence 0 -- a refusal
 to answer, arriving on the wire in exactly the shape of an abstention.
 
 So the control plane wrote it into `strategy_runs` as `no_signal`, which is
 what it writes when a strategy has looked at the market and declined. And
 `opinionsFrom` passed it to `Decide` as a **fresh opinion**, where the policy
-weights each opinion by one over the number of strategies in its family — so a
+weights each opinion by one over the number of strategies in its family -- so a
 strategy that never formed a view halved the weight of the one that did, and
 the decision snapshot recorded five contributors when one had contributed.
 
@@ -2652,8 +2652,8 @@ Measured over every replay fixture, at the standard 60-instant warm-up:
 | `drawdown` | 120 | 305 | **280 (92%)** |
 | `false_breakout` | 120 | 305 | 280 (92%) |
 
-Four fixtures — `drawdown`, `false_breakout`, `spread_spike`,
-`test_partial_fill` — are shorter than 120 bars plus their warm-up, so no PAPER
+Four fixtures -- `drawdown`, `false_breakout`, `spread_spike`,
+`test_partial_fill` -- are shorter than 120 bars plus their warm-up, so no PAPER
 strategy could produce a signal on them **at any point in the dataset**. Not a
 weak signal: a structurally impossible one.
 
@@ -2666,7 +2666,7 @@ records such an answer as a **SKIP with its numbers** rather than as an
 opinion, before `valid` is set and therefore before it can reach the policy.
 
 No threshold was moved, no formula changed, no fixture lengthened and no
-requirement lowered. The number is not duplicated on the Go side either — a
+requirement lowered. The number is not duplicated on the Go side either -- a
 second copy of "120" in the control plane would be a constant that could drift
 from the code it describes.
 
@@ -2678,7 +2678,7 @@ Same dataset, same strategies, same parameters, through the real pipeline:
     of the skips    266 are "insufficient history", naming both numbers
     signals         buy  26  mean 0.453  max 0.538
                     sell 20  mean 0.700  max 0.725
-                    no_trade 73 — genuine abstentions
+                    no_trade 73 -- genuine abstentions
     decisions       39, every regime TRENDING
     orders          none
 
@@ -2687,7 +2687,7 @@ reported as producing none.
 
 ### And the real reason nothing trades, which is now visible
 
-No order was placed, and the numbers above say exactly why — two causes, and
+No order was placed, and the numbers above say exactly why -- two causes, and
 neither is "the strategies do not work":
 
 - **The only strategy clearing the confidence floor is not allowed to trade a
@@ -2699,7 +2699,7 @@ neither is "the strategies do not work":
   policy that discards below 0.55 and requires 0.60 net. This report already
   recorded why: the score is a raw average of hand-chosen components, three
   strategies average a real component with a hard-coded constant, and
-  `donchian_breakout` averages its penetration with a constant 0.5 — so its
+  `donchian_breakout` averages its penetration with a constant 0.5 -- so its
   ceiling is arithmetic, not market. It could not clear 0.55 however clean the
   trend.
 
@@ -2798,7 +2798,7 @@ that is not the same thing as CI passing. The repository was published on
 2026-09-30. The first run failed **both** workflows.
 
 `actionlint` had reported 0 findings before, during and after. It still does.
-It validates workflow syntax, expressions and shell — it cannot know that an
+It validates workflow syntax, expressions and shell -- it cannot know that an
 environment value will be rejected at run time, that a pinned action's own
 dependency has been deleted upstream, or that a CLI has dropped a flag.
 
@@ -2813,18 +2813,18 @@ uses those env vars.
 
 **mypy found four errors that pass locally.** `np.nanmean` returns
 `np.floating`, not `float`, and `indicators.py` passed the result straight into
-a function annotated `float`. Not the Python version — `[tool.mypy]` pins 3.12
-— and not numpy, which is 2.5.3 on both sides. **The venv on the development
+a function annotated `float`. Not the Python version -- `[tool.mypy]` pins 3.12
+-- and not numpy, which is 2.5.3 on both sides. **The venv on the development
 machine holds mypy 2.3.1, outside the declared `>=1.13,<2.0`.** CI honours the
 constraint and installs 1.x, which is stricter here. So every "mypy clean" in
 this report's history was produced by a tool the project does not declare.
 
-The fix is `float(...)` at the boundary. It is exact — `np.float64` *is* an
-IEEE-754 double — so no indicator value moves, which matters because altering
+The fix is `float(...)` at the boundary. It is exact -- `np.float64` *is* an
+IEEE-754 double -- so no indicator value moves, which matters because altering
 an indicator alters every strategy that reads it.
 
 **Every Trivy job died in "Set up job".** `trivy-action@v0.28.0`, correctly
-pinned by SHA, internally resolves `setup-trivy@v0.2.1` — and that tag no
+pinned by SHA, internally resolves `setup-trivy@v0.2.1` -- and that tag no
 longer exists upstream; its tags now start at v0.2.6. Pinning your own
 dependency does not pin its dependencies. The error names neither the nested
 action nor the deleted tag. Moved to v0.36.0.
@@ -2836,18 +2836,18 @@ rest of that bill. Repository scanning is the default now, so the flag is gone.
 
 **pip-audit failed on the repository itself, twice.** `vantage-quant` is
 installed editable so its dependency tree resolves, and it is not on PyPI, so
-it cannot be audited — correctly, and not a vulnerability. `--skip-editable`
+it cannot be audited -- correctly, and not a vulnerability. `--skip-editable`
 failed differently: under `--strict`, pip-audit turns a skip into an error.
 Dropping `--strict` would have gone green and would have been the wrong fix,
-because it silences an unauditable *third-party* package too — the one thing
+because it silences an unauditable *third-party* package too -- the one thing
 the job exists to catch. The job now freezes the resolved dependency set
 without editable installs and audits that.
 
 ### Where it stands
 
-Both workflows are green: CI run `36718123184`, five jobs — control plane,
+Both workflows are green: CI run `36718123184`, five jobs -- control plane,
 research plane, terminal, migrations applied twice, images built. Security run
-`36718123066`, eleven jobs — govulncheck, npm audit, OSV-Scanner, Gitleaks,
+`36718123066`, eleven jobs -- govulncheck, npm audit, OSV-Scanner, Gitleaks,
 Semgrep, pip-audit, Trivy filesystem and three Trivy images, repository policy.
 OSV-Scanner and pip-audit have produced a result for the first time; both are 0
 findings, and neither has ever been run locally, so the CI job is the only
@@ -2859,7 +2859,7 @@ Six defects, in workflows that had been reviewed, pinned by SHA, linted clean
 and described in this report as ready. Four of them are in the same category as
 everything else this milestone found: a check that existed, passed, and was
 looking at the wrong thing. Two are the specific failure mode of a config file
-nothing executes — it cannot be wrong until something runs it, and then it is
+nothing executes -- it cannot be wrong until something runs it, and then it is
 wrong all at once.
 
 There is a temptation to record this as "CI configuration issues, now fixed".
@@ -2867,7 +2867,7 @@ It is more useful recorded as what it is: **the gap between a green local
 checklist and a green pipeline was six defects wide, and nothing available
 before publication could measure it.**
 
-## 30r. Does it survive a week? No — and the reason was not what anyone was looking for
+## 30r. Does it survive a week? No -- and the reason was not what anyone was looking for
 
 The question asked was whether this platform runs unattended for a week or
 quietly stops. Two audits were run against it: one for resource exhaustion and
@@ -2887,13 +2887,13 @@ The account is ZAR and every instrument is USD-quoted, so every valuation
 needs a conversion. Twenty-four hours after a seed, they all fail.
 
 Half of what follows is correct. `risk.Size` returns `ErrSizingUnavailable`,
-so no autonomous order can be placed — that is failing closed, and it is the
+so no autonomous order can be placed -- that is failing closed, and it is the
 behaviour the rules ask for.
 
 The other half is not. `portfolio.valuePosition` does **not** fail closed: it
 sets a `ValuationNote` and returns the view with `Valued = false` and no
 error. `portfolio.aggregate` then counts that position in `Unvalued` and
-`continue`s — so it contributes **nothing** to unrealised P&L, nothing to
+`continue`s -- so it contributes **nothing** to unrealised P&L, nothing to
 margin used, nothing to gross or net exposure. Equity becomes balance plus
 zero. Drawdown is measured against it. Free margin looks full.
 
@@ -2921,7 +2921,7 @@ rule applied to the one input every other check depends on.
 It exempts reducing orders, and that exemption is the point rather than a
 softening. Refusing to let an operator **close** a position because the
 platform cannot price it would hold them in the position precisely while the
-system admits it does not know what that position is worth — the trap the
+system admits it does not know what that position is worth -- the trap the
 reducing-order rule exists to prevent, and which three separate checks were
 once found setting.
 
@@ -2934,8 +2934,8 @@ the one thing the market-data rules forbid outright.
 
 ### A halt that releases itself after seven days
 
-Rule 7's corollary — "not re-detected" must mean "fixed", never "no longer
-examined" — is implemented by freezing the execution cursor while any
+Rule 7's corollary -- "not re-detected" must mean "fixed", never "no longer
+examined" -- is implemented by freezing the execution cursor while any
 execution-derived issue is open. The freeze is correct, and the comment above
 it explains at length why freezing beats widening.
 
@@ -2952,7 +2952,7 @@ being argued about, `Classify` cannot produce its fingerprint, and
 run re-examined the same evidence and did not find it."*
 
 It had re-examined nothing. An unbooked venue execution would have closed its
-own issue and the account would have released its own halt — the exact incident
+own issue and the account would have released its own halt -- the exact incident
 the freeze was written for, rebuilt out of a lookback constant, firing seven
 days in.
 
@@ -2972,7 +2972,7 @@ by `GET /kill-switches`, which any authenticated user may call.
 Activation was incomplete in the same way. Its comment claims *"only an admin
 may halt globally or halt someone else"*; the code checked `global` and
 `account` and let `user`, `broker` and `strategy` through unexamined. A trader
-could halt another operator by user id, or halt every account on a broker —
+could halt another operator by user id, or halt every account on a broker --
 which in this build is every account there is, making it a global halt reached
 without the admin check that guards the global scope.
 
@@ -2983,7 +2983,7 @@ predictable result of an authorization rule written as an `if` ladder inside a
 handler, covering the branches someone happened to think of.
 
 Nothing a trader could do to their own account is removed. Account-scope halt
-over an owned account, cancel and flatten are all untouched — an operator
+over an owned account, cancel and flatten are all untouched -- an operator
 stopping their own trading is never impeded.
 
 ### The login rate limit was bypassable with a header
@@ -2997,12 +2997,12 @@ unconditionally, with no trusted-proxy list.
 The defence was downstream in `clientIP`, which honours `X-Forwarded-For` only
 behind a configured trusted proxy. It could not work: `RealIP` had already
 poisoned `RemoteAddr` before `clientIP` read it. The trusted-proxy branch is
-also dead — nothing in production sets the flag.
+also dead -- nothing in production sets the flag.
 
 The login limiter keys on the client address, so a caller presenting a fresh
 `X-Forwarded-For` per request got a fresh full token bucket every time. That
 removed the only cost control on an endpoint that runs Argon2id at **64 MiB**
-per attempt — including on the unknown-user path, which hashes a dummy to
+per attempt -- including on the unknown-user path, which hashes a dummy to
 equalise timing. A hundred concurrent requests is about 6.4 GB. It also let an
 attacker write any address they chose into `audit_events.ip_address` and
 `sessions.ip_address`; the hash chain still verifies, because it signs whatever
@@ -3012,7 +3012,7 @@ it is given.
 
 The guard test is the interesting part. `TestAClientCannotSpoofItsAddressUnlessAProxyIsTrusted`
 passed throughout, because it calls `clientIP` **directly on a bare
-httptest request** — no middleware ever runs. The helper was right; the stack
+httptest request** -- no middleware ever runs. The helper was right; the stack
 above it was not, and a test of the helper could not see that. There are now
 two tests through the router, one behavioural across all three headers and one
 asserting the middleware stays out of `routes()`. Verified by putting it back:
@@ -3030,7 +3030,7 @@ All five services now cap at 50 MB × 5.
 
 The longevity audit found more than was repaired here, and the rest is listed
 in section 31 rather than quietly dropped. The largest is retention:
-`market_quotes` gains roughly 179,000 rows a day — about 27 MB, 10 GB a year —
+`market_quotes` gains roughly 179,000 rows a day -- about 27 MB, 10 GB a year --
 and the only scheduled deletion anywhere in the module is the session sweep.
 Several tables carry append-only triggers and cannot be pruned at all by
 design, which makes an archive strategy a real design question rather than a
@@ -3040,7 +3040,7 @@ Also unrepaired: `strategy_runs` still grows unbounded under any *persistent*
 pre-flight refusal, because only the history-refusal path was given a bar time.
 A halted account writes about 23,900 rows a day through the remaining nil-bar
 skips. And `vantage_marketdata_latest_bar_age_seconds` is defined and never
-set — the one gauge that would catch rule 9's frozen-bar failure recurring is
+set -- the one gauge that would catch rule 9's frozen-bar failure recurring is
 dead.
 
 ### The common shape
@@ -3063,8 +3063,8 @@ closed here; what remains is listed in section 31.
 ### `market_quotes` is write-only, and nothing had ever noticed
 
 The tree contains exactly one `INSERT INTO market_quotes`, one replay-scoped
-`DELETE`, and **no `SELECT` at all**. It gains roughly 179 000 rows a day — six
-instruments at the 2-second ingest interval — about 27 MB a day and 10 GB a
+`DELETE`, and **no `SELECT` at all**. It gains roughly 179 000 rows a day -- six
+instruments at the 2-second ingest interval -- about 27 MB a day and 10 GB a
 year, and no decision has ever read a row of it. The hot path for a price is
 `market_quotes_latest`, which is a different table.
 
@@ -3076,15 +3076,15 @@ refilled 150 rows within the next few minutes, `/health/ready` reported
 (66/0 and 35/0). Deleting the entire quote history had no operational effect,
 which is the strongest available statement of what "write-only" means.
 
-The hourly `cleanup` job — which already held a lease and already pruned
-sessions — now also trims `market_quotes` and `market_data_health` at 30 days,
+The hourly `cleanup` job -- which already held a lease and already pruned
+sessions -- now also trims `market_quotes` and `market_data_health` at 30 days,
 `strategy_runs` at 14, and **published** outbox rows at 7.
 
 Each window is a separate constant with its reason beside it, because the
 consequence of being wrong differs per table. The outbox sweep touches
 `published_at IS NOT NULL` only: an unpublished row is still owed to a
 consumer, and the dispatcher selects exactly those. That guard was proved
-empirically rather than read — two rows inserted, one published thirty days
+empirically rather than read -- two rows inserted, one published thirty days
 ago and one never, the sweep run, the delivered row gone and the undelivered
 one still there.
 
@@ -3095,7 +3095,7 @@ next slice an hour later. A sweep that hits its cap every hour logs its count,
 so a backlog that is not shrinking is visible rather than silent.
 
 **The append-only tables are deliberately absent.** Ten of them carry a trigger
-that raises on DELETE — `transactions`, `fills`, `order_state_transitions`,
+that raises on DELETE -- `transactions`, `fills`, `order_state_transitions`,
 `audit_events`, `decision_snapshots`, `reconciliation_issue_events` and the four
 `*_history` tables. They are the financial and evidentiary record and the
 database itself refuses to let a cleanup job touch them. They need an archive
@@ -3112,8 +3112,8 @@ and no other line.
 Rule 9 exists because the bar series froze at seed time once: every strategy
 re-evaluated a single bar for ever, the per-bar guard jammed shut, the live
 quote drifted 79 dollars away from the newest bar, and nothing reported
-unhealthy. A frozen series is invisible in every other signal — ingestion
-succeeds, the quote is fresh, the feed is `ok` — and shows up in this one
+unhealthy. A frozen series is invisible in every other signal -- ingestion
+succeeds, the quote is fresh, the feed is `ok` -- and shows up in this one
 measurement immediately, as an age that climbs and never resets.
 
 It is now set in `Aggregator.AggregateInto`, from the bar's close against the
@@ -3123,14 +3123,14 @@ time like everything else on that path.
 ### Finishing the bar-keying
 
 Section 30p fixed one refusal path and left the rest. The per-bar unique
-indexes on `strategy_runs` are partial — `WHERE bar_time IS NOT NULL` — so a
+indexes on `strategy_runs` are partial -- `WHERE bar_time IS NOT NULL` -- so a
 refusal recorded without a bar is inserted afresh on every 30-second tick, and
 `PurgeStrategyRunsInRange` cannot delete it either, because that only matches
 rows which have one.
 
 The three refusals that happen *after* the bars are loaded now key on the
 newest bar in hand: too little history, replay warm-up, and a research-service
-failure. The last matters most — the quant circuit breaker opens for 30 seconds
+failure. The last matters most -- the quant circuit breaker opens for 30 seconds
 and the scheduler ticks every 30 seconds, so a research service that is down
 used to record a failure per strategy per instrument indefinitely.
 
@@ -3155,7 +3155,7 @@ Closing the rest of the longevity list from section 30r.
 
 `GET /admin/audit/verify` fetched sequences 1 to 10 000 and reported a verdict
 for the chain. Past that length it verified the OLDEST ten thousand events,
-never examined the recent end — which is where tampering would be — and still
+never examined the recent end -- which is where tampering would be -- and still
 answered `verified: true`. `head_sequence` was in the response beside it, so
 the contradiction was visible to anyone who compared two numbers, and nothing
 said the check had been partial.
@@ -3186,7 +3186,7 @@ completely invisible until the day it arrives. On that day:
 `ActiveAuthorityForAccount` still returns the row, because it does not filter on
 `valid_until`; `Effective` refuses; and the scheduler's strategy loop treats the
 refusal as an ordinary skip and `continue`s **without a log line**. The platform
-stops placing orders, and the symptom — every strategy skipping — is
+stops placing orders, and the symptom -- every strategy skipping -- is
 indistinguishable from a quiet market.
 
 There is now a warning at thirty days, seven days and one day, and a critical
@@ -3210,7 +3210,7 @@ rules that were documented and not enforced.
 ### A dependency with no upgrade path
 
 Trivy failed the quant image on two newly published HIGH findings in urllib3
-2.7.0 — CVE-2026-97687 and CVE-2026-97689, both fixed in 2.8.0.
+2.7.0 -- CVE-2026-97687 and CVE-2026-97689, both fixed in 2.8.0.
 
 urllib3 is not a dependency of this service. It is not in `pyproject.toml`, it
 is not installed as a package, and it exists in the image at exactly two paths,
@@ -3232,7 +3232,7 @@ So it is recorded in `.trivyignore` with that evidence, scoped to those two ids,
 and with what would change it: a pip release vendoring urllib3 >= 2.8.0, at
 which point the existing upgrade line picks it up and the entry should be
 deleted. This is the same shape as the setuptools 70.3.0 finding already
-recorded there — a scanner reading vendored metadata as installed code — and is
+recorded there -- a scanner reading vendored metadata as installed code -- and is
 kept separate so either can be removed without reasoning about the other.
 
 ### What CI is now worth
@@ -3267,7 +3267,7 @@ Stated plainly, because a report that lists only successes is not useful.
   intersect.** Corrected from the previous revision, which recorded this as "no
   strategy fires": 266 of those 130-odd signals were strategies that had been
   handed fewer bars than they require, recorded as opinions (section 30o). With
-  that fixed the same replay produces 46 actionable signals — and still no
+  that fixed the same replay produces 46 actionable signals -- and still no
   order, because the only strategy clearing the 0.55 floor is regime-gated out
   of a trend and the trend-valid ones peak at 0.538 and 0.441 against it. The
   score is a raw average with hard-coded constants and is not a probability of
@@ -3297,8 +3297,8 @@ Stated plainly, because a report that lists only successes is not useful.
 - ~~**There is no retention anywhere except the session sweep.**~~ **Closed
   for the prunable tables** (section 30s): `market_quotes` and
   `market_data_health` at 30 days, `strategy_runs` at 14, published outbox rows
-  at 7, batched at 50 000 per run. What REMAINS open is the append-only set — `market_quotes`
-  gains roughly 179,000 rows a day — about 27 MB, 10 GB a year — at the 2-second
+  at 7, batched at 50 000 per run. What REMAINS open is the append-only set -- `market_quotes`
+  gains roughly 179,000 rows a day -- about 27 MB, 10 GB a year -- at the 2-second
   ingest interval across six instruments. `reconciliation_runs` gains 288 a day
   per account. `outbox` and `command_idempotency` are never pruned, the latter
   carrying an index on `created_at` that was plainly added for a job nobody
@@ -3312,9 +3312,9 @@ Stated plainly, because a report that lists only successes is not useful.
   and the retention sweep bounds the pre-flight ones that genuinely cannot.
   Formerly: Only
   the history-refusal path was given a bar time, so the per-bar unique index
-  deduplicates that one. Every other pre-flight refusal — reconciliation
+  deduplicates that one. Every other pre-flight refusal -- reconciliation
   blocked, feed unhealthy, authority expired, kill switch active, research
-  service down — still records with a nil bar time, which the partial index
+  service down -- still records with a nil bar time, which the partial index
   cannot dedupe and `PurgeStrategyRunsInRange` cannot delete. A halted account
   writes about 23,900 rows a day.
 
@@ -3340,15 +3340,15 @@ Stated plainly, because a report that lists only successes is not useful.
   each page boundary, and reports `verified` only when the walk was complete.
   Formerly: It checks
   sequences 1…10000 and reports `verified: true` whatever `head_sequence` says,
-  so the most recent history — where tampering would be — is never examined.
+  so the most recent history -- where tampering would be -- is never examined.
 
 - **Accessibility is not tested at all.** No axe run, no keyboard-navigation
   test, no screen-reader pass. The terminal is a single-operator tool, which is
   a reason it has not been prioritised and not a reason to claim anything about
   it.
 
-This list is shorter than it was — six items from the previous revision have since
-been executed and moved into the tally — and what remains is what remains.
+This list is shorter than it was -- six items from the previous revision have since
+been executed and moved into the tally -- and what remains is what remains.
 
 - ~~**The CI workflows have never run.**~~ **Closed on 2026-09-30.** The
   repository was published and both workflows are green. What the entry always
@@ -3394,7 +3394,7 @@ been executed and moved into the tally — and what remains is what remains.
   | --- | --- | --- |
   | D high-impact release | PASS | 67 decisions taken inside a blackout and 67 clear of one. 39 refused naming `event_risk_blackout`; 28 accepted, every one a reducing order against an open position. No decision whose `event_risk` check FAILED was accepted |
   | G conflicting strategies | **FAIL, deliberately** | 38 instants split the strategy set and **all 38** produced filled orders on both sides of XAUUSD.m. See the consensus finding below |
-  | I no risk capacity | PASS | 134 decisions, 132 exposure refusals, 1 accepted — and that one opposed the net exposure it saw, so exposure never grew |
+  | I no risk capacity | PASS | 134 decisions, 132 exposure refusals, 1 accepted -- and that one opposed the net exposure it saw, so exposure never grew |
   | N news alongside agreement | PASS | 134 decisions with 79 news items published across the window, ledger gapless and balance reconciling |
 
   The contrast between G and I is the useful part: on `capacity-exhausted` the
@@ -3428,14 +3428,14 @@ been executed and moved into the tally — and what remains is what remains.
   working tree is that there is no identity to record.
 - **Speed invariance is now MEASURED, not argued.** STEP, 1x, 10x and MAX over
   the same 140-instant dataset from one snapshot all produce digest
-  `f986a6b0790bb1fc` — identical in all seven sections, 46 decisions, 46
-  orders, 42 fills, 21 ledger entries — while wall time ranges from 54s to
+  `f986a6b0790bb1fc` -- identical in all seven sections, 46 decisions, 46
+  orders, 42 fills, 21 ledger entries -- while wall time ranges from 54s to
   6m07s. 1x and 10x take the same wall time because the per-instant pacing
   sleep is capped at two seconds and every finite speed exceeds the cap on 1h
   bars; that is the cap working, and it means the speed names overstate what
   they control on long timeframes. The hex is tied to the commit that measured
-  it — decisions have since started recording their bar, which changes the
-  canonical form — so what carries forward is the property, one digest across
+  it -- decisions have since started recording their bar, which changes the
+  canonical form -- so what carries forward is the property, one digest across
   all four modes, not the value.
 - **Walk-forward, sensitivity and Monte Carlo are library-only.**
   `vantage_quant.backtest` implements `walk_forward`, `sensitivity`,
@@ -3507,8 +3507,8 @@ been executed and moved into the tally — and what remains is what remains.
   images were built and scanned individually, and the services were run
   directly.
 - **The mock venue is now adversarial but still finite.** Twelve deterministic
-  fault modes — including a lost response after acceptance, which is what
-  exposed defect 1's severity — but it does not contradict itself the way a
+  fault modes -- including a lost response after acceptance, which is what
+  exposed defect 1's severity -- but it does not contradict itself the way a
   real venue occasionally will. A passing mock suite is not evidence that a
   live integration is safe.
 - **Correlation between instruments is not modelled.** Gross exposure and
@@ -3521,7 +3521,7 @@ been executed and moved into the tally — and what remains is what remains.
 
 ---
 
-# Appendix A — completion matrix
+# Appendix A -- completion matrix
 
 Read the status column strictly. A feature is **COMPLETE** only where the
 usable behaviour exists AND has tests that would catch its removal. An
@@ -3535,7 +3535,7 @@ trust needs the difference.
 | # | Subsystem | Status | Evidence, and what is missing |
 | --- | --- | --- | --- |
 | 1 | Paper-only enforcement | COMPLETE | Four independent gates: compile-time constant, config validation, no live adapter compiled in, DB CHECK constraints. `arch_test.go` asserts the constant is still compiled in; `config` tests cover the refusal; smoke asserts `execution_mode: paper` |
-| 2 | Single execution path (OMS) | COMPLETE | `arch_test.go` proves only `oms.go` calls `adapter.PlaceOrder`, that the adapter is held by an allowlist of packages, and that exactly two call sites reach the OMS — the HTTP handler and the orchestrator |
+| 2 | Single execution path (OMS) | COMPLETE | `arch_test.go` proves only `oms.go` calls `adapter.PlaceOrder`, that the adapter is held by an allowlist of packages, and that exactly two call sites reach the OMS -- the HTTP handler and the orchestrator |
 | 3 | Research cannot reach a broker | COMPLETE | Asserted from the `go list` dependency graph, not from convention: `TestTheQuantBridgeCannotReachExecution`. The research DB role is additionally `default_transaction_read_only = on` |
 | 4 | Order idempotency | COMPLETE | `PRIMARY KEY (account_id, idempotency_key)` plus a unique index on orders. 16 simultaneous identical submissions yield exactly one row, verified in SQL rather than from the API response |
 | 5 | Order state machine | COMPLETE | Transition table in `domain`, 5 test files. Illegal transitions now answer 409 instead of 500 |
@@ -3549,9 +3549,9 @@ trust needs the difference.
 | 13 | Authorisation (RBAC) | COMPLETE | Viewer/trader/admin with separation of duties (an admin cannot trade). Asserted against the API directly, not only through the UI |
 | 14 | CSRF, CORS and headers | COMPLETE | Double-submit CSRF, strict origin allowlist, COEP/COOP/CORP. ZAP baseline 0 FAIL on both surfaces |
 | 15 | Content-Security-Policy | PARTIAL | Complete except `script-src 'unsafe-inline'`. A nonce policy was implemented and reverted: Next 16's Turbopack emits chunk tags without the nonce, so `strict-dynamic` blocked every script and the terminal rendered nothing. Documented with the exact change to make when that lands |
-| 16 | Reconciliation — detection | COMPLETE | 13-type taxonomy, snapshot-based, classified by a pure function with 34 unit tests. Fingerprint deduplication with a partial unique index; stale issues closed when they stop being detected |
-| 17 | Reconciliation — repair | COMPLETE | Four provable types repaired automatically through the same accounting path an ordinary fill uses; a separate repair state machine that cannot leave a terminal state; every repair stamped and attributed to its issue. Crash-recovery, idempotence, concurrent-run and ambiguity tests all pass |
-| 17a | Reconciliation — operator control | COMPLETE | Seven ADMIN-only actions with mandatory reasons, full issue history, failed attempts audited, no "set order status" endpoint. 21 Playwright tests including forged ids, cross-account ids, mass assignment and repeat resolution |
+| 16 | Reconciliation -- detection | COMPLETE | 13-type taxonomy, snapshot-based, classified by a pure function with 34 unit tests. Fingerprint deduplication with a partial unique index; stale issues closed when they stop being detected |
+| 17 | Reconciliation -- repair | COMPLETE | Four provable types repaired automatically through the same accounting path an ordinary fill uses; a separate repair state machine that cannot leave a terminal state; every repair stamped and attributed to its issue. Crash-recovery, idempotence, concurrent-run and ambiguity tests all pass |
+| 17a | Reconciliation -- operator control | COMPLETE | Seven ADMIN-only actions with mandatory reasons, full issue history, failed attempts audited, no "set order status" endpoint. 21 Playwright tests including forged ids, cross-account ids, mass assignment and repeat resolution |
 | 17b | Trading verdict and halt scope | COMPLETE | HEALTHY / DEGRADED / TRADING_HALTED / RECONCILIATION_REQUIRED derived from real state and surfaced in readiness; halt scope per issue type with the narrowest blast radius that contains it; manual read-only use unaffected during an incident |
 | 18 | Unknown-outcome handling | COMPLETE | `ErrUnknownOutcome` is distinct from rejection; FAILED means "outcome unknown" and is never retried. Proven with a deterministic lost-response fault, including that the order stays FAILED |
 | 19 | Deterministic broker faults | COMPLETE | 12 modes with exact firing counts, never probabilistic. 9 unit tests; all 12 armed through the development endpoint in a Playwright test |
@@ -3566,13 +3566,13 @@ trust needs the difference.
 | 28 | Strategy library (12) | COMPLETE | Implemented in the research plane with tests; 5 promoted to paper by the seed |
 | 29 | Strategy orchestrator | COMPLETE | Evaluates and routes through the same OMS as a manual order (asserted structurally), concurrent runs covered by the race suite, and 49 unit tests over the consensus policy and the ten scenarios |
 | 29a | Multi-strategy consensus | COMPLETE | A pure, versioned aggregation policy: vetoes before votes, no majority resolution of a disagreement, abstentions not counted as agreement, an unavailable model never read as assent. 35 tests |
-| 29b | Market regimes | COMPLETE | Seven canonical regimes in `domain`, fail-closed parsing, UNKNOWN never coerced. **RISK_OFF is nameable but no classifier infers it** — recorded as a gap |
+| 29b | Market regimes | COMPLETE | Seven canonical regimes in `domain`, fail-closed parsing, UNKNOWN never coerced. **RISK_OFF is nameable but no classifier infers it** -- recorded as a gap |
 | 29c | Bar aggregation from the live feed | COMPLETE | 15m/1h/4h from the quote stream; complete bars only to strategies, mid not bid/ask, venue-timestamp bucketing, late ticks dropped, restart continuation. Was entirely MISSING and is the milestone's headline defect |
-| 29d | Deterministic market replay | COMPLETE for the decision layer, **PARTIAL** end to end | Provider plus five series generators, no look-ahead by construction, ten scenarios A-J reproducible. Does not yet drive ingestion, the OMS and the ledger — that needs config plumbing in `internal/app` |
-| 29f | Market replay — end-to-end pipeline | COMPLETE for one dataset | `Scheduler.ReplayStep` calls the real jobs; no second trading engine, enforced by an architecture test. Measured: 665 signals, 250 orders, 189 fills, 64 ledger rows, gapless ledger, stored balance equal to the derived one |
-| 29g | Market replay — determinism | COMPLETE | Two runs from a byte-identical database produce byte-identical financial output. Required seeding the mock venue, which was seeding slippage from the wall clock |
-| 29h | Market replay — datasets and controls | COMPLETE | Nine committed fixtures with parsed-row hashes, an allowlist registry (never a path), admin-only start/step/advance/pause/resume/reset/stop/speed/reconcile, reason required and audited for start and stop |
-| 29i | Market replay — scenario coverage | **PARTIAL** | One of twenty scenarios (A) is driven end to end. The rest remain decision-layer tests; the infrastructure to move them exists |
+| 29d | Deterministic market replay | COMPLETE for the decision layer, **PARTIAL** end to end | Provider plus five series generators, no look-ahead by construction, ten scenarios A-J reproducible. Does not yet drive ingestion, the OMS and the ledger -- that needs config plumbing in `internal/app` |
+| 29f | Market replay -- end-to-end pipeline | COMPLETE for one dataset | `Scheduler.ReplayStep` calls the real jobs; no second trading engine, enforced by an architecture test. Measured: 665 signals, 250 orders, 189 fills, 64 ledger rows, gapless ledger, stored balance equal to the derived one |
+| 29g | Market replay -- determinism | COMPLETE | Two runs from a byte-identical database produce byte-identical financial output. Required seeding the mock venue, which was seeding slippage from the wall clock |
+| 29h | Market replay -- datasets and controls | COMPLETE | Nine committed fixtures with parsed-row hashes, an allowlist registry (never a path), admin-only start/step/advance/pause/resume/reset/stop/speed/reconcile, reason required and audited for start and stop |
+| 29i | Market replay -- scenario coverage | **PARTIAL** | One of twenty scenarios (A) is driven end to end. The rest remain decision-layer tests; the infrastructure to move them exists |
 | 29j | ReplayRun persistence | COMPLETE | `replay_runs` (0013). Written before the run is announced and updated as it plays, so an interrupted replay still leaves a trace; a run whose opening record cannot be written is refused, while a later recording failure never destroys a finished run. `simulated` cannot be false, and the app role cannot DELETE |
 | 29k | Replay run history API | COMPLETE | Admin-only `GET /replay/runs` and `/replay/runs/{id}`, answering in every process because a recorded run is evidence whether or not the engine is present |
 | 29n | PAPER_FORWARD separated from BACKTEST/REPLAY | COMPLETE | `orders.replay_run_id` (0014) tags every order created while a replay owned the clock, including a manual one. `?by=run_kind` and `?by=replay_run` read it. Without the tag a replay's numbers and a forward session's sit in one account indistinguishably |
@@ -3593,13 +3593,13 @@ trust needs the difference.
 | 35 | Model drift detection | COMPLETE | Distribution-shift detection with unit tests |
 | 36 | Model artefact storage | COMPLETE | Versioned on disk, deliberately not committed |
 | 37 | Scanner | COMPLETE | Ranks candidates and states that it does not execute. Covered by the research smoke suite |
-| 38 | Alerting | COMPLETE | All seven required sources wired, per-(kind, key) cooldowns, suppressed-repeat counts, one-shot recovery. 8 unit tests. Sinks are slog, Prometheus and a notifications row — no external SaaS dependency |
+| 38 | Alerting | COMPLETE | All seven required sources wired, per-(kind, key) cooldowns, suppressed-repeat counts, one-shot recovery. 8 unit tests. Sinks are slog, Prometheus and a notifications row -- no external SaaS dependency |
 | 39 | Notifications | COMPLETE | Stored, listed, markable as read |
 | 40 | Metrics | COMPLETE | Prometheus counters and gauges across the pipeline, including a deadlock counter that must stay at zero |
 | 41 | Structured logging | COMPLETE | slog with request and correlation identifiers |
 | 42 | Distributed tracing | **NOT IMPLEMENTED** | No OpenTelemetry. Correlation ids are propagated, which is what a single-operator system actually needs, but this is a gap rather than a decision worth defending |
 | 43 | Health and readiness | COMPLETE | Live and ready endpoints with per-dependency status |
-| 44 | Rate limiting | PARTIAL | Redis-backed, per-operation budgets, enforced and demonstrably effective — it refused this audit's own test traffic. The package has no unit tests |
+| 44 | Rate limiting | PARTIAL | Redis-backed, per-operation budgets, enforced and demonstrably effective -- it refused this audit's own test traffic. The package has no unit tests |
 | 45 | Database migrations | COMPLETE | Idempotent, owner-role only, with a status command. CI re-applies them to prove the second run is a no-op |
 | 46 | Least-privilege DB roles | COMPLETE | Owner, application and research roles. The application role cannot perform DDL; the research role cannot write at all |
 | 47 | Lock ordering | COMPLETE | Declared in `store.LockAccountTx` and taken as the outermost lock. Added by this audit after a real deadlock; a counter and a race test guard the regression |
@@ -3609,16 +3609,16 @@ trust needs the difference.
 | 51 | Terminal (19 routes) | COMPLETE | Every route renders with live data; 30 Playwright tests |
 | 52 | Order ticket | COMPLETE | Review before confirm, duplicate-click protection, risk explanations rendered |
 | 53 | Containers | COMPLETE | Three images, non-root, no HIGH or CRITICAL misconfigurations |
-| 53a | Walk-forward, sensitivity, Monte Carlo | **PARTIAL** | Implemented in `vantage_quant.backtest` with Python tests, but exposed by no HTTP route — the control plane cannot run one and no result is stored or displayed |
+| 53a | Walk-forward, sensitivity, Monte Carlo | **PARTIAL** | Implemented in `vantage_quant.backtest` with Python tests, but exposed by no HTTP route -- the control plane cannot run one and no result is stored or displayed |
 | 53b | ML validation depth | **PARTIAL** | Precision, recall, ROC-AUC, Brier and a majority-class baseline, with a warning when the model does not beat it. No F1, PR-AUC, confusion matrix or calibration curve, so a 0.80 output is a score rather than a demonstrated probability |
-| 53c | P&L attribution | PARTIAL | Eight dimensions — instrument, strategy, strategy version, source, session, event context, replay run and regime — folded from the LEDGER so each unit of money is counted exactly once, with an explicit UNATTRIBUTED bucket rather than a silent drop. **Model is still not a dimension**, so "which model made the money?" remains unanswerable |
-| 53d | Replay determinism | COMPLETE | A canonical result digest over seven sections, ordered by business keys only. Three runs of one dataset from a `pg_dump`/`pg_restore` snapshot produce one digest; the suite SKIPS rather than passes when a dataset produced no decisions of its own. Found and fixed the mock venue's unreseeded jitter. Re-measured at the final code state after decisions began recording their bar — a richer canonical form that could have exposed hidden non-determinism and did not: `trend-clean` `45f2cf72fc4a0397` ×3, `correlated-pair` `1638d574c83ea41d` ×3, `range-bound` skipped as vacuous |
+| 53c | P&L attribution | PARTIAL | Eight dimensions -- instrument, strategy, strategy version, source, session, event context, replay run and regime -- folded from the LEDGER so each unit of money is counted exactly once, with an explicit UNATTRIBUTED bucket rather than a silent drop. **Model is still not a dimension**, so "which model made the money?" remains unanswerable |
+| 53d | Replay determinism | COMPLETE | A canonical result digest over seven sections, ordered by business keys only. Three runs of one dataset from a `pg_dump`/`pg_restore` snapshot produce one digest; the suite SKIPS rather than passes when a dataset produced no decisions of its own. Found and fixed the mock venue's unreseeded jitter. Re-measured at the final code state after decisions began recording their bar -- a richer canonical form that could have exposed hidden non-determinism and did not: `trend-clean` `45f2cf72fc4a0397` ×3, `correlated-pair` `1638d574c83ea41d` ×3, `range-bound` skipped as vacuous |
 | 53e | Replay speed invariance | COMPLETE | STEP, 1x, 10x and MAX over the same dataset produce one digest. Paced modes run through the background `advance` control, because the pacing sleep happens inside a step request and no batch size stays under the 30s handler deadline |
-| 53f | Restart safety | COMPLETE | A real process kill, not an in-process reset. A replay STOPS and requires an explicit operator resume from a verified durable cursor; nothing financial is created or destroyed; no bar is evaluated twice; a half-filled order is not re-booked. Crash TIMING is covered through the venue's deterministic fault modes plus a real kill: an unknown outcome (`timeout`) must gain no fill and must not become FILLED, and a lost execution (`lost_response`) must be imported exactly once or left as an open issue. Killing inside the OMS transaction itself is still **not** covered — that needs a fault that blocks at a named point |
-| 53g | Partial-fill coverage | COMPLETE — measured `TEST_XAU buy 0.1000 filled=0.0400 PARTIALLY_FILLED`, and `PARTIALLY_FILLED` with 0.0400 filled again after a real process kill | Was impossible: every order the R500 account produces is 0.01 lots, which is XAUUSD.m's minimum AND its step, so 40% of one order is not a representable quantity. A development-only synthetic instrument with a finer step makes 0.10 split into 0.04 and 0.06, within the authority's existing ceiling. Nothing under test was relaxed |
-| 53h | Multi-strategy consensus | **WIRED** | `orchestrator.EvaluateInstrument` is `Decide`'s production caller: the scheduler groups by instrument, evaluates every applicable strategy with `Execute:false`, aggregates, and places at most ONE order, guarded durably by a `consensus-<instrument>-<bar>` idempotency key that names no strategy. Measured: 38 instants split the strategy set, 0 produced orders on both sides, against 38 of 38 before. The verdict, its vetoes, every contribution including the discarded ones, and the attribution policy are recorded on the decision snapshot. NOTE: under the default policy nothing clears the 0.55 confidence floor, so the platform places no autonomous orders at all — see 30g finding 12 |
+| 53f | Restart safety | COMPLETE | A real process kill, not an in-process reset. A replay STOPS and requires an explicit operator resume from a verified durable cursor; nothing financial is created or destroyed; no bar is evaluated twice; a half-filled order is not re-booked. Crash TIMING is covered through the venue's deterministic fault modes plus a real kill: an unknown outcome (`timeout`) must gain no fill and must not become FILLED, and a lost execution (`lost_response`) must be imported exactly once or left as an open issue. Killing inside the OMS transaction itself is still **not** covered -- that needs a fault that blocks at a named point |
+| 53g | Partial-fill coverage | COMPLETE -- measured `TEST_XAU buy 0.1000 filled=0.0400 PARTIALLY_FILLED`, and `PARTIALLY_FILLED` with 0.0400 filled again after a real process kill | Was impossible: every order the R500 account produces is 0.01 lots, which is XAUUSD.m's minimum AND its step, so 40% of one order is not a representable quantity. A development-only synthetic instrument with a finer step makes 0.10 split into 0.04 and 0.06, within the authority's existing ceiling. Nothing under test was relaxed |
+| 53h | Multi-strategy consensus | **WIRED** | `orchestrator.EvaluateInstrument` is `Decide`'s production caller: the scheduler groups by instrument, evaluates every applicable strategy with `Execute:false`, aggregates, and places at most ONE order, guarded durably by a `consensus-<instrument>-<bar>` idempotency key that names no strategy. Measured: 38 instants split the strategy set, 0 produced orders on both sides, against 38 of 38 before. The verdict, its vetoes, every contribution including the discarded ones, and the attribution policy are recorded on the decision snapshot. NOTE: under the default policy nothing clears the 0.55 confidence floor, so the platform places no autonomous orders at all -- see 30g finding 12 |
 | 53i | Trading authority ceilings | **ENFORCED** | All five bind as their own pre-trade checks with their own rejection codes (`authority_max_order_quantity`, `authority_max_order_notional`, `authority_max_position_exposure`, `authority_daily_loss`, `authority_max_leverage`). The tighter of the authority and the account's own limit binds; the authority can only narrow. A strictly reducing order is exempt from all five, an over-closing position flip is not. Boundary-tested below, at and above each ceiling; 66-check smoke suite green |
-| 54 | CI workflows | PARTIAL — **cannot be verified locally** | `actionlint` passes with 0 findings and every command the workflows run has been executed by hand. GitHub Actions itself has never run: this repository has no remote. Nothing here may be read as "CI passed" |
+| 54 | CI workflows | PARTIAL -- **cannot be verified locally** | `actionlint` passes with 0 findings and every command the workflows run has been executed by hand. GitHub Actions itself has never run: this repository has no remote. Nothing here may be read as "CI passed" |
 | 55 | Regulatory and live-trading readiness | **BLOCKED** | Deliberately. No FSP licence, no client-money segregation, no live venue agreement, no independent audit. Recorded in `COMPLIANCE_READINESS.md` and `REGULATORY_BOUNDARY.md` |
 
 ## The unit-test gap, stated plainly
@@ -3626,18 +3626,18 @@ trust needs the difference.
 This was the largest piece of technical debt in the previous revision: five
 high-risk packages with no unit tests at all. Four of them now have some.
 
-- `oms` — 10 tests. `handleBrokerError` was the specific worry: a six-branch
+- `oms` -- 10 tests. `handleBrokerError` was the specific worry: a six-branch
   decision table with three branches reached by no test. It is now a pure
   function, `ClassifyBrokerError`, and all six branches are covered, including
   an explicit test that an unrecognised error fails closed to UNKNOWN.
-- `reconcile` — 34 tests over the classifier, all reachable because it takes
+- `reconcile` -- 34 tests over the classifier, all reachable because it takes
   two snapshots and does no I/O.
-- `store` — 15 tests over `mapError` and `Fingerprint`, the two pure decisions
+- `store` -- 15 tests over `mapError` and `Fingerprint`, the two pure decisions
   in the package. `mapError` decides whether every database failure becomes a
   404, a 409, a retry or an opaque 500; the deadlock branch is covered
   specifically, because it was once an unclassified 40P01 surfacing as a bare
   500 on order placement.
-- `portfolio` — 7 tests, after extracting the exposure arithmetic from
+- `portfolio` -- 7 tests, after extracting the exposure arithmetic from
   `Compute`, which read six tables before reaching it. The cases that were
   never tested were the ones nobody wants to seed: an unpriceable position must
   not count as flat, gross and net must disagree for a hedged book, and
@@ -3649,7 +3649,7 @@ now -- see section 19a.
 
 The reason integration coverage was not simply extended instead: it covers the
 paths the tests happen to take. But the reverse is also true and worth keeping
-in view — this audit's defects were found by integration tests against a real
+in view -- this audit's defects were found by integration tests against a real
 database and a real venue simulator, and three of them were arbitrated by
 PostgreSQL. A fake store would have agreed with whatever the test author
 imagined. Both kinds of test earn their place; neither replaces the other.
@@ -3660,7 +3660,7 @@ imagined. Both kinds of test earn their place; neither replaces the other.
 
 **Read the "Run" column.** Rows marked *this milestone* were executed against
 this milestone's code. Rows marked *carried* were executed in an earlier
-milestone and have NOT been re-run here — they are reproduced because they were
+milestone and have NOT been re-run here -- they are reproduced because they were
 true when measured, not because they were measured again, and a reader deciding
 what to trust needs that difference. The stack-dependent suites are the ones
 most affected: the development stack spent this milestone in REPLAY mode, which
@@ -3669,7 +3669,7 @@ need real time.
 
 | Suite | Run | Result |
 | --- | --- | --- |
-| Go unit | this revision | **874 pass, 0 fail, 54 skip**, exit 0, from `go test -count=1 -v ./...` across the whole module; `gofmt` and `go vet` clean. That count includes subtests, so it is not comparable with the 723 top-level tests reported for the previous milestone — it is a different measurement of the same tree, not growth. The skips are the suites that require a running stack |
+| Go unit | this revision | **874 pass, 0 fail, 54 skip**, exit 0, from `go test -count=1 -v ./...` across the whole module; `gofmt` and `go vet` clean. That count includes subtests, so it is not comparable with the 723 top-level tests reported for the previous milestone -- it is a different measurement of the same tree, not growth. The skips are the suites that require a running stack |
 | Go `-race` | this milestone | **0 races across `./internal/...`.** MinGW-w64 16.1.0 was installed at user scope via winget (no administrator interaction needed), which is what made the detector buildable for the first time |
 | Go concurrency and recovery integration | this revision | **15 pass, 0 fail, 0 skip** against a running stack and a real venue simulator, on its own fresh seed: the crash-recovery acceptance test, five-run idempotence, eight concurrent runs, the ambiguous-execution case, and the defect-15 regression |
 | Market-data acquisition integration | this revision | **16 pass, 0 fail** with `VANTAGE_MARKETDATA_E2E=1` against the development Postgres, driving the real `Syncer` and the real store against a fake Twelve Data server built to the published contract. These are the first tests this project has had for `Backfill`, `Sync`, `Repair` and `Snapshot`; two of them failed on first run and one of those was a real defect |
@@ -3679,21 +3679,21 @@ need real time.
 | Smoke: trading | this revision | **66 pass, 0 fail** against the live stack on its own fresh seed. It first failed at the first order with `csrf_origin_mismatch`, which is the CSRF control working: moving the terminal to :3005 moved `VANTAGE_PUBLIC_WEB_ORIGIN` with it, and the suite's `Origin` header follows through `VANTAGE_SMOKE_WEB_ORIGIN` |
 | Smoke: research | this milestone | **35 pass, 0 fail**. It first reported 34/1 on a seven-hour-old database whose earlier suites had left unresolved reconciliation discrepancies pausing automation; a reseed restored 35/35, which is the documented behaviour rather than a regression |
 | Replay: `trend-clean` end to end | this revision | 140/140 rows, 81 evaluation instants, 0 errors, on a freshly seeded database with both planes rebuilt and Autopilot on. **46 actionable signals** where the previous revision measured none, 266 starved evaluations now recorded as skips rather than opinions, 39 decisions all TRENDING, no order placed. Section 30o |
-| Gitleaks | this milestone | 0 leaks — git history and the working tree (`--no-git`) |
-| Semgrep | this milestone | 0 findings across 246 tracked files with 394 rules, plus a separate 0-finding pass over the 23 new market-data and chart files because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately — Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
+| Gitleaks | this milestone | 0 leaks -- git history and the working tree (`--no-git`) |
+| Semgrep | this milestone | 0 findings across 246 tracked files with 394 rules, plus a separate 0-finding pass over the 23 new market-data and chart files because Semgrep skips untracked ones, using CI's ruleset list (`p/security-audit`, `p/secrets`, `p/golang`, `p/python`, `p/typescript`, `p/react`, `p/dockerfile`, `p/sql-injection`). The new untracked research modules were scanned separately -- Semgrep scans only git-tracked files by default, so an untracked module is silently skipped. **`--config auto` no longer works with `--metrics off`** and exits 0 after printing an error, which reads exactly like a clean scan |
 | govulncheck | this milestone | 0 reachable. "Your code is affected by 0 vulnerabilities"; 1 vulnerability in a required module that nothing calls |
 | npm audit | this milestone | 0 vulnerabilities |
-| Trivy filesystem (vuln) | this milestone | 0 across `go.mod` and `package-lock.json`, CI's settings (`CRITICAL,HIGH`, `--ignore-unfixed`), exit 0. `.venv`, `node_modules` and `.next` skipped, as they do not exist in CI's fresh checkout — scanning them made Trivy die with a FATAL walk error that `--exit-code 0` reported as success |
+| Trivy filesystem (vuln) | this milestone | 0 across `go.mod` and `package-lock.json`, CI's settings (`CRITICAL,HIGH`, `--ignore-unfixed`), exit 0. `.venv`, `node_modules` and `.next` skipped, as they do not exist in CI's fresh checkout -- scanning them made Trivy die with a FATAL walk error that `--exit-code 0` reported as success |
 | Trivy config | this milestone | 0 HIGH/CRITICAL misconfigurations across all three Dockerfiles |
-| Trivy image — all three | **carried — not re-run** | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
-| Trivy image — unfiltered | this milestone | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
-| Trivy image — the 3 fixable findings, named | this milestone | `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964, HIGH), `setuptools` 70.3.0 → 78.1.1 (CVE-2025-47273, HIGH) and → 83.0.0 (CVE-2026-59890, MEDIUM). **Verified inside the image rather than accepted on trust:** the importable setuptools is 84.0.0, above both fixes; there is no setuptools 70.3.0 on disk at all — the version Trivy reports comes from `setuptools==70.3.0` in `pip/_vendor/vendor.txt`, a record of what pip vendored rather than installed code; msgpack 1.1.2 exists only as `pip/_vendor/msgpack` |
-| ZAP baseline — control plane | this milestone | **0 FAIL, 1 WARN, 66 PASS** (`-I -s`, unauthenticated, `127.0.0.1` only). The WARN is Non-Storable Content, informational |
-| ZAP baseline — terminal (production build) | this milestone | **0 FAIL, 3 WARN, 64 PASS** (`-I -s`, unauthenticated). The substantive WARN is the documented `script-src 'unsafe-inline'` acceptance; the others are Non-Storable Content and Modern Web Application, both informational |
+| Trivy image -- all three | **carried -- not re-run** | 0 HIGH/CRITICAL **under CI's settings** (`--ignore-unfixed` plus `.trivyignore`); all three exit 0 |
+| Trivy image -- unfiltered | this milestone | Research image rebuilt with `--no-cache --pull` so the base is today's: **150 OS findings** (0 CRITICAL, 44 HIGH, 48 MEDIUM, 57 LOW, 1 UNKNOWN) plus **3 Python findings**, every OS one with no upstream fix published. See `.trivyignore` for why none is suppressed and what would resolve it |
+| Trivy image -- the 3 fixable findings, named | this milestone | `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964, HIGH), `setuptools` 70.3.0 → 78.1.1 (CVE-2025-47273, HIGH) and → 83.0.0 (CVE-2026-59890, MEDIUM). **Verified inside the image rather than accepted on trust:** the importable setuptools is 84.0.0, above both fixes; there is no setuptools 70.3.0 on disk at all -- the version Trivy reports comes from `setuptools==70.3.0` in `pip/_vendor/vendor.txt`, a record of what pip vendored rather than installed code; msgpack 1.1.2 exists only as `pip/_vendor/msgpack` |
+| ZAP baseline -- control plane | this milestone | **0 FAIL, 1 WARN, 66 PASS** (`-I -s`, unauthenticated, `127.0.0.1` only). The WARN is Non-Storable Content, informational |
+| ZAP baseline -- terminal (production build) | this milestone | **0 FAIL, 3 WARN, 64 PASS** (`-I -s`, unauthenticated). The substantive WARN is the documented `script-src 'unsafe-inline'` acceptance; the others are Non-Storable Content and Modern Web Application, both informational |
 | actionlint | this milestone | 0 findings, after fixing the 8 shellcheck issues it reported |
-| Restore drill | **carried — not re-run** | PASSED — backup, restore into a scratch database, and financial-integrity verification |
-| OSV-Scanner | this revision | **RUN IN CI, 0 findings.** Never runnable before: the job referenced `google/osv-scanner-action@v1`, a tag that has never existed there, and pinning the workflows found that. Pinned to v2.5.1 — and the first real run then exited 127 printing its usage text, because v2 dropped `--skip-git`. Removed; repository scanning is the default now. It has never been run locally (`osv-scanner --version` still reports `command not found`), so the CI job is the only evidence and is cited as such |
-| pip-audit | this revision | **RUN IN CI, 0 findings.** Never run before, and it took two attempts. It first failed on `vantage-quant` itself — the local package, installed editable so its dependencies resolve, is not on PyPI. `--skip-editable` then failed differently, because `--strict` turns a skip into an error. Dropping `--strict` would have passed and would have been worse: it silences an unauditable THIRD PARTY package too. The job now freezes the resolved dependency set without editable installs and audits that, so `--strict` still means what it says |
+| Restore drill | **carried -- not re-run** | PASSED -- backup, restore into a scratch database, and financial-integrity verification |
+| OSV-Scanner | this revision | **RUN IN CI, 0 findings.** Never runnable before: the job referenced `google/osv-scanner-action@v1`, a tag that has never existed there, and pinning the workflows found that. Pinned to v2.5.1 -- and the first real run then exited 127 printing its usage text, because v2 dropped `--skip-git`. Removed; repository scanning is the default now. It has never been run locally (`osv-scanner --version` still reports `command not found`), so the CI job is the only evidence and is cited as such |
+| pip-audit | this revision | **RUN IN CI, 0 findings.** Never run before, and it took two attempts. It first failed on `vantage-quant` itself -- the local package, installed editable so its dependencies resolve, is not on PyPI. `--skip-editable` then failed differently, because `--strict` turns a skip into an error. Dropping `--strict` would have passed and would have been worse: it silences an unauditable THIRD PARTY package too. The job now freezes the resolved dependency set without editable installs and audits that, so `--strict` still means what it says |
 | GitHub Actions | this revision | **RUN, AND GREEN.** Published 2026-09-30; CI run `36718123184` 5/5 jobs and Security run `36718123066` 11/11 jobs. The first run failed both workflows; six defects and two rounds of fixes later, both pass. `actionlint` reported 0 findings before, during and after, which is the point |
 
 ### On the number of reseeds behind that table
@@ -3713,6 +3713,6 @@ no longer exercised the risk engine they run through.
 
 ### Scope of the ZAP scans
 
-Both targets were `127.0.0.1` — the control plane and the terminal. **No
+Both targets were `127.0.0.1` -- the control plane and the terminal. **No
 third-party host was scanned**, and no provider (Exness, MetaQuotes, Trading
 Economics or any other) was contacted by any scanner in this audit.

@@ -2,8 +2,8 @@
 
 A strategy is a pure function from market history and parameters to an
 OPINION. It returns a signal; it does not size positions, place orders, or know
-that a broker exists. Everything downstream — authority, risk, sizing,
-idempotency, execution — happens in the control plane, which treats whatever
+that a broker exists. Everything downstream -- authority, risk, sizing,
+idempotency, execution -- happens in the control plane, which treats whatever
 arrives here as untrusted input.
 
 Rules every strategy in this module obeys:
@@ -20,7 +20,7 @@ Rules every strategy in this module obeys:
     that always finds a reason to trade is not a strategy.
 
 *   **Its stop is derived from market structure**, usually a multiple of ATR or
-    a channel edge — never a fixed percentage, which is either meaninglessly
+    a channel edge -- never a fixed percentage, which is either meaninglessly
     tight in a volatile market or absurdly wide in a quiet one.
 
 *   **It explains itself.** Every signal carries a sentence a human can check.
@@ -123,7 +123,7 @@ class StrategyContext:
     """Non-sensitive market context the control plane supplies.
 
     Deliberately narrow. It carries the trading session, the current spread and
-    whether a high-impact release is near — nothing about balances, positions
+    whether a high-impact release is near -- nothing about balances, positions
     or identities, because a strategy does not need them and should not hold
     them.
     """
@@ -1237,7 +1237,7 @@ def _ml_direction_filter(bars: pd.DataFrame, p: dict[str, Any], ctx: StrategyCon
     The model is a FILTER, never the signal. A trend entry must exist first;
     the model can only veto it. And when no model is deployed, or its features
     cannot be computed, the strategy FAILS CLOSED to no-trade rather than
-    falling back to the unfiltered signal — otherwise "the model is broken"
+    falling back to the unfiltered signal -- otherwise "the model is broken"
     would silently become "trade without the filter".
     """
     from vantage_quant import ml  # imported lazily: heavier dependency

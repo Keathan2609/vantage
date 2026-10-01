@@ -579,7 +579,7 @@ func (s *Scheduler) cleanup(ctx context.Context) error {
 			// The daily roll comes FIRST, and deliberately.
 			//
 			// It used to sit after Compute, behind a `continue` on Compute's
-			// error — so any persistent failure to compute a snapshot would
+			// error -- so any persistent failure to compute a snapshot would
 			// freeze the daily-loss reference point indefinitely while the
 			// risk engine kept measuring against it. The roll needs the
 			// account and the clock, nothing else; it has no reason to depend

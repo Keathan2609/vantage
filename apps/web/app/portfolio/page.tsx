@@ -148,11 +148,11 @@ export default function PortfolioPage() {
                       Number.parseFloat(portfolio.gross_exposure) /
                       Number.parseFloat(portfolio.equity)
                     ).toFixed(2)}x`
-                  : "—"}
+                  : "-"}
               </dd>
             </dl>
             <p className="tiny muted" style={{ marginTop: 8, marginBottom: 0 }}>
-              Positions are marked at the price they could be CLOSED at — a long at the bid,
+              Positions are marked at the price they could be CLOSED at: a long at the bid,
               a short at the ask. Marking at the mid would overstate equity by half a spread
               on every open position.
             </p>
@@ -207,7 +207,7 @@ export default function PortfolioPage() {
                     </td>
                     <td className="mono right">{row.trades}</td>
                     <td className="mono right muted">
-                      {row.trades > 0 ? percent(row.win_rate) : "—"}
+                      {row.trades > 0 ? percent(row.win_rate) : "-"}
                     </td>
                   </tr>
                 ))}
@@ -227,7 +227,7 @@ export default function PortfolioPage() {
                     <td className="mono right muted">
                       {attribution.data.total.trades > 0
                         ? percent(attribution.data.total.win_rate)
-                        : "—"}
+                        : "-"}
                     </td>
                   </tr>
                 ) : null}

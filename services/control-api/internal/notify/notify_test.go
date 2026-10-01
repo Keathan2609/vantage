@@ -9,7 +9,7 @@ import (
 )
 
 // The alerter's store is optional, so these tests exercise the part that
-// actually decides whether an operator is interrupted — the cooldown — without
+// actually decides whether an operator is interrupted -- the cooldown -- without
 // a database. The store path is exercised by the smoke suite.
 
 func newTestAlerter(now *time.Time) *Alerter {

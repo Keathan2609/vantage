@@ -423,7 +423,7 @@ func bucketFor(dimension AttributionDimension, e LedgerEntry) (key, label string
 		if e.Regime == "" {
 			return UnattributedKey, "no recorded regime: no decision snapshot"
 		}
-		return string(e.Regime), string(e.Regime) + " — " + e.Regime.Describe()
+		return string(e.Regime), string(e.Regime) + ": " + e.Regime.Describe()
 
 	case AttributeByRunKind:
 		// An entry with no order at all -- a deposit -- is neither kind. It is

@@ -128,7 +128,7 @@ func (s *Syncer) Sync(
 		return Result{}, fmt.Errorf(
 			"marketdata: %s has supplied no bars for %s %s yet; run a backfill "+
 				"first so the starting point is chosen deliberately rather than "+
-				"guessed. Bars from another source do not count -- syncing "+
+				"guessed. Bars from another source do not count, because syncing "+
 				"forward from them would skip the history this provider has",
 			s.provider.Name(), instrumentID, tf)
 	}

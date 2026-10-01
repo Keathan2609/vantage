@@ -4,7 +4,7 @@ A backtest is a claim about what would have happened. Most backtests are wrong
 in the same few ways, and this one is built specifically to avoid them:
 
 **Execution timing.** A strategy that sees bar *i*'s close cannot trade at that
-close — the close is the last price of a bar that has just finished. Entries
+close -- the close is the last price of a bar that has just finished. Entries
 therefore fill at the NEXT bar's open, crossing the spread, plus slippage.
 Filling at the signal bar's close is the single most flattering error available
 and it silently inflates every result.
@@ -21,7 +21,7 @@ realistic expectation.
 
 **Position sizing.** Size comes from the account's risk fraction and the stop
 distance, floored onto the instrument's quantity step. When the risk budget
-cannot buy the minimum tradable size, the trade is skipped and counted — for a
+cannot buy the minimum tradable size, the trade is skipped and counted -- for a
 small account that is the honest outcome, and hiding it would misrepresent what
 the strategy could actually have done.
 
@@ -216,7 +216,7 @@ def run(bars: pd.DataFrame, config: BacktestConfig) -> BacktestResult:
 
             # The level that was hit is carried alongside the fact that it was
             # hit, so "a stop was touched" and "this is the stop price" cannot
-            # drift apart — and the None checks below narrow the type for free.
+            # drift apart -- and the None checks below narrow the type for free.
             hit_stop = open_stop if stop_hit else None
             hit_target = open_target if target_hit else None
 
@@ -408,7 +408,7 @@ def _close_trade(
     exit_slippage = slip * trade.quantity * inst.contract_size * config.quote_to_account
 
     # Overnight financing. Approximated from calendar days held, which is the
-    # right order of magnitude and is charged rather than ignored — a strategy
+    # right order of magnitude and is charged rather than ignored -- a strategy
     # that holds for weeks pays for the privilege.
     days_held = max(0, (exit_time - trade.entry_time).days)
     rate = costs.swap_long_per_lot if trade.side == "buy" else costs.swap_short_per_lot
@@ -704,8 +704,8 @@ def walk_forward(
     """Run a rolling out-of-sample evaluation.
 
     Each fold tests on data that follows its training window. This does not by
-    itself prevent overfitting — choosing parameters by looking at the combined
-    walk-forward result overfits just as effectively — but it does prevent the
+    itself prevent overfitting -- choosing parameters by looking at the combined
+    walk-forward result overfits just as effectively -- but it does prevent the
     cruder error of testing on the data used to choose the parameters.
     """
     if train_bars < 100 or test_bars < 20:

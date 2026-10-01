@@ -83,8 +83,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error, notFound
 		// HTTP 500s before this case existed: the first moved the order to
 		// CANCEL_PENDING and the rest were told "illegal order state
 		// transition CANCEL_PENDING -> CANCEL_PENDING", which fell through to
-		// the default branch. The platform behaved correctly — exactly one
-		// cancel took effect — but reported the normal outcome of a race as a
+		// the default branch. The platform behaved correctly -- exactly one
+		// cancel took effect -- but reported the normal outcome of a race as a
 		// server fault, which is how a caller learns to retry something it
 		// should not.
 		writeError(w, r, http.StatusConflict, "illegal_state_transition",

@@ -9,8 +9,8 @@
 // Key versioning exists so keys can be rotated without a flag day. Every
 // ciphertext records the version of the key that produced it, so old data stays
 // readable while new data is written under the new key. The key itself lives
-// outside the database — in development an environment variable, in any real
-// deployment a KMS — so that database access alone does not yield plaintext.
+// outside the database -- in development an environment variable, in any real
+// deployment a KMS -- so that database access alone does not yield plaintext.
 package crypto
 
 import (
@@ -82,7 +82,7 @@ func (r *Keyring) ActiveVersion() int { return r.activeVersion }
 // Encrypt seals plaintext under the active key.
 //
 // associatedData is authenticated but not encrypted. Callers bind ciphertext to
-// its context with it — for example the user ID that owns a TOTP secret — so a
+// its context with it -- for example the user ID that owns a TOTP secret -- so a
 // ciphertext copied from one row to another fails to decrypt rather than
 // silently authenticating the wrong principal.
 func (r *Keyring) Encrypt(plaintext, associatedData []byte) ([]byte, error) {

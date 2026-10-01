@@ -184,7 +184,7 @@ func AssessCorrelationRisk(proposed string, side OrderSide,
 		verdict.ScaleFactor = decimal.Zero
 		verdict.Explanation = fmt.Sprintf(
 			"refused: %s is correlated with the existing %s exposure of %s at %s, "+
-				"which is at or above the rejection threshold of %s — sizing this down "+
+				"which is at or above the rejection threshold of %s, so sizing this down "+
 				"would still be adding to that position",
 			proposed, worst.InstrumentID, worst.Exposure.StringFixed(2),
 			worstScore.StringFixed(3), policy.RejectAbove.StringFixed(2))

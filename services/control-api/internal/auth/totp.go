@@ -17,7 +17,7 @@ import (
 // TOTP implements RFC 6238 time-based one-time passwords.
 //
 // The algorithm is implemented directly from the RFC because it is small,
-// fully specified and easy to test against the published vectors — the
+// fully specified and easy to test against the published vectors -- the
 // standard library provides HMAC-SHA1, which is the only primitive involved.
 // No cryptographic primitive is implemented here.
 const (

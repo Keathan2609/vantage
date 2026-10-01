@@ -96,7 +96,7 @@ func runSeed(ctx context.Context) error {
 	fmt.Println()
 	fmt.Println("Vantage development data loaded.")
 	fmt.Println()
-	fmt.Println("  DEVELOPMENT ONLY credentials — these accounts exist solely on this machine")
+	fmt.Println("  DEVELOPMENT ONLY credentials. These accounts exist solely on this machine")
 	fmt.Println("  and must never be created in any deployed environment:")
 	fmt.Println()
 	for _, u := range result.Users {

@@ -13,7 +13,7 @@
 
 /** Format a decimal string to a fixed number of places, without float maths. */
 export function decimal(value: string | undefined | null, places = 2): string {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "") return "-";
 
   const negative = value.startsWith("-");
   const unsigned = negative ? value.slice(1) : value;
@@ -56,7 +56,7 @@ export function money(
   currency: string,
   places = 2,
 ): string {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "") return "-";
   return `${decimal(value, places)} ${currency}`;
 }
 
@@ -66,7 +66,7 @@ export function signed(
   currency?: string,
   places = 2,
 ): string {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "") return "-";
   const formatted = decimal(value, places);
   const prefix = value.startsWith("-") || formatted.startsWith("-") ? "" : "+";
   return currency ? `${prefix}${formatted} ${currency}` : `${prefix}${formatted}`;
@@ -83,18 +83,18 @@ export function tone(value: string | undefined | null): "profit" | "loss" | "" {
 
 /** A fraction string ("0.0125") as a percentage ("1.25%"). */
 export function percent(value: string | undefined | null, places = 2): string {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "") return "-";
   const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) return "—";
+  if (!Number.isFinite(parsed)) return "-";
   // Percentages are presentational, so a float here cannot affect the ledger.
   return `${(parsed * 100).toFixed(places)}%`;
 }
 
 /** A ratio already expressed in percent ("12.5") as "12.5%". */
 export function percentValue(value: string | number | undefined | null, places = 2): string {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "") return "-";
   const parsed = typeof value === "number" ? value : Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) return "—";
+  if (!Number.isFinite(parsed)) return "-";
   return `${parsed.toFixed(places)}%`;
 }
 
@@ -124,28 +124,28 @@ const fullFormat = new Intl.DateTimeFormat("en-GB", {
 });
 
 export function time(iso: string | undefined | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : timeFormat.format(date);
+  return Number.isNaN(date.getTime()) ? "-" : timeFormat.format(date);
 }
 
 export function dateTime(iso: string | undefined | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : dateTimeFormat.format(date);
+  return Number.isNaN(date.getTime()) ? "-" : dateTimeFormat.format(date);
 }
 
 export function fullDateTime(iso: string | undefined | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : fullFormat.format(date);
+  return Number.isNaN(date.getTime()) ? "-" : fullFormat.format(date);
 }
 
 /** "3m ago", "in 42m". Relative time is how a trader reads freshness. */
 export function relative(iso: string | undefined | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
 
   const seconds = Math.round((date.getTime() - Date.now()) / 1000);
   const future = seconds > 0;
@@ -164,7 +164,7 @@ export function relative(iso: string | undefined | null): string {
 
 /** Seconds as a compact age, for quote freshness. */
 export function age(seconds: number | undefined): string {
-  if (seconds === undefined || !Number.isFinite(seconds)) return "—";
+  if (seconds === undefined || !Number.isFinite(seconds)) return "-";
   if (seconds < 1) return "<1s";
   if (seconds < 60) return `${seconds.toFixed(0)}s`;
   if (seconds < 3600) return `${(seconds / 60).toFixed(0)}m`;
@@ -173,7 +173,7 @@ export function age(seconds: number | undefined): string {
 
 /** Turn a snake_case code into readable words. */
 export function humanise(value: string | undefined | null): string {
-  if (!value) return "—";
+  if (!value) return "-";
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -218,6 +218,6 @@ export function statusTone(value: string | undefined | null): "ok" | "warn" | "b
 
 /** A short id for display, with the full value kept for the title attribute. */
 export function shortId(id: string | undefined | null): string {
-  if (!id) return "—";
+  if (!id) return "-";
   return id.length <= 10 ? id : `${id.slice(0, 8)}…`;
 }

@@ -146,16 +146,16 @@ export default function CalendarPage() {
                           </td>
                           <td className="mono">{event.Currency}</td>
                           <td>{event.EventName}</td>
-                          <td className="mono right">{event.Actual ?? "—"}</td>
-                          <td className="mono right muted">{event.Forecast ?? "—"}</td>
-                          <td className="mono right muted">{event.Previous ?? "—"}</td>
+                          <td className="mono right">{event.Actual ?? "-"}</td>
+                          <td className="mono right muted">{event.Forecast ?? "-"}</td>
+                          <td className="mono right muted">{event.Previous ?? "-"}</td>
                           <td>
                             {blackout ? (
                               <span className="badge" data-tone="bad">
                                 blocking
                               </span>
                             ) : (
-                              <span className="tiny muted">—</span>
+                              <span className="tiny muted"> · </span>
                             )}
                           </td>
                         </tr>
@@ -204,9 +204,9 @@ export default function CalendarPage() {
                         <td className="mono tiny muted">
                           {(item.RelatedInstruments ?? []).join(", ") ||
                             (item.RelatedCurrencies ?? []).join(", ") ||
-                            "—"}
+                            "-"}
                         </td>
-                        <td className="mono tiny muted">{item.Sentiment ?? "—"}</td>
+                        <td className="mono tiny muted">{item.Sentiment ?? "-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -254,7 +254,7 @@ export default function CalendarPage() {
               <p className="small muted" style={{ marginBottom: 0 }}>
                 The blackout applies to <strong>automated</strong> orders. A manual order is
                 allowed through with the event shown, because refusing to let a person out
-                during a release would be a risk control that creates risk — and an operator
+                during a release would be a risk control that creates risk, and an operator
                 who can see the event can decide for themselves.
               </p>
             </div>

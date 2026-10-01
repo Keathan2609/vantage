@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Account security: sessions, password, multi-factor enrolment, and — for an
- * administrator — users and audit-chain verification.
+ * Account security: sessions, password, multi-factor enrolment, and -- for an
+ * administrator -- users and audit-chain verification.
  *
  * The enrolment secret and recovery codes are shown exactly once, in this
  * page's memory, and are never written to storage the browser keeps. They are
@@ -207,9 +207,9 @@ export default function SecurityPage() {
                 <tbody>
                   {rows.map((item) => (
                     <tr key={item.id}>
-                      <td className="mono">{item.ip_address ?? "—"}</td>
+                      <td className="mono">{item.ip_address ?? "-"}</td>
                       <td className="truncate muted small" title={item.user_agent}>
-                        {item.user_agent ?? "—"}
+                        {item.user_agent ?? "-"}
                         {item.current ? (
                           <span className="badge" data-tone="accent" style={{ marginLeft: 6 }}>
                             this session
@@ -283,7 +283,7 @@ export default function SecurityPage() {
                       <code className="mono tiny wrap">{enrolment.provisioning_uri}</code>
                     </div>
                     <div className="field">
-                      <label>Recovery codes — shown once</label>
+                      <label>Recovery codes, shown once</label>
                       <div className="mono small" style={{ lineHeight: 1.7 }}>
                         {enrolment.recovery_codes.join("  ")}
                       </div>
@@ -450,7 +450,7 @@ export default function SecurityPage() {
                 {busy ? "Working…" : "Change password"}
               </button>
               <p className="tiny muted" style={{ marginTop: 8, marginBottom: 0 }}>
-                Passwords are hashed with Argon2id — memory-hard, so a stolen hash is
+                Passwords are hashed with Argon2id, which is memory hard, so a stolen hash is
                 expensive to attack with hardware that makes short work of a fast hash.
                 Changing the password revokes every other session.
               </p>
@@ -461,11 +461,11 @@ export default function SecurityPage() {
             <div className="panel-body">
               <dl className="kv">
                 <dt>Signed in as</dt>
-                <dd>{session?.user.email ?? "—"}</dd>
+                <dd>{session?.user.email ?? "-"}</dd>
                 <dt>Role</dt>
                 <dd>{humanise(session?.user.role)}</dd>
                 <dt>Session expires</dt>
-                <dd>{session ? relative(session.expires_at) : "—"}</dd>
+                <dd>{session ? relative(session.expires_at) : "-"}</dd>
               </dl>
               <table>
                 <thead>
@@ -489,7 +489,7 @@ export default function SecurityPage() {
                   <tr>
                     <td>ADMIN</td>
                     <td className="muted">
-                      user administration and audit verification — <strong>not</strong> trading
+                      user administration and audit verification, <strong>not</strong> trading
                     </td>
                   </tr>
                 </tbody>

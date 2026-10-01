@@ -126,7 +126,7 @@ func baseInput() Input {
 		Limits: healthyLimits(),
 		// An authority is always present in the running pipeline. Leaving it at
 		// its zero value would make min(limit, authority) zero and refuse
-		// everything — fail-closed, and correct, but not what this fixture is
+		// everything -- fail-closed, and correct, but not what this fixture is
 		// exercising.
 		Authority: domain.TradingAuthority{
 			AccountID: accountID, Mode: domain.ModePaper,
@@ -687,7 +687,7 @@ func TestAnOverClosingSideFlipDoesNotSkipTheExposureChecks(t *testing.T) {
 	//
 	// `reducing` used to mean only "opposite side". An account long 0.08 could
 	// therefore SELL 5.00 lots and skip the gross-exposure, per-instrument and
-	// concentration checks completely — 0.08 of that is a close and 4.92 is a
+	// concentration checks completely -- 0.08 of that is a close and 4.92 is a
 	// large new short position, taken with the exposure limits switched off.
 	//
 	// A side flip is not a reduction and must be measured like any other new

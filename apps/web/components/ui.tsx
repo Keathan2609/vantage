@@ -103,7 +103,7 @@ export function Stat({
   sub?: ReactNode;
   tone?: "profit" | "loss" | "";
   /**
-   * A change against a stated comparison — "+2.4%", "-18 bps", "3 fewer".
+   * A change against a stated comparison -- "+2.4%", "-18 bps", "3 fewer".
    *
    * Pre-formatted by the caller and never computed here: a component that did
    * its own arithmetic on money would have to parse a decimal string into a
@@ -115,7 +115,7 @@ export function Stat({
    */
   delta?: string;
   /**
-   * Whether the delta is good or bad — which is NOT the same as whether it is
+   * Whether the delta is good or bad -- which is NOT the same as whether it is
    * positive. A rising spread, a rising rejection rate and a rising drawdown
    * are all increases and all bad, and colouring them green because they carry
    * a plus sign would be actively misleading.

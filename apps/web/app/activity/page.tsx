@@ -6,9 +6,9 @@
  * Three different records, kept visibly distinct because they answer different
  * questions:
  *
- *   activity  — what happened, in one stream, for a human catching up
- *   decisions — why an order was or was not placed, with its inputs
- *   audit     — the hash-chained record of who did what, for evidence
+ *   activity  -- what happened, in one stream, for a human catching up
+ *   decisions -- why an order was or was not placed, with its inputs
+ *   audit     -- the hash-chained record of who did what, for evidence
  *
  * The audit panel shows the chain link explicitly. It is tamper *evidence*:
  * altering a row breaks every hash after it, which is detectable. It is not
@@ -159,8 +159,8 @@ export default function ActivityPage() {
         <>
           <Notice>
             One row per decision, including the ones that produced no order. A system that
-            only records what it did cannot answer the more useful question — why it did not
-            act — and that question is the common one on a small account.
+            only records what it did cannot answer the more useful question, which is why it did not
+            act, and that question is the common one on a small account.
           </Notice>
 
           <Panel title="Decision snapshots" note={`${decisionRows.length} record(s)`} flush>
@@ -228,7 +228,7 @@ export default function ActivityPage() {
                             />
                           </td>
                           <td className="wrap muted small" title={decision.OutcomeCode}>
-                            {decision.OutcomeReason ?? decision.OutcomeCode ?? "—"}
+                            {decision.OutcomeReason ?? decision.OutcomeCode ?? "-"}
                           </td>
                           <td
                             className="mono right muted"
@@ -253,7 +253,7 @@ export default function ActivityPage() {
                 the outcome. Enough to reconstruct the decision without re-running it.
               </p>
               <p className="small muted" style={{ marginBottom: 0 }}>
-                No secret material is ever written into a snapshot — no credentials, no tokens,
+                No secret material is ever written into a snapshot: no credentials, no tokens,
                 no broker login. A snapshot is meant to be readable by anyone reviewing the
                 system, which is only safe if it never contains anything that grants access.
               </p>
@@ -282,7 +282,7 @@ export default function ActivityPage() {
             title="Audit trail"
             note={`${auditRows.length} event(s)${
               auditRows.length > 0
-                ? ` · sequence ${auditRows[auditRows.length - 1]?.Sequence}–${auditRows[0]?.Sequence}`
+                ? ` · sequence ${auditRows[auditRows.length - 1]?.Sequence} to ${auditRows[0]?.Sequence}`
                 : ""
             }`}
             actions={<button onClick={audit.reload}>Refresh</button>}
@@ -341,7 +341,7 @@ export default function ActivityPage() {
               <p className="small muted" style={{ marginTop: 0 }}>
                 Authentication attempts, session changes, order submissions and rejections,
                 risk-limit changes, trading-authority grants and revocations, kill-switch
-                activations, reconciliation runs, and strategy or model lifecycle changes —
+                activations, reconciliation runs, and strategy or model lifecycle changes --
                 each with the actor, the target, the result and the reason.
               </p>
               <p className="small muted" style={{ marginBottom: 0 }}>

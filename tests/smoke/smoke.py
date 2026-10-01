@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """End-to-end smoke test for a running Vantage control plane.
 
-This exercises the control plane the way a client does — over HTTP, with
-cookies and CSRF — and asserts the platform's SAFETY properties, not just its
+This exercises the control plane the way a client does -- over HTTP, with
+cookies and CSRF -- and asserts the platform's SAFETY properties, not just its
 happy path:
 
   * a trade completes end to end and lands in the ledger and the position book
@@ -161,7 +161,7 @@ def wait_for_tradable_feed(client: "Client", instrument_id: str, seconds: int = 
     reseed there is a window in which the newest quote is older than the
     staleness threshold, and the risk engine correctly refuses an order
     against it. Waiting here keeps the suite deterministic without weakening
-    the check being exercised — a feed that never becomes healthy is still a
+    the check being exercised -- a feed that never becomes healthy is still a
     failure, reported as one.
     """
     deadline = time.time() + seconds
@@ -331,7 +331,7 @@ def main() -> int:
     section("Setup: flatten any existing exposure")
     # Repeated smoke runs accumulate positions, and an account at its exposure
     # limit correctly refuses new orders. Starting from flat is what makes the
-    # order-path assertions meaningful — and it exercises Flatten, which is the
+    # order-path assertions meaningful -- and it exercises Flatten, which is the
     # deliberate, separately-confirmed way to close a position.
     status, payload = trader.get(f"/positions?account_id={account_id}")
     existing = payload.get("positions") or []
@@ -516,7 +516,7 @@ def main() -> int:
         c["name"] for c in (payload.get("risk") or {}).get("checks", []) if not c["passed"]
     ]
     # The engine runs EVERY check and reports all failures, so the headline
-    # rejection code is whichever failed first — by now an earlier position may
+    # rejection code is whichever failed first -- by now an earlier position may
     # already be consuming exposure. What matters is that the stop-loss rule is
     # among the failures, not that it happens to be the one quoted.
     check(
@@ -587,7 +587,7 @@ def main() -> int:
     check(
         "a viewer cannot read another user's account",
         status == 404,
-        f"status {status} — cross-tenant read must be refused",
+        f"status {status} -- cross-tenant read must be refused",
     )
 
     status, payload = viewer.get(f"/accounts/{account_id}/transactions")

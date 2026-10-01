@@ -1,6 +1,6 @@
 # Order lifecycle
 
-Every order — manual, strategy-generated or autopilot — passes through the same
+Every order -- manual, strategy-generated or autopilot -- passes through the same
 ordered sequence of gates in `internal/oms`. There is no second entry point and
 no internal bypass, because nothing outside that package holds a
 `BrokerAdapter`.
@@ -22,14 +22,14 @@ no internal bypass, because nothing outside that package holds a
 | 11 | Risk checks | `risk_limit_breached` and the specific codes in `docs/RISK_ENGINE.md` |
 | 12 | Idempotency claim | `duplicate_command`, `idempotency_key_payload_mismatch` |
 | 13 | Optimistic version check | `stale_object_version` |
-| 14 | Persistence | — |
+| 14 | Persistence | -- |
 | 15 | Broker adapter | `broker_rejected`, `broker_unavailable` |
-| 16 | Result normalisation | — |
-| 17 | Portfolio and ledger update | — |
-| 18 | Audit event | — |
-| 19 | Metrics and observability | — |
+| 16 | Result normalisation | -- |
+| 17 | Portfolio and ledger update | -- |
+| 18 | Audit event | -- |
+| 19 | Metrics and observability | -- |
 
-Gates 1–11 are read-only. Nothing is written until gate 12, so a refused order
+Gates 1 -- 11 are read-only. Nothing is written until gate 12, so a refused order
 costs one transaction and produces a stored rejection with its reason rather
 than a silent 4xx.
 
@@ -38,7 +38,7 @@ than a silent 4xx.
 ```
 Phase A   read-only validation and the risk decision
 Phase B   ONE transaction: claim the idempotency key; persist the order and its
-          decision snapshot — or persist the rejection and stop
+          decision snapshot -- or persist the rejection and stop
 Phase C   the broker call, with NO database transaction open
 Phase D   ONE transaction: apply the venue's answer to orders, fills,
           positions, the ledger and the audit log
@@ -47,8 +47,8 @@ Phase D   ONE transaction: apply the venue's answer to orders, fills,
 The split is the point. Holding a transaction open across the broker call would
 put a network round trip inside a lock on financial rows: one slow venue and
 every other order queues behind it. Splitting them means a crash between C and
-D leaves the order in a known, recoverable state — `FAILED`, awaiting
-reconciliation — rather than a lock nobody can clear.
+D leaves the order in a known, recoverable state -- `FAILED`, awaiting
+reconciliation -- rather than a lock nobody can clear.
 
 ## Idempotency
 
@@ -64,7 +64,7 @@ tag, err := tx.Exec(ctx, `INSERT INTO command_idempotency (...) VALUES (...)
 if tag.RowsAffected() == 1 {
     return nil, nil // freshly claimed; this request owns the order
 }
-// otherwise: someone else claimed it — load and replay their result
+// otherwise: someone else claimed it -- load and replay their result
 ```
 
 `ON CONFLICT DO NOTHING` rather than catching a unique-violation error, because
@@ -75,7 +75,7 @@ turns every duplicate into a 500. This was a real defect during development,
 found by the smoke suite.
 
 Payload hashing closes the other half. The same key with a *different* payload
-is `idempotency_key_payload_mismatch`, not a replay of the first order — a
+is `idempotency_key_payload_mismatch`, not a replay of the first order -- a
 client that changed the size but reused the key gets an error rather than a
 surprise.
 
@@ -100,7 +100,7 @@ CREATED ──▶ VALIDATING ──▶ ACCEPTED ──▶ SUBMITTED ──▶ PA
 Two transitions deserve explanation, and both are in the code's own comments:
 
 **`SUBMITTED → FAILED`.** `FAILED` does not mean "did not happen". It means
-**Vantage does not know the broker-side outcome** — the request went out and
+**Vantage does not know the broker-side outcome** -- the request went out and
 the answer was lost. It is therefore *not terminal*: reconciliation resolves it
 against venue state, and the order can move to `FILLED` if that is what
 actually happened.
@@ -120,7 +120,7 @@ whether a retry is ever safe:
 
 | Category | Meaning | Result | Retry? |
 | --- | --- | --- | --- |
-| Definitive rejection | The venue said no (bad symbol, insufficient margin, market closed) | `REJECTED` with the venue's reason | Safe — nothing happened |
+| Definitive rejection | The venue said no (bad symbol, insufficient margin, market closed) | `REJECTED` with the venue's reason | Safe -- nothing happened |
 | Unknown outcome | Timeout, connection reset, malformed response | `FAILED` | **Never automatically** |
 
 Retrying an unknown outcome is how one intended trade becomes two positions.
@@ -158,7 +158,7 @@ caught.
 
 Recovery therefore has its own table, `domain.CanRepairTransition`. Every
 normal transition is also a legal repair; the converse does not hold. Leaving a
-terminal state stays forbidden either way — a FILLED order does not become
+terminal state stays forbidden either way -- a FILLED order does not become
 CANCELLED because a snapshot disagreed.
 
 Every repair is stamped `is_repair` in `order_state_transitions` and names the
@@ -170,7 +170,7 @@ venue told us at the time" from "we reconstructed this afterwards". See
 
 The OMS re-reads the reconciliation halt **inside** the transaction that
 persists the order, after taking the account row lock a repair also takes. An
-automated order is then refused with `reconciliation_required` — a temporary
+automated order is then refused with `reconciliation_required` -- a temporary
 refusal, not a verdict on the order: nothing is wrong with what was asked for,
 and the same request is accepted once the account's records are known to agree
 with the venue. Its idempotency key stays free for that retry.
@@ -183,8 +183,8 @@ A fill is recorded once. `fills_broker_fill_uniq` makes the venue's fill id
 unique per order, so a duplicated callback or a re-read during reconciliation
 cannot double-count.
 
-Each fill produces ledger entries in `transactions` — the fill itself,
-commission, and swap where applicable — each with a per-account sequence number
+Each fill produces ledger entries in `transactions` -- the fill itself,
+commission, and swap where applicable -- each with a per-account sequence number
 enforced gapless by `transactions_account_sequence_uniq`. Balance is the
 ledger's running total, never a separately maintained field that could drift.
 
@@ -227,8 +227,8 @@ open quantity, through the same nineteen gates. It carries
 ### A risk control must never prevent reducing risk
 
 This paragraph used to say a flatten carries `source = manual`, and used that
-to explain why the event-risk blackout does not block it. That was **wrong** —
-`risk_control` is not `manual` — and the error was not academic: during a
+to explain why the event-risk blackout does not block it. That was **wrong** --
+`risk_control` is not `manual` -- and the error was not academic: during a
 high-impact release an operator could not close a position, refused with
 `event_risk_blackout`, in exactly the window when they most want out.
 
@@ -244,8 +244,8 @@ It was the third instance of one mistake. The other two:
 The general rule, now stated in `internal/risk/engine.go` and asserted by
 tests: **a check whose purpose is to LIMIT exposure or loss must never refuse
 an order that strictly reduces exposure.** Checks about whether trading is
-possible at all — account enabled, instrument tradable, market open, feed
-healthy, kill switch, authority — still apply, because without them there is
+possible at all -- account enabled, instrument tradable, market open, feed
+healthy, kill switch, authority -- still apply, because without them there is
 no price to close at.
 
 "Strictly reducing" means the order is on the opposite side of an existing
@@ -254,7 +254,7 @@ let an account long 0.08 lots sell 5.00 and skip the exposure checks entirely,
 because 0.08 of that is a close and 4.92 is a large new short. A side flip is
 not a reduction and is measured like any other new exposure.
 
-Manual orders remain exempt from the blackout for the original reason — the
-operator has been told and is deciding anyway — and an automated strategy still
+Manual orders remain exempt from the blackout for the original reason -- the
+operator has been told and is deciding anyway -- and an automated strategy still
 cannot **open** a position through a release, which is what the blackout is
 for.

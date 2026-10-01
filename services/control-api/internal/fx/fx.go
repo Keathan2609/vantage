@@ -5,8 +5,8 @@
 // money in play, and every crossing between them passes through this package,
 // which records the rate it used and refuses to guess when it has none.
 //
-// The alternative — treating a number as "just a number" once it leaves the
-// database — is how a 500 ZAR account ends up believing it can support a
+// The alternative -- treating a number as "just a number" once it leaves the
+// database -- is how a 500 ZAR account ends up believing it can support a
 // position sized in dollars.
 package fx
 

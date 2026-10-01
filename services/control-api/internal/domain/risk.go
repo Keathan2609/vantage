@@ -125,7 +125,7 @@ const (
 	// priced.
 	//
 	// An unpriced position contributes NOTHING to unrealised P&L, margin used
-	// or gross exposure — `portfolio.aggregate` counts it and skips it — so
+	// or gross exposure -- `portfolio.aggregate` counts it and skips it -- so
 	// every exposure and loss ceiling below is computed against a book that is
 	// missing a position. The numbers do not look wrong; they look good. A
 	// stale FX rate is enough to cause it.

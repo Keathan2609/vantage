@@ -47,8 +47,8 @@ approach.
 
 It is included so its failure mode can be **measured** rather than argued
 about: backtest it, look at the maximum drawdown, and see the account
-liquidation. It cannot be enabled for execution — the API refuses it and a
-database constraint refuses the row that would allow it — and the UI labels it
+liquidation. It cannot be enabled for execution -- the API refuses it and a
+database constraint refuses the row that would allow it -- and the UI labels it
 as high risk everywhere it appears.
 
 ## Signal shape
@@ -86,13 +86,13 @@ the most common source of a backtest that cannot be reproduced in practice.
 
 Every indicator is tested for the property that its value at bar *i* depends
 only on bars ≤ *i*. The test truncates the series at each index, recomputes,
-and asserts the value is unchanged — 13 indicators are covered.
+and asserts the value is unchanged -- 13 indicators are covered.
 
 Two specific traps are handled:
 
 - **Donchian channels exclude the current bar.** A breakout compared against a
   channel that includes the current bar's own high can never break out, or
-  always does, depending on the comparison — either way it is not a breakout.
+  always does, depending on the comparison -- either way it is not a breakout.
 - **Only completed bars are served.** The still-forming bar is excluded by the
   market-data layer, so a signal could actually have been acted on at the time
   it claims.
@@ -106,12 +106,12 @@ EXPERIMENTAL ──▶ BACKTESTED ──▶ VALIDATED ──▶ PAPER ──▶ 
 | Stage | Requires |
 | --- | --- |
 | `BACKTESTED` | A stored backtest for that exact strategy version |
-| `VALIDATED` | An out-of-sample or walk-forward result — in-sample is not evidence of an edge |
+| `VALIDATED` | An out-of-sample or walk-forward result -- in-sample is not evidence of an edge |
 | `PAPER` | Promotion from `VALIDATED`; this build's ceiling |
 | `DEMO`, `LIVE` | Refused by the API, by the domain, and by `strategy_versions_paper_ceiling_ck` |
 
 Promotion advances **one stage at a time** and each step needs evidence
-attached to the *version*, not the strategy — editing parameters produces a new
+attached to the *version*, not the strategy -- editing parameters produces a new
 version, and the new version has no backtest until one is run. That is what
 stops a promoted strategy from being quietly changed after promotion.
 
@@ -121,14 +121,14 @@ can a model. Every change is written to `strategy_lifecycle_history`
 
 ## Evaluation
 
-Manual, from the Strategies page: pick a strategy, evaluate. Two modes —
+Manual, from the Strategies page: pick a strategy, evaluate. Two modes --
 signal-only, or evaluate and route into the pipeline. Both store a decision
 snapshot; the second may produce an order.
 
 Automated, from the scheduler: every 30 seconds, under a lease so two instances
 cannot double-run. Before asking for a signal the orchestrator refuses for
 account lifecycle, market session, reconciliation state, data health, authority
-and kill switches — the refusals are recorded, so a quiet system can be
+and kill switches -- the refusals are recorded, so a quiet system can be
 distinguished from a stopped one.
 
 Each run is recorded in `strategy_runs` with its outcome; signals land in
@@ -140,7 +140,7 @@ erroring for a day becomes visible.
 
 `internal/quant/client.go` calls the research service with a bearer token, a
 timeout, and a circuit breaker. When the breaker is open, or the call fails, or
-the response does not parse, the answer is **no signal** — never "proceed
+the response does not parse, the answer is **no signal** -- never "proceed
 without the filter".
 
 The trust flows one way. The research service holds no credential pointing back
@@ -168,7 +168,7 @@ downstream re-examines that: a discarded opinion never reaches the vote, never
 reaches risk, and never becomes an order.
 
 No PAPER-promoted strategy declares itself valid in `UNKNOWN`. An UNKNOWN
-verdict is therefore not a soft outcome — it is a guaranteed NO TRADE for that
+verdict is therefore not a soft outcome -- it is a guaranteed NO TRADE for that
 bar, whatever the strategies saw. A live decision snapshot showed exactly that:
 `macd_momentum` produced a `sell` at confidence 0.619, comfortably above the
 policy floor, and the record read
@@ -181,32 +181,32 @@ survived the policy`.
 ### The band that had no branch
 
 `classify_regime` decided TRENDING (ADX above 25 **and** displacement), RANGING
-(ADX below 20), and RANGING again for ADX above 25 that was going nowhere — on
+(ADX below 20), and RANGING again for ADX above 25 that was going nowhere -- on
 the stated reasoning that displacement, not ADX, is what separates a trend from
 an oscillation.
 
 ADX between 20 and 25 had no branch and fell through to UNKNOWN. Measured
 across the sixteen generated market conditions, that fallthrough took **9.5% of
-all decision points**, and the band matched ADX 20–25 almost exactly (9.6%).
+all decision points**, and the band matched ADX 20 -- 25 almost exactly (9.6%).
 
 It was also inconsistent. The same market going nowhere was called RANGING at
-ADX 30 and unclassifiable at ADX 22 — the *less* directional reading getting
+ADX 30 and unclassifiable at ADX 22 -- the *less* directional reading getting
 the more conservative treatment. The band's measured efficiency confirms which
 population it belongs to:
 
 | label | n | median efficiency | share ≥ 0.30 |
 |---|---|---|---|
-| UNKNOWN band (ADX 20–25) | 248 | 0.203 | 29.4% |
+| UNKNOWN band (ADX 20 -- 25) | 248 | 0.203 | 29.4% |
 | RANGING | 1188 | 0.154 | 3.7% |
 | TRENDING | 1109 | 0.511 | 100% |
 
 The same rule now applies in the band: going nowhere is a range. What remains
-UNKNOWN is the genuinely ambiguous part — price getting somewhere while ADX has
+UNKNOWN is the genuinely ambiguous part -- price getting somewhere while ADX has
 not confirmed it, which an emerging trend and a false start look like alike,
 and which is exactly when a mean-reversion strategy must not be told it is safe.
 
 Effect, measured on the same data: UNKNOWN 9.5% → 2.7%, RANGING 45.0% → 51.8%,
-**TRENDING unchanged at 42.9%** — the trend definition was not loosened.
+**TRENDING unchanged at 42.9%** -- the trend definition was not loosened.
 
 ### What this does and does not claim
 

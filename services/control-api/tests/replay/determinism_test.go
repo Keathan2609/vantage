@@ -196,7 +196,7 @@ func TestDeterminismAcrossScenarioClasses(t *testing.T) {
 						i, describeDigest(components, counts),
 						describeDigest(firstComponents, firstCounts))
 				}
-				t.Logf("run %d digest %s — identical", i, digest[:16])
+				t.Logf("run %d digest %s -- identical", i, digest[:16])
 			}
 
 			// A digest over an empty account is identical for a trivial

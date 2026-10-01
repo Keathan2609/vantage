@@ -321,7 +321,7 @@ func (s *TradingStore) TransitionOrderTx(ctx context.Context, tx pgx.Tx, orderID
 // carry a code, and an order that says REJECTED with no reason is unusable as
 // evidence. Reconciliation hit this: it moved a FAILED order the venue had no
 // record of to REJECTED without a code, the constraint refused the write, and
-// the whole reconciliation run failed — which permanently blocked automated
+// the whole reconciliation run failed -- which permanently blocked automated
 // trading for the account, in exactly the recovery path the FAILED state
 // exists to serve.
 func (s *TradingStore) TransitionOrderWithCodeTx(ctx context.Context, tx pgx.Tx, orderID uuid.UUID,
@@ -544,7 +544,7 @@ func (s *TradingStore) AppendFillTx(ctx context.Context, tx pgx.Tx, f domain.Fil
 	if source == "" {
 		// Defaulting rather than refusing, because the column has a default and
 		// an unset value from an older call site means "an ordinary execution
-		// response" — which is what it was before provenance was recorded.
+		// response" -- which is what it was before provenance was recorded.
 		source = "execution_response"
 	}
 

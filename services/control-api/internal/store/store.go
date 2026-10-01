@@ -124,7 +124,7 @@ func mapError(err error) error {
 			// Classified explicitly, because it was previously unclassified
 			// and therefore surfaced as a bare HTTP 500 on order placement.
 			// A deadlocked transaction is rolled back WHOLE, so nothing was
-			// written — but see the note on ErrDeadlock: whether it is safe to
+			// written -- but see the note on ErrDeadlock: whether it is safe to
 			// retry depends entirely on which phase it happened in, and only
 			// the caller knows that.
 			return fmt.Errorf("%w: %s", ErrDeadlock, pgErr.Message)

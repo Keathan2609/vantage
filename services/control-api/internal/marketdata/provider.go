@@ -71,7 +71,7 @@ func (i *Ingestor) SetAggregator(a *Aggregator) {
 
 // Alerter is the subset of internal/notify the ingestor needs. Declared here
 // rather than imported so marketdata does not depend on notify, which depends
-// on store — the dependency would point outwards.
+// on store -- the dependency would point outwards.
 type Alerter interface {
 	FeedDegraded(ctx context.Context, instrumentID, symbol, state string, issues []string, ageSeconds float64)
 	FeedRecovered(ctx context.Context, instrumentID, symbol string)
@@ -281,7 +281,7 @@ func (i *Ingestor) setHealth(h domain.MarketDataHealth) {
 // The path is NOT a claim about how gold behaves. It is a bounded random walk
 // with a session-dependent spread and volatility, built so that indicators,
 // risk checks and the execution simulator all receive input with the right
-// SHAPE — a two-sided book that widens outside liquid hours, prices that gap
+// SHAPE -- a two-sided book that widens outside liquid hours, prices that gap
 // occasionally, and no impossible values.
 //
 // Seeded with the same value it produces the same path, so tests and demos are
@@ -301,7 +301,7 @@ type walkState struct {
 }
 
 // StartingPrices seed the walk. XAUUSD near recent levels, majors near parity
-// conventions — approximate values chosen so that lot sizes, margin and the
+// conventions -- approximate values chosen so that lot sizes, margin and the
 // R500 account example all exercise realistic arithmetic.
 var StartingPrices = map[string]float64{
 	"XAUUSD":   2650.00,
@@ -451,7 +451,7 @@ func (m *MockProvider) sessionSpread(now time.Time) decimal.Decimal {
 //
 // Bars are only produced for periods the market was actually open, so a
 // backtest cannot trade a weekend, and the OHLC relationships are constructed
-// to be internally coherent — which the database also enforces.
+// to be internally coherent -- which the database also enforces.
 func (m *MockProvider) HistoricalBars(ctx context.Context, inst domain.Instrument, tf domain.Timeframe, from, to time.Time) ([]domain.Bar, error) {
 	dur, err := tf.Duration()
 	if err != nil {
@@ -553,7 +553,7 @@ func (m *MockProvider) HistoricalBars(ctx context.Context, inst domain.Instrumen
 }
 
 // SetPrice forces an instrument's price. Tests use it to drive a specific
-// scenario — a gap, a stop being touched — instead of waiting for the walk.
+// scenario -- a gap, a stop being touched -- instead of waiting for the walk.
 func (m *MockProvider) SetPrice(instrumentID string, price float64, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

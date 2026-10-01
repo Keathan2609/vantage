@@ -10,7 +10,7 @@
 #
 # Both of these are inside pip's own `_vendor` tree in the research image. They
 # are not application dependencies, are not importable by the application, and
-# are only reachable while pip itself is running — which the service never does
+# are only reachable while pip itself is running -- which the service never does
 # at runtime. They are present in the CURRENT pip (26.2.1), so there is no
 # newer pip that resolves them.
 #

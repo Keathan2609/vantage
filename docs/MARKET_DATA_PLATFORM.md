@@ -9,7 +9,7 @@ This covers historical acquisition, storage, provenance and the chart.
 
 ```
 Twelve Data
-    ↓            (server side only — the browser never gets here)
+    ↓            (server side only -- the browser never gets here)
 TwelveDataProvider
     ↓            marketdata.Provider, the same seam as mock and replay
 Syncer           chunk → fetch → validate → store → record provenance
@@ -49,7 +49,7 @@ configuration digest. Tests pin all four.
 ## The provider URL is configuration, never a parameter
 
 Fixed at construction, validated as an https origin with no path or query.
-Redirects are refused — following one would carry the API key to wherever the
+Redirects are refused -- following one would carry the API key to wherever the
 provider pointed. Nothing in the request path is built from client input: a
 caller names an instrument, a timeframe and a range, and never a URL.
 
@@ -57,7 +57,7 @@ caller names an instrument, a timeframe and a range, and never a URL.
 
 Vantage says `XAUUSD`. Twelve Data says `XAU/USD`. A broker will say something
 else. The translation happens at the provider boundary in both directions, and
-everything upstream speaks canonical ids only — otherwise changing provider
+everything upstream speaks canonical ids only -- otherwise changing provider
 stops being configuration and becomes a search-and-replace.
 
 The mapping is an explicit table, not a transformation. "Insert a slash before
@@ -77,7 +77,7 @@ research about another.
 | `SYNC` | everything after the newest stored bar |
 | `REPAIR` | the gaps, and nothing else |
 
-Everything after that — chunking, fetching, validating, storing, recording — is
+Everything after that -- chunking, fetching, validating, storing, recording -- is
 shared. Three copies of "fetch and store" would drift and only one would get
 the fix.
 
@@ -87,7 +87,7 @@ request at exactly the limit cannot distinguish "this is all there is" from
 
 Rate limiting is a fixed window, deliberately under the plan's allowance.
 Reacting to 429s instead would make being throttled the normal operating mode,
-and a throttled provider reads downstream as an outage. Retries are bounded —
+and a throttled provider reads downstream as an outage. Retries are bounded --
 never infinite, because a provider that is down stays down and an unbounded
 retry turns one outage into an outage plus a request flood.
 
@@ -104,8 +104,8 @@ four years were asked for and are not there.
 
 ## Idempotent by construction
 
-`market_bars` has `PRIMARY KEY (instrument_id, timeframe, open_time)` — that IS
-the canonical bar identity — and ingestion upserts on it. Fetching the same
+`market_bars` has `PRIMARY KEY (instrument_id, timeframe, open_time)` -- that IS
+the canonical bar identity -- and ingestion upserts on it. Fetching the same
 period twice cannot produce a duplicate.
 
 Stored and duplicate counts are tracked separately, because a backfill
@@ -116,7 +116,7 @@ hide that it did no work.
 
 The venue shuts every weekend and for an hour each weekday. Reporting those as
 missing data makes a complete dataset look riddled with holes and buries the
-one real gap among fifty weekends — the store's gap query is deliberately
+one real gap among fifty weekends -- the store's gap query is deliberately
 structural, and the classification happens where a market clock exists.
 
 On the current development data: 0 real gaps, 27 closed-market absences.
@@ -136,7 +136,7 @@ developer's locale is not a property of the market.
 ## Research datasets are immutable identities
 
 A research run that says "XAUUSD 1h from 2020 to 2024" references a *mutable*
-thing — the next sync appends bars and the run stops being reproducible while
+thing -- the next sync appends bars and the run stops being reproducible while
 looking identical. A snapshot fixes an identity: instrument, timeframe,
 provider, range, normalization version and a deterministic hash of the bars.
 
@@ -166,7 +166,7 @@ inherited silently by every conclusion drawn from it.
 
 The research plane is Python and does not touch the control plane's database
 (ENGINEERING_GUIDE.md rule 5), so a snapshot is materialised as a CSV in the allowlisted
-research directory. A CSV cannot say what it is — and the Python importer
+research directory. A CSV cannot say what it is -- and the Python importer
 previously assumed everything in that directory was `HISTORICAL_MARKET`, which
 is right for a file an operator placed by hand and wrong for a snapshot Vantage
 exported from generated bars. The same defect, one process boundary away.
@@ -197,7 +197,7 @@ trades.
 
 ## RBAC
 
-Reading is broadly permitted — an operator who cannot see what data the
+Reading is broadly permitted -- an operator who cannot see what data the
 platform holds cannot interpret anything built on it. Acquiring is ADMIN:
 each call spends a metered external quota and writes to the bar series every
 strategy reads. The role is enforced by the router group, not by a check inside

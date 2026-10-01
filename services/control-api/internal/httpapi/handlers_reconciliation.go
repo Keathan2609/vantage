@@ -243,8 +243,8 @@ func (s *Server) handleReconciliationIssue(w http.ResponseWriter, r *http.Reques
 
 // handleOperationsOverview is the system-wide operations view.
 //
-// Answers the question an operator actually has — "is anything stopped, and
-// why" — in one call, rather than requiring a walk over accounts.
+// Answers the question an operator actually has -- "is anything stopped, and
+// why" -- in one call, rather than requiring a walk over accounts.
 func (s *Server) handleOperationsOverview(w http.ResponseWriter, r *http.Request) {
 	p, _ := principalFrom(r.Context())
 

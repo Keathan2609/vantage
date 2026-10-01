@@ -7,7 +7,7 @@ import { VantageProvider } from "@/lib/store";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Vantage — Paper Trading Terminal",
+  title: "Vantage | Paper Trading Terminal",
   description:
     "Algorithmic trading, quantitative research and risk control. Paper execution only.",
   // The terminal is not a public page and has nothing to gain from being

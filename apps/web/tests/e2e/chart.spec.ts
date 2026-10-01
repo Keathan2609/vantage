@@ -5,7 +5,7 @@ import { signIn } from "./fixtures";
 /**
  * The chart, and the provenance beside it.
  *
- * What matters here is not that a canvas appears — it is that the canvas is
+ * What matters here is not that a canvas appears -- it is that the canvas is
  * fed by VANTAGE and says so. A chart that renders beautifully from a source
  * the operator cannot identify is worse than no chart, because it invites
  * trust it has not earned.
@@ -80,7 +80,7 @@ test.describe("the price chart", () => {
     page,
   }) => {
     // With no TWELVE_DATA_API_KEY the panel must say so. When a key IS
-    // configured the notice is absent, and both are correct — so this asserts
+    // configured the notice is absent, and both are correct -- so this asserts
     // the pair rather than one of them.
     const notice = page.getByTestId("provider-unconfigured");
 

@@ -288,7 +288,7 @@ def test_indicators_are_length_preserving_and_aligned(ohlc: pd.DataFrame) -> Non
 # `support_resistance` returns lists of levels rather than a series, and
 # `rolling_correlation` takes two series. Both were outside the parameterised
 # test above, and support_resistance is the one indicator in the module that
-# uses `shift(-1)` — so it is exactly the one that most needed checking.
+# uses `shift(-1)` -- so it is exactly the one that most needed checking.
 
 
 def test_support_resistance_levels_depend_on_the_window_given() -> None:
@@ -344,7 +344,7 @@ def test_support_resistance_cannot_mark_the_final_bar_as_a_swing() -> None:
 
     Identifying a swing at the final bar would require the bar after it, which
     does not exist. `shift(-1)` yields NaN there and the comparison is false,
-    which is the correct behaviour — this test pins it, because an
+    which is the correct behaviour -- this test pins it, because an
     implementation that filled NaN forward would silently start claiming the
     most recent bar as a confirmed level.
     """
