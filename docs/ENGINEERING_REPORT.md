@@ -161,7 +161,7 @@ result names a run recorded in §0.12.
 | # | Requirement | Class | Evidence |
 |---|---|---|---|
 | SC-1 | No cryptographic primitive is implemented here | VERIFIED | `internal/crypto` composes the standard library; 11 tests. |
-| SC-2 | No secrets in the repository, a log, a response, a decision snapshot or audit metadata | VERIFIED | gitleaks: 0 findings. MD-11 closed the one real leak this session. |
+| SC-2 | No secrets in the repository, a log, a response, a decision snapshot or audit metadata | VERIFIED | gitleaks: 0 findings. MD-11 closed the one real leak this session. **The browser bundle is verified against the COMPILED artifact, not the source**: grepping `.next/static` and the standalone copy for env-var-shaped strings returns exactly two — `NEXT_PUBLIC_VANTAGE_API_BASE_URL`, and `TWELVE_DATA_CONFIGURATION_REQUIRED`, which is the operator-facing notice rendered *because* no key is configured and is the inverse of a leak. A second pass for inlined credential VALUES rather than names — the dev role passwords, the quant service token, the provider host, the literal `apikey` — returns zero files. Source-grepping cannot show this; a key could be inlined as a bare value with no name beside it. |
 | SC-3 | Authorisation is enforced server-side, per role | VERIFIED | `internal/httpapi` (29 tests), `internal/auth` (11); `auth.spec.ts`. |
 | SC-4 | Authentication lifetimes read real time, never the trading clock | VERIFIED | `TestAuthenticationUsesRealTimeNotTheTradingClock`. |
 | SC-5 | CSRF, CORS and security headers | VERIFIED | `internal/httpapi`. CORS allows exactly one origin. |
