@@ -396,6 +396,53 @@ test.describe("operator control: input validation", () => {
   });
 
   test.afterAll(async () => {
+    // Close anything this suite's fixture left open, BEFORE disposing the
+    // client that is able to close it.
+    //
+    // The fixture injects an unattributable venue execution on purpose, and an
+    // unattributable execution halts the account until an operator judges it.
+    // That is the platform working. What was missing was the other half: these
+    // tests consume the issue only on the paths that reach a resolve, so a skip
+    // or a failure anywhere in the block left it OPEN -- and an open
+    // OPERATOR_ACTION_REQUIRED issue halts the account for every later test, in
+    // every later run, and for every replay afterwards.
+    //
+    // It is the same shape as the trading-authority trap already recorded in
+    // the engineering guide: a test that removes a protection must restore it
+    // in teardown, or a failure in one run becomes a permanent, puzzling
+    // refusal in the next. Measured: a development database was found halted by
+    // two of these, detected three weeks earlier, re-checked 27 times, with
+    // every strategy evaluation since producing nothing.
+    //
+    // ACKNOWLEDGE rather than IMPORT, deliberately. Acknowledging records a
+    // judgement and writes no financial state; importing would book a position
+    // against a guessed parent order, which is the thing the platform refuses
+    // to do automatically and which a test must not do either.
+    try {
+      const open = await admin
+        .get(`/api/v1/reconciliation/${accountId}/issues?open=true`)
+        .then((r) => r.json());
+      for (const issue of (open.issues ?? []) as Array<Record<string, unknown>>) {
+        const execID = String(issue.broker_execution_id ?? "");
+        if (!execID.startsWith("EXEC-E2E-ORPHAN-")) continue; // not ours; leave it
+        await admin.post(
+          `/api/v1/reconciliation/${accountId}/issues/${String(issue.id)}/resolve`,
+          {
+            headers: csrfHeaders(adminCsrf),
+            data: {
+              action: "ACKNOWLEDGE",
+              reason:
+                "cleanup: orphan execution injected by the end-to-end suite. It " +
+                "belongs to no Vantage order and must not be imported.",
+            },
+          },
+        );
+      }
+    } catch {
+      // Teardown must not turn a test failure into a suite error. A cleanup
+      // that could not run leaves the account halted, which is visible and
+      // recoverable; a throw here would hide whichever test actually failed.
+    }
     await admin.dispose();
   });
 

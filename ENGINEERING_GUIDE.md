@@ -280,6 +280,31 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   leaves the account with no authority, and every later test -- in every later
   run -- is refused with a 403 that looks nothing like its cause.
 
+- **The same trap, found a second time, in reconciliation.** The e2e suite
+  injects an unattributable venue execution on purpose, because an attributable
+  one is repaired automatically and leaves nothing for an operator test to act
+  on. An unattributable one correctly halts the account until a human judges
+  it -- and the suite consumed the issue only on the paths that reached a
+  resolve, so a skip or a failure left it OPEN.
+
+  An open `OPERATOR_ACTION_REQUIRED` issue halts the account **for every later
+  run and every later replay**. Measured on this machine: a development
+  database sat halted on two of them, detected the previous day, re-checked 27
+  times, with `/health/ready` reporting `TRADING_HALTED` and every strategy
+  evaluation since producing nothing. A replay against it steps the whole
+  dataset and places no order, which reads as a broken pipeline and is the
+  platform being right.
+
+  `reconciliation.spec.ts` now acknowledges anything it injected, in `afterAll`
+  so a failure cannot skip it. If you find an account halted by an
+  `EXEC-E2E-ORPHAN-` execution, that is this. The fix is an operator
+  ACKNOWLEDGE, never an import: importing books a position against a guessed
+  parent order, which is exactly what rule 7 forbids.
+
+  **Read `/health/ready` before blaming a replay.** `trading_state`,
+  `halted_accounts` and `open_reconciliation_issues` are all in it, and all
+  three were telling the truth the whole time.
+
 - **A unique-violation aborts the whole Postgres transaction** (25P02). Use
   `ON CONFLICT DO NOTHING` and check `RowsAffected`; catching the error and
   continuing turns every duplicate into a 500.
