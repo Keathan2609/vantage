@@ -3570,6 +3570,49 @@ A failure of this test is not automatically a defect. It means the boundary is
 being moved, and that this should happen in the open rather than as a side
 effect of installing a package.
 
+## 30y. The deployment bootstrap, executed rather than described
+
+`docs/DEPLOYMENT.md` tells an operator to run `create-admin` as the first thing
+they do on a new deployment, and states that `seed` refuses outside development
+and that the control plane refuses the published development keys in
+production. All three were written in this milestone. None had been run.
+
+A document that tells someone their first command and is wrong about it is
+worse than no document, so the whole path was executed against a scratch
+database (`vantage_bootstrap_check`, created and dropped), with
+`VANTAGE_ENV=production` and freshly generated keys.
+
+| Claim in the guide | Executed | Result |
+| --- | --- | --- |
+| Migrations apply to an empty production database | `migrate` | applied, exit 0 |
+| The bootstrap enforces the application's password policy | piped `password` | **refused**: "password does not meet policy: passwords must be at least 12 characters" |
+| It creates one administrator | piped a 24-character password | created; `users` holds `ops@example.com`, role `admin`, an `$argon2id$v=19` hash, `mfa_enabled` false |
+| It cannot mint further administrators on a running system | ran it a second time | **refused**: "1 administrator account(s) already exist" |
+| It never echoes the password | inspected the output | the password appears nowhere; the command prints email, name and id only |
+| `seed` refuses outside development | `seed` with `VANTAGE_ENV=production` | **refused**: "seed data contains development-only credentials" |
+| The platform refuses the development encryption key in production | `serve`, production, key copied from `.env.example` | **refused** at config load: "the example development keys are in use outside development" |
+| The platform refuses the development research token in production | `serve`, production, token copied from `.env.example` | **refused** at config load: "VANTAGE_QUANT_SERVICE_TOKEN is unset or still the development value" |
+
+### The negative control, which is the row that makes the others mean anything
+
+A refusal proves nothing on its own: a process that refuses to start for some
+unrelated reason produces the same output. So the same development key was run
+once more with `VANTAGE_ENV=development`, where it is legitimate. Configuration
+loaded, and the process failed later and elsewhere -- at a deliberately wrong
+database password, `SQLSTATE 28P01`.
+
+That is the evidence that the check is gated on the environment rather than
+firing unconditionally, and it cost one extra command.
+
+### One correction to make here
+
+The first attempt at the key test used `healthcheck`, which does not load
+configuration -- it dials `VANTAGE_HTTP_ADDR` and reports what answers. It
+failed at the dial, and that failure says nothing about key validation either
+way. Read quickly it looks like a result. It is the shape of evidence this
+report exists to refuse: a command that failed, for a reason nobody checked,
+being counted as the check passing.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
