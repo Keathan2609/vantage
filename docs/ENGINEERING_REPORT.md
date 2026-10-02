@@ -2049,9 +2049,19 @@ has never been fitted against realised outcomes.
 It was consumed as though it were a probability. `DefaultConsensusPolicy`
 discards an opinion below 0.55 and requires 0.60 net -- thresholds that read as
 confidence levels -- applied uniformly to those scores. Half of
-`donchian_breakout`'s score is a constant, so it reports 0.31-0.44 whatever the
-market does and can never clear the floor; not because the breakout was weak,
-but because the scale is arbitrary.
+`donchian_breakout`'s score is a constant, so its whole range is [0.250, 0.750]
+and a strong break is compressed towards a mediocre one.
+
+**Correction.** An earlier revision of this section said it "reports 0.31-0.44
+whatever the market does and can never clear the floor". That was wrong. The
+blend is a mean, so the score is `(min(1, penetration) + 0.5) / 2`, which
+crosses 0.55 at a 0.6 ATR penetration. Measured in
+`services/quant/tests/test_confidence_reachability.py`: a 0.74x ATR break
+scores 0.618 and a 0.97x break scores 0.733. The 0.31-0.44 was what the seeded
+data produced, not a ceiling. The real cost of the constant is the top of the
+range -- nothing above 0.75 is reachable -- which is a calibration defect and
+not an impossibility. `docs/SIGNAL_RESEARCH.md` had this right ("its range is
+[0.250, 0.750]"); this section overstated it.
 
 That is a category error, and it was invisible. It is now named: signals carry
 `confidence_kind` (`raw_score` or `calibrated_probability`) end to end, and
@@ -2694,14 +2704,20 @@ neither is "the strategies do not work":
   trend.** `rsi_mean_reversion` scores 0.700 and declares itself valid in
   RANGING and LOW_VOLATILITY, so the regime gate correctly discards it on a
   clean trend. That is the policy working.
-- **The strategies that ARE valid in a trend cannot clear the floor.**
-  `macd_momentum` peaks at 0.538 and `donchian_breakout` at 0.441, against a
-  policy that discards below 0.55 and requires 0.60 net. This report already
-  recorded why: the score is a raw average of hand-chosen components, three
-  strategies average a real component with a hard-coded constant, and
-  `donchian_breakout` averages its penetration with a constant 0.5 -- so its
-  ceiling is arithmetic, not market. It could not clear 0.55 however clean the
-  trend.
+- **The strategies that ARE valid in a trend did not clear the floor.**
+  `macd_momentum` peaked at 0.538 and `donchian_breakout` at 0.441 ON THIS
+  DATASET, against a policy that discards below 0.55 and requires 0.60 net.
+  The score is a raw average of hand-chosen components and three strategies
+  average a real component with a hard-coded constant, so half the dynamic
+  range is thrown away and a strong signal is compressed towards a mediocre
+  one.
+
+  An earlier revision added "so its ceiling is arithmetic, not market; it could
+  not clear 0.55 however clean the trend". That was wrong and is corrected
+  above: `donchian_breakout` clears 0.55 at a 0.6 ATR penetration and reaches
+  0.733 at 0.97x, measured. What this dataset showed is that its breaks were
+  weak, not that strong ones are impossible -- which is a different finding and
+  points at different work.
 
 The honest statement of ST-4 is therefore not "no strategy fires". It is that
 **the confidence scale and the policy's thresholds were never calibrated

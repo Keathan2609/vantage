@@ -81,10 +81,28 @@ type ConsensusPolicy struct {
 // strategies, and has never been fitted against realised outcomes.
 //
 // MinConfidence and MinNetConfidence read as confidence levels and are applied
-// uniformly to those scores. Measured on the seeded set: `donchian_breakout`
-// averages its breakout penetration with a constant 0.5 and reports 0.31-0.44,
-// so it cannot clear a 0.55 floor whatever the market does -- not because the
-// breakout was weak, but because half its score is a constant.
+// uniformly to those scores. `donchian_breakout` averages its breakout
+// penetration with a constant 0.5 and reported 0.31-0.44 on the seeded set.
+//
+// An earlier version of this comment concluded that it therefore "cannot clear
+// a 0.55 floor whatever the market does". That was wrong, and the correction
+// matters because the two readings point at different fixes. The blend is a
+// MEAN, so
+//
+//	confidence = (min(1, penetration) + 0.5) / 2
+//
+// which crosses 0.55 at a penetration of 0.6 ATR and saturates at 0.75.
+// Measured, in services/quant/tests/test_confidence_reachability.py: a 0.74x
+// ATR break scores 0.618, a 0.97x break scores 0.733, and no break however
+// extreme exceeds 0.75. The 0.31-0.44 on the seeded set was a weak-breakout
+// result, not a ceiling.
+//
+// What the constant actually costs is the TOP of the range, and that part is
+// real: half the dynamic range is thrown away, so any threshold above 0.75 is
+// unreachable for this strategy and a strong break is compressed towards a
+// mediocre one. That is a calibration defect rather than an impossibility, and
+// "impossible" would have invited deleting the strategy or lowering the floor,
+// neither of which is the fix.
 //
 // The thresholds are NOT adjusted to compensate. Moving a number until trades
 // appear is how a platform talks itself into a result, and the fix is
