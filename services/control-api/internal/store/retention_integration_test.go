@@ -216,7 +216,19 @@ func TestPruningStrategyRunsTakesTheirSignalsWithThem(t *testing.T) {
 
 	var runIDs []uuid.UUID
 	t.Cleanup(func() {
+		// Signals first, then runs.
+		//
+		// Relying on the cascade here is what left rows behind the first time.
+		// This suite exists partly to catch the cascade being relaxed, and when
+		// it WAS relaxed -- deliberately, to prove the assertion had teeth --
+		// the cleanup hit the same foreign-key violation the test had just
+		// detected, ignored it like any teardown should, and left an orphan run
+		// and signal in the development database dated 1999.
+		//
+		// A teardown must not depend on the property the test is allowed to
+		// find broken.
 		for _, id := range runIDs {
+			_, _ = pool.Exec(ctx, `DELETE FROM strategy_signals WHERE run_id = $1`, id)
 			_, _ = pool.Exec(ctx, `DELETE FROM strategy_runs WHERE id = $1`, id)
 		}
 	})

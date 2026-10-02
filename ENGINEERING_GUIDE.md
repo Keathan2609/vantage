@@ -288,12 +288,18 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   resolve, so a skip or a failure left it OPEN.
 
   An open `OPERATOR_ACTION_REQUIRED` issue halts the account **for every later
-  run and every later replay**. Measured on this machine: a development
-  database sat halted on two of them, detected the previous day, re-checked 27
-  times, with `/health/ready` reporting `TRADING_HALTED` and every strategy
-  evaluation since producing nothing. A replay against it steps the whole
-  dataset and places no order, which reads as a broken pipeline and is the
-  platform being right.
+  run and every later replay**. Observed on this machine: a development
+  database sat halted on two of them, detected the previous day and re-checked
+  27 and 26 times, with `/health/ready` reporting `trading_state:
+  TRADING_HALTED`, `automation_allowed: false` and `halted_accounts: 1`. A
+  replay started in that state steps the whole dataset and places no order,
+  which reads as a broken pipeline and is the platform being right.
+
+  Stated as observed, because the obvious stronger claim is not supported: no
+  replay was run against it, and `strategy_runs` was empty of real rows because
+  the control plane had been stopped, not because the halt suppressed anything.
+  What the halt demonstrably did was persist unnoticed for a day across a
+  stopped and restarted process.
 
   `reconciliation.spec.ts` now acknowledges anything it injected, in `afterAll`
   so a failure cannot skip it. If you find an account halted by an
