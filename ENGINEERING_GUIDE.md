@@ -164,6 +164,20 @@ VANTAGE_RACE_E2E=1                           # opt-in for the race suite
 All of it, not a subset. `./scripts/test-all.ps1 -Smoke` runs the lot and
 reports every failure rather than stopping at the first.
 
+Two more suites need a database and an opt-in, and **skip silently without
+one** — so a green run does not mean they ran:
+
+```bash
+VANTAGE_MARKETDATA_E2E=1   # Backfill / Sync / Repair / Snapshot against a fake provider
+VANTAGE_STORE_E2E=1        # the retention sweeps, run as the APP role
+```
+
+Point `VANTAGE_DATABASE_URL` at the development Postgres for both. The
+retention suite deliberately uses the app role rather than the superuser,
+because the sweep runs as the app role in production and a missing `DELETE`
+grant would otherwise surface there as an hourly error that is logged and
+swallowed.
+
 The Python tools live in `services/quant/.venv`; on Windows invoke them as
 `./.venv/Scripts/python.exe -m ruff` etc., because the system Python does not
 have them.

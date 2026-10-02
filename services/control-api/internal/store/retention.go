@@ -26,6 +26,36 @@ import (
 // judgement with its reason written next to it, rather than one global
 // constant, because the consequence of being wrong differs per table.
 //
+// # reconciliation_runs is NOT pruned, and must not be
+//
+// It is the most obvious candidate for a fourth sweep and the most dangerous
+// one. A row is written every five minutes whether or not anything happened,
+// so it grows with uptime exactly like the three tables above, and adding it
+// here looks like finishing the job.
+//
+// It is not. The foreign keys run:
+//
+//	reconciliation_issues       -> reconciliation_runs    ON DELETE CASCADE
+//	reconciliation_issue_events -> reconciliation_issues  ON DELETE CASCADE
+//	fills                       -> reconciliation_issues  ON DELETE SET NULL
+//
+// So deleting an old run deletes the ISSUES raised by that run. An unresolved
+// issue is an open halt and an operator's work queue, and rule 7's corollary
+// is that "not re-detected" must mean "fixed", never "no longer examined" --
+// a retention sweep that removed one would release an account's halt as a side
+// effect of housekeeping, which is the precise failure that corollary exists
+// to prevent.
+//
+// The database refuses it today: the cascade reaches the append-only
+// reconciliation_issue_events and the trigger aborts the transaction with
+// "table reconciliation_issue_events is append-only". That was confirmed by
+// running the DELETE inside a transaction and rolling back. Note that the
+// trigger is a backstop, not the reason -- it catches the second-order effect,
+// while the thing that makes this wrong is the first-order one.
+//
+// Bounding this table therefore means deciding what happens to a run's issues
+// first, which is an archive design and not a line in this file.
+//
 // # Why batched
 //
 // market_quotes gains roughly 179 000 rows a day. The first run against a

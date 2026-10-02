@@ -3613,6 +3613,87 @@ way. Read quickly it looks like a result. It is the shape of evidence this
 report exists to refuse: a command that failed, for a reason nobody checked,
 being counted as the check passing.
 
+## 30z. Will it still be running in a month? Auditing growth, table by table
+
+The question behind "I don't want the bot to be fine for a week and then die
+down" is not really about strategies. A platform that ingests a quote every two
+seconds dies of disk long before it dies of logic, and it dies quietly: the
+retention sweep runs inside the hourly cleanup lease and **its failures are
+logged and swallowed by design**, because a housekeeping sweep must not abandon
+the daily roll it shares that lease with. A prune that deleted nothing would
+look exactly like a prune that worked.
+
+So every table was checked for whether it grows with uptime, and whether
+anything bounds it.
+
+| Class | Tables | Bounded by |
+| --- | --- | --- |
+| Pruned on a window | `market_quotes` + `market_data_health` (30d), `strategy_runs` (14d), published `outbox` (7d) | `pruneTelemetry`, hourly |
+| Bounded by a cascade | `strategy_signals` | `ON DELETE CASCADE` on `run_id`, and nothing else |
+| Grows with activity, not uptime | `risk_events`, `orders`, `mock_venue_*`, `command_idempotency`, `notifications` | trading volume; a single operator cannot outrun these |
+| Append-only evidence, by design | `audit_events`, `fills`, `transactions`, `decision_snapshots`, `order_state_transitions`, `reconciliation_issue_events`, the four `*_history` tables | a trigger that raises on DELETE. These need an archive design, which is a separate decision |
+| Grows with uptime and is deliberately NOT pruned | `reconciliation_runs` | nothing — see below |
+
+### The table that looks like the obvious next sweep, and must not be
+
+`reconciliation_runs` gets a row every five minutes whether or not anything
+happened. It grows with uptime exactly like the three pruned tables, and adding
+it to the sweep looks like finishing the job.
+
+The foreign keys are why it is not:
+
+	reconciliation_issues       -> reconciliation_runs    ON DELETE CASCADE
+	reconciliation_issue_events -> reconciliation_issues  ON DELETE CASCADE
+	fills                       -> reconciliation_issues  ON DELETE SET NULL
+
+Deleting an old run deletes **the issues that run raised**. An unresolved issue
+is an open halt and an operator's work queue. Rule 7's corollary says "not
+re-detected" must mean "fixed", never "no longer examined" — and a retention
+sweep that removed an unresolved issue would release an account's halt as a
+side effect of housekeeping, which is the exact failure that corollary was
+written after.
+
+Confirmed rather than inferred: the DELETE was run inside a transaction and
+rolled back. It fails with
+
+    ERROR: table reconciliation_issue_events is append-only: DELETE is not permitted
+
+so the database refuses it today. That trigger is a backstop catching the
+second-order effect; the thing that makes the sweep wrong is the first-order
+one. Bounding this table means first deciding what happens to a run's issues,
+which is an archive design and not a line in a cleanup function. The reasoning
+is recorded in `internal/store/retention.go` where the next person will look.
+
+### The sweeps now have tests, and the tests were made to fail
+
+`internal/store/retention_integration_test.go`, gated on `VANTAGE_STORE_E2E=1`,
+runs as the **app role** — the role the scheduler uses, so a missing `DELETE`
+grant fails here rather than hourly in production. The fixtures sit in 1999 and
+2000 with the cutoff between them, far from any real row, because a prune is
+not scoped to its caller's own data.
+
+| Property | Executed |
+| --- | --- |
+| Old quotes go, recent quotes stay | pass |
+| Old PUBLISHED outbox rows go | pass |
+| **Old UNDELIVERED outbox rows stay** | pass |
+| Recent published rows stay | pass |
+| Pruning a run takes its signals | pass |
+| A recent run and its signal stay | pass |
+
+The two properties with consequences were then broken on purpose to confirm the
+assertions are load-bearing:
+
+- Removing `published_at IS NOT NULL` from the outbox sweep: **failed** with
+  "an UNDELIVERED event was deleted. It is owed to a consumer and nothing will
+  ever ask for it again".
+- Relaxing the cascade to `NO ACTION`: **failed** with the constraint rejecting
+  the write — which is precisely the production symptom, an hourly foreign-key
+  violation logged and swallowed while `strategy_signals` grows for ever.
+
+Both mutations were reverted and the cascade re-checked against the live
+database before moving on. The full Go suite passes.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
