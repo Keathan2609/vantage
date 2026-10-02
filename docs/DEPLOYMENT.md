@@ -192,10 +192,64 @@ how you find out you are talking to the thing you think you are.
 
 ## Operating it
 
-**Backups.** Nothing backs the database up for you. `scripts/backup-restore-drill.ps1`
-exists and passes, but it is a drill rather than a schedule. A `pg_dump` on a
-cron is the minimum, and a restore you have actually tested is the only kind
-that counts.
+### Backups
+
+A `backup` container runs with the production overlay. Daily by default, keeping
+fourteen copies, into the `postgres-backups` volume. Change either with
+`BACKUP_INTERVAL_SECONDS` and `BACKUP_KEEP`.
+
+It writes each dump under a `.partial` name, reads the archive back with
+`pg_restore --list`, and only renames it into place once that succeeds. A file
+in the directory is therefore one that has been read successfully at least once,
+which is the difference between "pg_dump exited 0" and "this restores". Retention
+counts only verified dumps, so a run of failures cannot quietly age out the last
+good one.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs backup | tail
+docker compose -f docker-compose.yml -f docker-compose.prod.yml   exec backup ls -lh /backups
+```
+
+**This is not off site.** A dump in a volume on this machine survives a dropped
+table, a bad migration and a careless DELETE. It does not survive losing the
+machine. Copy them somewhere else on a schedule of your own:
+
+```bash
+docker run --rm -v vantage_postgres-backups:/b -v "$PWD":/out alpine   sh -c 'cp /b/$(ls -1 /b | sort | tail -1) /out/'
+```
+
+Then send that file wherever you keep things. Nothing here does it for you, and
+a backup that lives only beside the thing it protects is a convenience rather
+than a recovery plan.
+
+### Restoring
+
+```bash
+# A scratch database to restore into, so the live one is untouched.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres   psql -U vantage_superuser -d postgres -c 'CREATE DATABASE vantage_restore OWNER vantage_owner;'
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backup sh -c   'pg_restore -h postgres -U vantage_superuser -d vantage_restore --no-owner      $(ls -1 /backups/vantage-*.dump | sort | tail -1)'
+```
+
+`--no-owner` because the restore runs as the superuser and the roles already
+exist. **Do not add `--no-privileges`.** The first run of the restore drill used
+it and produced a database the application could not read at all, failing with
+"permission denied for table audit_events". The GRANTs are part of the backup
+and have to come back with it.
+
+Then check the restore is sound rather than assuming it:
+
+```bash
+# The application's own verifier, pointed at the restored copy.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec   -e VANTAGE_DATABASE_URL=postgres://u:p@postgres:5432/vantage_restore?sslmode=disable   control-api /vantage-control-api verify-audit
+```
+
+Substitute the app role and its password. It must report `verified: yes`. That
+is the strongest single check available: if the hash chain still verifies, the
+audit log came back byte for byte, and tamper evidence survived the round trip.
+
+`scripts/backup-restore-drill.ps1` does all of the above against the development
+stack and is the thing to run when you want to rehearse rather than recover.
 
 **Updates.** `git pull`, then re-run the `up -d --build` command. Migrations are
 forward only and apply at startup. The terminal's API origin is baked into the

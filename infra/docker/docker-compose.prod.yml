@@ -28,7 +28,7 @@
 services:
   postgres:
     environment:
-      POSTGRES_PASSWORD: ${VANTAGE_POSTGRES_SUPERUSER_PASSWORD:?set it in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set it in .env.production}
       VANTAGE_APP_PASSWORD: ${VANTAGE_POSTGRES_APP_PASSWORD:?set it in .env.production}
       VANTAGE_OWNER_PASSWORD: ${VANTAGE_POSTGRES_OWNER_PASSWORD:?set it in .env.production}
       VANTAGE_RESEARCH_PASSWORD: ${VANTAGE_POSTGRES_RESEARCH_PASSWORD:?set it in .env.production}
@@ -113,3 +113,53 @@ services:
     read_only: true
     cap_drop:
       - ALL
+
+  # Scheduled logical backup.
+  #
+  # Same image as the server, so pg_dump's version always matches it. The script
+  # writes under a .partial name, reads the archive back with `pg_restore --list`
+  # before renaming it into place, and only then counts it towards retention. A
+  # file in the directory is therefore one that has been read successfully at
+  # least once, which is the difference between "pg_dump exited 0" and "this
+  # restores".
+  #
+  # On the `data` network only. It has no route to the tunnel, and the tunnel has
+  # no route to it.
+  #
+  # THIS IS NOT OFF-SITE. A dump in a volume on this machine survives a dropped
+  # table, a bad migration and a careless DELETE. It does not survive losing the
+  # machine. Copy ${BACKUP_DIR} somewhere else on a schedule of your own; the
+  # deployment guide says how and says plainly that nothing here does it for you.
+  backup:
+    image: postgres:17.6-alpine
+    container_name: vantage-backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: vantage_superuser
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
+      PGDATABASE: vantage
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      BACKUP_DIR: /backups
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - postgres-backups:/backups
+    networks:
+      - data
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  postgres-backups:

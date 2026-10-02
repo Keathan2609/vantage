@@ -3327,6 +3327,64 @@ reference, which a literal password cannot be. Verified by dropping a file
 containing a real literal password into the tree and watching the scanner catch
 it with the allowlist in place.
 
+## 30v. Backups, and proving one restores
+
+The deployment work left one thing flagged and not done: nothing backed the
+database up. `scripts/backup-restore-drill.ps1` existed and passed, but a drill
+is a rehearsal, not a schedule.
+
+### What runs now
+
+A `backup` container in the production overlay, built from the same postgres
+image as the server so pg_dump's version always matches it. Daily by default,
+keeping fourteen copies.
+
+Two details that are the difference between a backup and a file:
+
+**Each dump is read back before it counts.** It is written under a `.partial`
+name, then `pg_restore --list` parses the whole archive's table of contents,
+and only then is it renamed into place. A truncated or corrupt archive fails at
+the moment it is made rather than months later when something depends on it. A
+file in the directory is one that has been read successfully at least once.
+
+**Retention counts only verified dumps.** A run of failures leaves `.partial`
+files, which are never counted towards the copies being kept, so a week of
+broken backups cannot quietly age out the last good one.
+
+### Proving it, rather than asserting it
+
+The script was run against the live development database, and then one of its
+dumps was restored into a scratch database and checked. Six steps, all observed:
+
+| Step | Result |
+| --- | --- |
+| Dumps written | 4, each 814 850 bytes, each verified by reading the archive |
+| Retention at `BACKUP_KEEP=2` | pruned to exactly 2, oldest first |
+| `pg_restore` into a scratch database | exit 0 |
+| Data present | 3 users, 6 instruments, 11 898 bars, 110 audit events, 10 transactions |
+| The APP role can read it | yes, 110 audit events |
+| `verify-audit` on the restored copy | **verified: yes** |
+
+The fifth row is the one the drill already warned about. Its first run used
+`--no-privileges` and produced a database the application could not read at
+all, failing with "permission denied for table audit_events". The GRANTs are
+part of the backup and have to come back with it, so the documented restore
+command uses `--no-owner` and deliberately does not use `--no-privileges`.
+
+The sixth is the strongest single check available. If the audit hash chain still
+verifies after a dump and restore, the log came back byte for byte and the
+tamper evidence survived the round trip. Running the platform's own verifier
+against the restored copy is a better answer than counting rows.
+
+### What this still is not
+
+It is not off site. A dump in a volume on the same machine survives a dropped
+table, a bad migration and a careless DELETE. It does not survive losing the
+machine, the disk or the volume. The deployment guide gives a command to copy
+the newest dump out and says plainly that nothing in the stack does it for you,
+because a backup that lives only beside the thing it protects is a convenience
+rather than a recovery plan.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -3579,7 +3637,13 @@ been executed and moved into the tally -- and what remains is what remains.
   automatic repair set was chosen against MockBroker's semantics, so a real
   provider with different identifier guarantees would need it re-derived
   rather than inherited.
-- **No scheduled backups and no WAL archiving.** The restore drill passes but
+- ~~**No scheduled backups**~~ **Closed for scheduled logical backups**
+  (section 30v): a daily `pg_dump` with verification, retention, and a restore
+  proven end to end including an audit-chain check on the restored copy. What
+  remains open from this entry is OFF-SITE copying, which nothing in the stack
+  does, and WAL archiving, so the recovery point is the last daily dump rather
+  than the last transaction. Formerly:
+- **No WAL archiving.** The restore drill passes but
   is run by hand, so the recovery point is the last manual dump and nothing
   would notice a backup that silently began producing an unusable file.
 - **No distributed tracing.** Correlation ids are propagated, which is what a
@@ -3690,7 +3754,7 @@ trust needs the difference.
 | 47 | Lock ordering | COMPLETE | Declared in `store.LockAccountTx` and taken as the outermost lock. Added by this audit after a real deadlock; a counter and a race test guard the regression |
 | 48 | Backup and restore | COMPLETE | `scripts/backup-restore-drill.ps1` performs the whole cycle and verifies the financial integrity of the restored data. Executed and passing |
 | 49 | Disaster-recovery procedure | COMPLETE | Documented per failure mode, including the two corrections the first drill produced |
-| 50 | Scheduled backups and WAL archiving | **NOT IMPLEMENTED** | The drill is run by hand. The recovery point is the last dump |
+| 50 | Scheduled backups | COMPLETE | Daily `pg_dump` in the production overlay, each archive read back with `pg_restore --list` before it counts, retention over verified dumps only. Restore proven end to end, including `verify-audit` reporting yes on the restored copy. NOT off site, and no WAL archiving: the recovery point is the last daily dump |
 | 51 | Terminal (19 routes) | COMPLETE | Every route renders with live data; 30 Playwright tests |
 | 52 | Order ticket | COMPLETE | Review before confirm, duplicate-click protection, risk explanations rendered |
 | 53 | Containers | COMPLETE | Three images, non-root, no HIGH or CRITICAL misconfigurations |
