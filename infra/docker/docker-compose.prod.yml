@@ -63,8 +63,10 @@ services:
 
   quant:
     environment:
+      # The service token is the only secret this container gets. It has no
+      # database credential on purpose; the base file explains why, and
+      # tests/test_research_plane_boundary.py fails if one becomes usable.
       VANTAGE_QUANT_SERVICE_TOKEN: ${VANTAGE_QUANT_SERVICE_TOKEN:?}
-      VANTAGE_QUANT_READONLY_DATABASE_URL: ${VANTAGE_QUANT_READONLY_DATABASE_URL:?the read-only research connection string}
 
   web:
     build:

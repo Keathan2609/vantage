@@ -169,13 +169,25 @@ Three roles, created by `infra/docker/postgres-init/00-roles.sql`:
 | --- | --- | --- |
 | `vantage_owner` | owns the schema, runs migrations | DDL |
 | `vantage_app` | the control plane | DML, minus UPDATE/DELETE on eight append-only tables, and no CREATE on `public` |
-| `vantage_research` | the quant service | `SELECT` on market and research tables only |
+| `vantage_research` | direct analyst access, **not** the quant service | `SELECT` on market and research tables only |
 
 The application is **not** a superuser and cannot alter the schema. The
 research role is granted nothing at all on `users`, `sessions`, `accounts`,
 `orders`, `fills`, `transactions`, `trading_authorities`, `kill_switches` or
 `broker_connections`: research has no business reading credentials or moving
 money, and the database is where that boundary is actually enforced.
+
+**The quant service holds no database credential at all**, which is a stronger
+position than holding a restricted one. It was given the `vantage_research`
+connection string for a long time, and could never have used it: the service
+has no database driver installed and declares none. Nothing failed, because
+nothing read it. What it did create was a credential waiting in the container's
+environment for the next person to add a driver for a perfectly good reason,
+who would then have a connection open without anyone having decided it should
+be. The credential is gone and
+`services/quant/tests/test_research_plane_boundary.py` fails if a driver, an
+import or a connection string returns -- not because such a change would be
+wrong, but because it should be made deliberately rather than inherited.
 
 Append-only tables (`audit_events`, `transactions`, `fills`,
 `order_state_transitions`, `decision_snapshots`, `risk_limit_history`,

@@ -226,9 +226,21 @@ services:
     environment:
       VANTAGE_QUANT_HTTP_ADDR: 0.0.0.0:8000
       VANTAGE_QUANT_SERVICE_TOKEN: ${VANTAGE_QUANT_SERVICE_TOKEN}
-      # Read-only role. The research plane cannot write to any table, and
-      # cannot read users, sessions, accounts, orders, fills or credentials.
-      VANTAGE_QUANT_READONLY_DATABASE_URL: postgres://vantage_research:vantage_research_dev_password@postgres:5432/vantage?sslmode=disable
+      # No database credential is passed to this container, deliberately.
+      #
+      # This used to carry the read-only vantage_research connection string.
+      # Nothing read it: the research service has never had a database driver
+      # installed, declares none in pyproject.toml, and its own package
+      # docstring says it reaches no database. So it was a credential sitting
+      # in a container that could not use it -- harmless today, and exactly
+      # what the next person to `pip install psycopg` for a good reason would
+      # inherit: a live connection already wired up, with nobody having decided
+      # it should be.
+      #
+      # The vantage_research ROLE still exists and is still read only. It is
+      # for an analyst connecting directly, which is a human choosing to, and
+      # not for this process. tests/test_research_plane_boundary.py fails if a
+      # driver or a connection string comes back.
       VANTAGE_QUANT_ARTIFACT_DIR: /var/lib/vantage/artifacts
       VANTAGE_LOG_LEVEL: ${VANTAGE_LOG_LEVEL:-info}
     # Deliberately NOT published to the host by default: the quant service is

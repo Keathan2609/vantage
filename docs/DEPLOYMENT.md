@@ -109,7 +109,7 @@ openssl rand -base64 32    # the three application keys
 openssl rand -base64 24    # each of the four database passwords
 ```
 
-Then write the three connection strings from the passwords you just set, rather
+Then write the two connection strings from the passwords you just set, rather
 than substituting by hand:
 
 ```bash
@@ -117,13 +117,17 @@ set -a; . ./.env.production; set +a
 cat >> .env.production <<EOF
 VANTAGE_DATABASE_URL=postgres://vantage_app:${VANTAGE_POSTGRES_APP_PASSWORD}@postgres:5432/vantage?sslmode=disable
 VANTAGE_MIGRATION_DATABASE_URL=postgres://vantage_owner:${VANTAGE_POSTGRES_OWNER_PASSWORD}@postgres:5432/vantage?sslmode=disable
-VANTAGE_QUANT_READONLY_DATABASE_URL=postgres://vantage_research:${VANTAGE_POSTGRES_RESEARCH_PASSWORD}@postgres:5432/vantage?sslmode=disable
 EOF
 ```
 
-Delete the three empty placeholder lines the example file shipped with, so each
+Delete the two empty placeholder lines the example file shipped with, so each
 variable is set once. The host is `postgres` because that is the container name
 on the compose network, not localhost.
+
+There is no third line for the research role. The research service has no
+database driver and never had one, so the connection string it used to be given
+was a credential nothing could use. The read-only `vantage_research` role is
+still created, for an analyst connecting by hand.
 
 Set `VANTAGE_PUBLIC_WEB_ORIGIN` and `VANTAGE_PUBLIC_API_ORIGIN` to the two
 hostnames from step 2, with `https://` and no trailing slash. These have to be

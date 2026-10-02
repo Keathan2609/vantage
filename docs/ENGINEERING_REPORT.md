@@ -3509,6 +3509,67 @@ size because they contain the same database, differing in bytes because
 across runs can manufacture exactly the failure it was written to detect. Rerun
 on a fresh volume with one dump and one sealed file, it is identical.
 
+## 30x. A credential that nothing could use, and the test that was missing
+
+Checking the deployment path produced a question worth asking of any
+configuration: **is every variable this sets actually read by something?** The
+answer for one of them was no.
+
+Both compose files handed the research container
+`VANTAGE_QUANT_READONLY_DATABASE_URL`, `.env.production.example` asked the
+operator to construct it, and `DEPLOYMENT.md` gave them a command to generate
+it. The research service has never had a database driver. Not disabled, not
+unused: absent.
+
+| Evidence | Result |
+| --- | --- |
+| Declared dependencies in `pyproject.toml` | fastapi, uvicorn, pydantic, numpy, pandas, scikit-learn, joblib. No driver |
+| Installed in `services/quant/.venv` | no psycopg, psycopg2, asyncpg, pg8000, sqlalchemy |
+| Any module reading the variable | none; no `BaseSettings`, no `env_prefix`, nothing that would bind it without naming it |
+| The package's own docstring | "Nothing here reaches a network, a broker or a database" |
+
+### Why remove it rather than leave it
+
+Nothing was broken. Nothing read the value, so nothing could misuse it, and it
+would have been easy to call this cosmetic and move on.
+
+The reason not to is rule 5, which says the research plane never reaches a
+broker, the control plane or the trading tables. A credential sitting unused in
+a container's environment is not a breach of that rule; it is the thing that
+makes breaching it effortless and invisible. Someone adds `psycopg` next year
+for an entirely good reason -- a notebook, a feature store, a one-off
+investigation -- and the connection string is already there, already correct,
+already pointing at the production database. No review happens, because nothing
+about that change looks like it touches a security boundary.
+
+So the credential is gone from both compose files and from both example
+environments. The read-only `vantage_research` role stays, with its `SELECT`
+grants, its `default_transaction_read_only`, and its statement timeouts. It is
+for an analyst who chooses to connect, which is a human decision each time.
+
+### The boundary had no test on the Python side
+
+The Go side enforces its equivalent boundary with two arch tests. The Python
+side enforced its boundary with a sentence in a guide, which is how a dead
+credential survived in two compose files and a deployment document without
+anyone noticing.
+
+`services/quant/tests/test_research_plane_boundary.py` now asserts three
+things: no database driver is importable, no module in the package imports one,
+and no module reads a connection string or database password.
+
+**The guard was verified to fire rather than assumed to work.** A probe module
+importing `sqlalchemy` and reading `VANTAGE_QUANT_READONLY_DATABASE_URL` was
+dropped into the package; both source-scanning tests failed on it by name, and
+the suite went back to passing when it was removed. `find_spec` was separately
+confirmed to distinguish present from absent (`numpy` true, `sqlalchemy`
+false), so the driver test would fire on a real installation rather than
+passing because the check never looks.
+
+A failure of this test is not automatically a defect. It means the boundary is
+being moved, and that this should happen in the open rather than as a side
+effect of installing a package.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
