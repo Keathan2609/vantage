@@ -157,7 +157,14 @@ services:
       - postgres-backups:/backups
       # rclone's configuration, holding whatever credentials the remote needs.
       # Read only, and outside the repository.
-      - ${BACKUP_RCLONE_CONFIG:-/dev/null}:/root/.config/rclone/rclone.conf:ro
+      #
+      # /etc/rclone, not /root/.config: this container runs as uid 70, and /root
+      # is mode 0700. Under $HOME the config would be unreadable, every upload
+      # would fail, and the local backup would carry on succeeding -- so the
+      # logs would look healthy while the only copy that survives losing this
+      # machine quietly stopped being made. The image sets RCLONE_CONFIG to this
+      # path so it does not depend on who runs the process.
+      - ${BACKUP_RCLONE_CONFIG:-/dev/null}:/etc/rclone/rclone.conf:ro
     networks:
       - data
     logging:
@@ -167,6 +174,12 @@ services:
         max-file: "5"
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      # age writes its output through a temporary file before the rename, and
+      # rclone keeps its own scratch. Both need somewhere writable on a
+      # read-only root filesystem.
+      - /tmp
     cap_drop:
       - ALL
 

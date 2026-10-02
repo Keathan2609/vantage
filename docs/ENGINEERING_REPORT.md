@@ -3457,7 +3457,57 @@ this work, both times from a script that rewrote the file in Python's text mode.
 
 The Dockerfile now strips carriage returns and runs `sh -n` on the result at
 build time, so a malformed script fails the build rather than the backup
-schedule. One `sed`, and no dependence on anyone's git configuration.
+schedule, with no dependence on anyone's git configuration.
+
+The first version of that strip was a `sed` expression, and it had to contain a
+literal carriage return BYTE in order to match one. It worked. It was also an
+invisible character in a build file, where a careless paste turns it into a
+no-op that still builds green and ships CRLF into the image again. It is `tr -d
+'\r'` now, which says the same thing in characters a reviewer can see.
+
+### The hardening that silently broke the thing it protected
+
+The sidecar ran as root. Semgrep's `missing-user-entrypoint` and Trivy's
+DS-0002 both said so, and both were right. The fix is one line, `USER postgres`,
+plus creating `/backups` with its ownership in the image so the named volume
+inherits it rather than arriving owned by root.
+
+Adding that line broke the off-site copy, and broke it in the worst available
+way. `rclone` reads `$HOME/.config/rclone/rclone.conf`; the config was mounted
+at `/root/.config/rclone/rclone.conf`, which was correct while the process was
+root. `/root` is mode 0700. As uid 70 the config is simply unreadable, so every
+upload fails -- while the local dump keeps being written, verified and logged as
+a success.
+
+That is the failure shape this project keeps running into and keeps writing
+down: not a crash, but a component going quiet while the surrounding system
+reports health. A backup that exists on the machine and nowhere else looks
+identical in the logs to one that is also off-site, right up until the machine
+is the thing that is lost.
+
+The config path is now `/etc/rclone/rclone.conf`, set in the image through
+`RCLONE_CONFIG` so it does not depend on which user runs the process, and
+mounted read only there.
+
+### What was actually executed
+
+| Step | Result |
+| --- | --- |
+| Image built with `USER postgres` | `id` reports `uid=70(postgres)`, `/backups` owned `postgres:postgres` |
+| Container run with `--read-only`, `--tmpfs /tmp`, `--user 70`, no capabilities | dump written and verified |
+| `rclone` config read from the read-only mount | `rclone listremotes` reports `offsite:`, and the upload addressed a named remote rather than a bare path, so the config was genuinely used |
+| Dump, encrypt, upload, decrypt with a key the container never held | **byte identical** to the local dump (`cmp`, exit 0) |
+| `pg_restore --list` on the decrypted archive | exit 0 |
+| Trivy filesystem, CI's flags, after the fix | DS-0002 cleared |
+
+The byte-identity row took two attempts and the first one is worth recording,
+because it produced a `MISMATCH` that was a defect in the test rather than in
+the backup. The comparison took the FIRST dump in a reused volume and compared
+it against the decrypted copy of the LATEST one -- two different dumps, equal in
+size because they contain the same database, differing in bytes because
+`pg_dump` stamps a creation time into the archive. A test that reuses state
+across runs can manufacture exactly the failure it was written to detect. Rerun
+on a fresh volume with one dump and one sealed file, it is identical.
 
 ## 31. What is NOT verified
 
