@@ -415,3 +415,40 @@ def gentle_step(i, price):
 emit("test_partial_fill.csv",
      walk(TEST_GOLD, 80, P0, gentle_step, wick=Decimal("0.0004"),
           start=week(26)))
+
+
+# --- O. decisive breakout ---------------------------------------------------
+# The condition the other fourteen fixtures do not contain.
+#
+# Every committed dataset produces breakouts that penetrate the Donchian
+# channel by a small fraction of ATR, so `donchian_breakout` scored 0.31-0.44
+# on all of them and never cleared the consensus floor of 0.55. That was read
+# for a while as the strategy being structurally incapable of clearing it. It
+# is not: the score is `(min(1, penetration) + 0.5) / 2`, so it crosses 0.55 at
+# a penetration of 0.6 ATR and reaches 0.75 at 1.0. The fixtures simply never
+# produced a break that size, which made a gap in the DATA look like a defect
+# in the decision layer.
+#
+# So this one contains breaks that are decisive in ATR terms, inside a trend
+# strong enough for the regime gate to admit a breakout strategy at all. Both
+# conditions have to hold at the same instant, which is the thing being
+# demonstrated: the confidence floor and the regime gate can be open together.
+#
+# The trend continues between impulses rather than consolidating. Consolidation
+# would narrow the channel and make the break cheaper in ATR terms, but it also
+# drops ADX, and a market that is no longer TRENDING is one where the regime
+# gate correctly discards the strategy -- which would be a fixture that
+# demonstrates nothing by construction.
+_breakout_trend = trend_step(Decimal("0.0015"))
+
+
+def decisive_breakout_step(i, price):
+    # The first 60 bars establish the trend and warm up ADX, ATR and the
+    # 20-bar channel. Nothing before that is evaluable anyway.
+    if i >= 60 and i % 20 == 19:
+        return price * Decimal("1.008")
+    return _breakout_trend(i, price)
+
+
+emit("decisive_breakout.csv",
+     walk(GOLD, 160, P0, decisive_breakout_step, start=week(28)))

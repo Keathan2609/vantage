@@ -177,6 +177,23 @@ random so nobody has to reason about an RNG.
 | `capacity-exhausted` | I. a tradable trend, used with risk capacity removed |
 | `news-agreement` | N. a tradable trend, used with news published across it |
 | `test-partial-fill` | P support. the synthetic instrument, so a split fill is representable |
+| `decisive-breakout` | O. a trend whose breaks are large enough in ATR terms to clear the consensus floor |
+
+`decisive-breakout` exists because of something the other fourteen had in
+common and nobody had noticed. Every one of them produces breaks that penetrate
+the Donchian channel by a small fraction of ATR, so `donchian_breakout` scored
+0.31-0.44 on all of them and never cleared the 0.55 confidence floor. That was
+recorded for a while as the strategy being structurally incapable of clearing
+it. It is not -- the score is `(min(1, penetration) + 0.5) / 2`, which crosses
+0.55 at a 0.6 ATR break -- so the gap was in the data, and a gap in the data was
+being read as a defect in the decision layer.
+
+Measured on this dataset: 3 instants clear the floor while the regime is
+TRENDING, peaking at 0.750. At one of them `macd_momentum` agrees at 0.599 and
+the only opposing opinion is gated out by regime, and the real consensus policy
+turns exactly those opinions into an actionable buy
+(`orchestrator/decisive_breakout_test.go`). For comparison, `trend-clean` tops
+out at 0.441 and clears the floor at no instant at all.
 
 **Each needs its OWN date range, and they are spaced two weeks apart.** A
 strategy is evaluated once per completed bar for ever -- that is recorded in

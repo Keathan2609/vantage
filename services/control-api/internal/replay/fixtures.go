@@ -123,6 +123,24 @@ func Declared() []Declaration {
 			File:        "test_partial_fill.csv",
 			Description: "Scenario P support. A quiet series on the SYNTHETIC TEST_XAU instrument, whose finer lot step makes a 40/60 split a representable quantity. Development only: no strategy trades this instrument.",
 		},
+		{
+			// The condition the other fourteen fixtures did not contain.
+			//
+			// All of them produce breaks that penetrate the Donchian channel
+			// by a small fraction of ATR, so `donchian_breakout` scored
+			// 0.31-0.44 on every one and never cleared the 0.55 consensus
+			// floor. That was read for a while as the strategy being incapable
+			// of clearing it; it is not, and the gap was in the DATA. Measured
+			// on this dataset: 3 instants clear the floor while the regime is
+			// TRENDING, peaking at 0.750, and at one of them `macd_momentum`
+			// agrees at 0.599 with the only opposing opinion gated out by
+			// regime. Those exact opinions are pinned in
+			// orchestrator/decisive_breakout_test.go, where the real consensus
+			// policy turns them into an actionable buy.
+			ID:          "decisive-breakout",
+			File:        "decisive_breakout.csv",
+			Description: "Scenario O. A sustained uptrend punctuated by breaks decisive enough in ATR terms to clear the consensus confidence floor, so the path from signal to verdict can be exercised rather than assumed.",
+		},
 	}
 }
 
