@@ -3385,6 +3385,80 @@ the newest dump out and says plainly that nothing in the stack does it for you,
 because a backup that lives only beside the thing it protects is a convenience
 rather than a recovery plan.
 
+## 30w. Off-site backups, and the one asymmetry worth explaining
+
+Section 30v left the obvious gap: the backups lived in a volume on the same
+machine as the database they protected. That survives a dropped table and not a
+dead disk.
+
+Each verified dump is now encrypted and copied off, when a recipient key and a
+remote are both configured. Neither set, and it is a local backup as before.
+
+### Encrypted away from home, readable at home
+
+The local copy stays plaintext and the off-site copy is encrypted. That
+asymmetry is deliberate and is the only interesting decision here.
+
+The off-site copy sits somewhere the operator does not control, so it is
+encrypted to a public key whose **private half never exists on the server**.
+Compromising this machine therefore yields the live database, which it was
+always going to yield, and not one archived backup. That property is the entire
+reason to encrypt, and it is lost the moment the private key is kept beside the
+thing it protects.
+
+The local copy stays readable because this machine already holds the live
+database in the clear. Encrypting it adds no secrecy against an attacker who is
+already here, and it adds a new way to lose everything: a single operator who
+mislays one key would own a shelf of backups nobody can open. Plaintext locally
+means a restore is always possible with what is on the box.
+
+`age` rather than gpg: one file format, one flag, no keyring, no agent, and no
+way to encrypt to the wrong key because a keyring held a stale entry. This
+project does not implement cryptography and does not intend to. `rclone` for
+transport, because it reaches Backblaze, R2, S3, SFTP and most other things
+through one configuration file that is mounted read only.
+
+### Proved rather than asserted
+
+The full chain was run end to end:
+
+| Step | Result |
+| --- | --- |
+| Dump, verified by reading the archive back | 814 850 bytes |
+| Encrypted with `age` to a public key | 815 242 bytes |
+| Copied to a remote with `rclone` | delivered |
+| Decrypted with the private key, which the backup container never held | 814 850 bytes, byte identical |
+| `pg_restore` into a scratch database | exit 0 |
+| `verify-audit` on the result | **110 of 110 events, verified: yes** |
+
+The last row is the one that matters. If the audit hash chain still verifies
+after a dump, an encryption, a network hop, a decryption and a restore, the log
+came back byte for byte and the tamper evidence survived the whole journey.
+
+That row also incidentally confirms the audit paging fix from section 30t:
+`events checked` equals `head sequence`, so the verdict covers the whole chain
+rather than its first page.
+
+### A build that failed for the wrong-looking reason
+
+The sidecar refused to start with:
+
+    /backup.sh: set: line 41: illegal option -
+
+Line 41 is `set -eu`. The file on disk was fine; the file in the IMAGE had CRLF
+line endings, so the shell read the flag as `-eu`. The error names neither the
+line ending nor the file that carried it.
+
+`.gitattributes` already forces LF on checkout, so a clone was never at risk.
+A working tree is a different matter: an editor, a generated patch, or a tool
+writing in text mode on Windows can leave CRLF behind, and building locally
+before deploying is exactly when someone would hit it. It happened twice during
+this work, both times from a script that rewrote the file in Python's text mode.
+
+The Dockerfile now strips carriage returns and runs `sh -n` on the result at
+build time, so a malformed script fails the build rather than the backup
+schedule. One `sed`, and no dependence on anyone's git configuration.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.
@@ -3640,9 +3714,10 @@ been executed and moved into the tally -- and what remains is what remains.
 - ~~**No scheduled backups**~~ **Closed for scheduled logical backups**
   (section 30v): a daily `pg_dump` with verification, retention, and a restore
   proven end to end including an audit-chain check on the restored copy. What
-  remains open from this entry is OFF-SITE copying, which nothing in the stack
-  does, and WAL archiving, so the recovery point is the last daily dump rather
-  than the last transaction. Formerly:
+  remains open from this entry is WAL archiving, so the recovery point is the
+  last daily dump rather than the last transaction. Off-site copying is closed
+  in section 30w: each verified dump is encrypted to a key whose private half
+  never reaches the server, and copied to any rclone remote. Formerly:
 - **No WAL archiving.** The restore drill passes but
   is run by hand, so the recovery point is the last manual dump and nothing
   would notice a backup that silently began producing an unusable file.

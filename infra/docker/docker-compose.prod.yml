@@ -131,7 +131,9 @@ services:
   # machine. Copy ${BACKUP_DIR} somewhere else on a schedule of your own; the
   # deployment guide says how and says plainly that nothing here does it for you.
   backup:
-    image: postgres:17.6-alpine
+    build:
+      context: .
+      dockerfile: backup.Dockerfile
     container_name: vantage-backup
     restart: unless-stopped
     depends_on:
@@ -145,10 +147,17 @@ services:
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_KEEP: ${BACKUP_KEEP:-14}
       BACKUP_DIR: /backups
-    entrypoint: ["/bin/sh", "/backup.sh"]
+      # Off-site. Both must be set, or neither: a recipient with no remote
+      # encrypts files that go nowhere, and a remote with no recipient would
+      # ship the audit chain, the ledger and the password hashes in the clear.
+      # The script checks for both together for exactly that reason.
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-}
+      BACKUP_RCLONE_REMOTE: ${BACKUP_RCLONE_REMOTE:-}
     volumes:
-      - ./backup.sh:/backup.sh:ro
       - postgres-backups:/backups
+      # rclone's configuration, holding whatever credentials the remote needs.
+      # Read only, and outside the repository.
+      - ${BACKUP_RCLONE_CONFIG:-/dev/null}:/root/.config/rclone/rclone.conf:ro
     networks:
       - data
     logging:

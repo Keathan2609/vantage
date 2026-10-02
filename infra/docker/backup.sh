@@ -14,13 +14,30 @@
 # A cron that silently stopped would look identical to one that had nothing to
 # do.
 #
-# # What this is not
+# # Off-site, and why the local copy stays in the clear
 #
-# It is not off-site. A dump sitting in a volume on the same machine survives a
-# dropped table and a bad migration. It does not survive the disk, the machine
-# or the directory being lost. Copying these files somewhere else is a separate
-# job and the deployment guide says so rather than letting the volume imply a
-# safety it does not have.
+# A dump in a volume on this machine survives a dropped table, a bad migration
+# and a careless DELETE. It does not survive losing the machine. So when
+# BACKUP_AGE_RECIPIENT and BACKUP_RCLONE_REMOTE are set, each verified dump is
+# encrypted and copied off.
+#
+# ENCRYPTED for the journey, PLAINTEXT at home, and that asymmetry is
+# deliberate:
+#
+#   * The off-site copy sits somewhere this operator does not control, so it is
+#     encrypted to a public key whose PRIVATE half never exists on this machine.
+#     Compromising the server therefore does not yield the archive. That is the
+#     property worth having and it is the whole reason to encrypt at all.
+#
+#   * The local copy stays readable because this machine already holds the live
+#     database in the clear. An encrypted local dump adds no secrecy against any
+#     attacker who is already here, and it adds a brand new way to lose
+#     everything: a single operator who mislays one private key would have a
+#     shelf of backups nobody can open. Plaintext locally means a restore is
+#     always possible with what is on the box.
+#
+# Both halves are optional and independent. Set neither and this is a local
+# backup, which is what it was before.
 set -eu
 
 : "${PGHOST:?}" "${PGUSER:?}" "${PGPASSWORD:?}" "${PGDATABASE:?}"
@@ -68,6 +85,26 @@ while true; do
     mv "$partial" "$target"
     size="$(wc -c < "$target")"
     echo "backup: wrote ${target} (${size} bytes, verified)"
+
+    # Off-site, if configured. Failures here are reported and do not stop the
+    # loop: a local backup that exists is better than no backup because an
+    # upload failed, and a silent exit would end the schedule entirely.
+    if [ -n "${BACKUP_AGE_RECIPIENT:-}" ] && [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then
+        sealed="${target}.age"
+        if ! age -r "$BACKUP_AGE_RECIPIENT" -o "$sealed" "$target" 2>&1; then
+            echo "backup: ENCRYPTION FAILED for ${stamp}; nothing sent"
+            rm -f "$sealed"
+        elif ! rclone copyto "$sealed" "${BACKUP_RCLONE_REMOTE}/$(basename "$sealed")" 2>&1; then
+            echo "backup: UPLOAD FAILED for ${stamp}; the local copy is intact"
+            rm -f "$sealed"
+        else
+            echo "backup: sent $(basename "$sealed") to ${BACKUP_RCLONE_REMOTE}"
+            # The encrypted file was only ever a courier. Removing it keeps one
+            # local copy per dump rather than two, and the one kept is the one
+            # that can be restored without a key.
+            rm -f "$sealed"
+        fi
+    fi
 
     # Retention. Oldest first, keeping the newest $KEEP.
     #

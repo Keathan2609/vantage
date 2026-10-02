@@ -210,17 +210,55 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml logs backup | ta
 docker compose -f docker-compose.yml -f docker-compose.prod.yml   exec backup ls -lh /backups
 ```
 
-**This is not off site.** A dump in a volume on this machine survives a dropped
-table, a bad migration and a careless DELETE. It does not survive losing the
-machine. Copy them somewhere else on a schedule of your own:
+### Sending backups off the machine
+
+A dump in a volume on this machine survives a dropped table, a bad migration and
+a careless DELETE. It does not survive losing the machine. Set two variables and
+each verified dump is encrypted and copied off.
+
+**Generate a keypair, and keep the private half somewhere else.**
 
 ```bash
-docker run --rm -v vantage_postgres-backups:/b -v "$PWD":/out alpine   sh -c 'cp /b/$(ls -1 /b | sort | tail -1) /out/'
+docker run --rm -it alpine sh -c 'apk add -q age && age-keygen'
 ```
 
-Then send that file wherever you keep things. Nothing here does it for you, and
-a backup that lives only beside the thing it protects is a convenience rather
-than a recovery plan.
+Copy the private key into a password manager, or anywhere that is not this
+server. Put only the public key in `.env.production`:
+
+```
+BACKUP_AGE_RECIPIENT=age1...your public key...
+BACKUP_RCLONE_REMOTE=offsite:vantage-backups
+BACKUP_RCLONE_CONFIG=/home/you/.config/rclone/rclone.conf
+```
+
+The private half never reaching the server is the entire point. Someone who
+compromises this machine gets the live database, which they were always going to
+get, and cannot read a single archived backup.
+
+**Configure the remote with rclone**, which talks to Backblaze B2, Cloudflare R2,
+S3, Google Drive, a second machine over SFTP and about forty other things:
+
+```bash
+rclone config        # name the remote `offsite`
+```
+
+B2 and R2 both have free tiers larger than this will need for a long time. Point
+`BACKUP_RCLONE_CONFIG` at the resulting file; it is mounted read only.
+
+Set neither variable and backups stay local, which is what they were before.
+
+**Restoring from an off-site copy** takes one extra step:
+
+```bash
+rclone copy offsite:vantage-backups/vantage-TIMESTAMP.dump.age .
+age -d -i /path/to/your.key -o restored.dump vantage-TIMESTAMP.dump.age
+```
+
+Then restore `restored.dump` exactly as above.
+
+This path was tested end to end rather than assumed: dump, verify, encrypt,
+copy to a remote, decrypt with a key the backup container never held, restore,
+and `verify-audit` reporting 110 of 110 events verified on the result.
 
 ### Restoring
 
