@@ -102,7 +102,7 @@ result names a run recorded in §0.12.
 | ST-2 | Consensus is a pure, versioned policy: vetoes before votes, never a majority | VERIFIED | `internal/orchestrator/consensus.go`, with `aggregate.go` as its only production caller, pinned by `TestTheAutonomousLoopRoutesOnlyAnAggregatedVerdict`. 76 tests in the package. |
 | ST-3 | Ten deterministic market scenarios exercise the decision layer | VERIFIED | `internal/orchestrator/scenario_test.go`. |
 | ST-4 | The strategies produce an actionable signal when the market suits them | VERIFIED | A `trend-clean` replay through the real pipeline now produces **46 actionable signals** -- 26 buy (mean 0.453) and 20 sell (mean 0.700) -- beside 73 genuine abstentions. The previous revision recorded this row as BROKEN on the strength of 130 signals all at confidence 0.000; **266 of those were strategies that had been handed fewer bars than they require and could not form an opinion at all**, recorded as opinions. Section 30o. |
-| ST-5 | An actionable signal that survives the policy becomes an order | **BROKEN** | The same replay produced 39 decisions, every regime correctly TRENDING, and **no order**. The cause is now measurable rather than inferred: the only strategy clearing the policy's 0.55 floor (`rsi_mean_reversion`, 0.700) declares itself valid only in RANGING, so the regime gate correctly discards it; the strategies that ARE valid in a trend peak at 0.538 (`macd_momentum`) and 0.441 (`donchian_breakout`) because the score is a raw average with hard-coded constants. On a trending market the set that can clear the floor and the set permitted to act do not intersect. Calibrating the scale is research; moving the threshold would answer it dishonestly. |
+| ST-5 | An actionable signal that survives the policy becomes an order | **BROKEN — on the committed fixtures** | The same replay produced 39 decisions, every regime correctly TRENDING, and **no order**. On that data the only strategy clearing the 0.55 floor (`rsi_mean_reversion`, 0.700) is valid only in RANGING so the regime gate correctly discards it, and the trend-valid ones peak at 0.538 and 0.441. **That is a property of the fixtures, not of the platform:** a constructed market that classifies TRENDING and breaks its channel by 1.0x ATR gives `donchian_breakout` 0.750 — clear of the floor, clear of the 0.60 net requirement, and valid in that regime, with no threshold changed (`test_confidence_reachability.py`). What is missing is a fixture containing a decisive break. Calibrating the scale against outcomes remains research; moving a threshold would still answer it dishonestly. |
 
 ### 0.5 Risk
 
@@ -2721,8 +2721,22 @@ neither is "the strategies do not work":
 
 The honest statement of ST-4 is therefore not "no strategy fires". It is that
 **the confidence scale and the policy's thresholds were never calibrated
-against each other**, and on a trending market the set of strategies that can
-clear the floor and the set permitted to act do not intersect.
+against each other**, and on these fixtures the set of strategies that can
+clear the floor and the set permitted to act did not intersect.
+
+**On these fixtures, and not in general.** A later revision tested whether the
+two gates can be open at once, because "do not intersect" read as a structural
+claim and a structural claim would mean the platform can never trade a trend.
+It is not structural. A constructed market that `classify_regime` calls
+TRENDING, ending in a break of 1.0x ATR through its own channel high, gives
+`donchian_breakout` 0.750 -- above the 0.55 floor, above the 0.60 net
+requirement, and valid in that regime -- with no policy changed. The control in
+the same test, an identical trend with a 0.5x break, scores 0.512 and is
+correctly refused, so the floor still discriminates on break size.
+
+What the committed fixtures lack is a decisive breakout. That is fixed with a
+dataset, not with a threshold, and it is a smaller and much more honest piece
+of work than recalibrating the scale.
 
 That is a research question with a defined shape, and moving the threshold to
 make trades appear would answer it dishonestly. What has changed is that it can
@@ -3731,17 +3745,25 @@ Stated plainly, because a report that lists only successes is not useful.
   somewhere deeper. Section 30n.
 
 - **The confidence scale and the policy's thresholds have never been
-  calibrated against each other, and on a trending market they do not
-  intersect.** Corrected from the previous revision, which recorded this as "no
-  strategy fires": 266 of those 130-odd signals were strategies that had been
-  handed fewer bars than they require, recorded as opinions (section 30o). With
-  that fixed the same replay produces 46 actionable signals -- and still no
-  order, because the only strategy clearing the 0.55 floor is regime-gated out
-  of a trend and the trend-valid ones peak at 0.538 and 0.441 against it. The
-  score is a raw average with hard-coded constants and is not a probability of
-  anything. Calibrating it against realised outcomes is research and needs
-  evidence; moving the threshold would manufacture trades rather than earn
-  them.
+  calibrated against each other, and on the committed fixtures they do not
+  intersect.** Corrected twice. The first revision recorded this as "no
+  strategy fires": 266 of those 130-odd signals were strategies handed fewer
+  bars than they require, recorded as opinions (section 30o). With that fixed
+  the same replay produces 46 actionable signals -- and still no order, because
+  the only strategy clearing the 0.55 floor is regime-gated out of a trend and
+  the trend-valid ones peak at 0.538 and 0.441 against it.
+
+  The second correction is that this is a fixture property and was being
+  written as a structural one. A constructed TRENDING market with a 1.0x ATR
+  break gives `donchian_breakout` 0.750, above both thresholds and valid in
+  that regime, with nothing in the policy touched. The committed datasets do
+  not contain a decisive break, which is a gap in the data rather than in the
+  decision layer.
+
+  What remains true: the score is a raw average with hard-coded constants and
+  is not a probability of anything, so calibrating it against realised outcomes
+  is still research and still needs evidence. Moving the threshold would
+  manufacture trades rather than earn them, and no threshold has been moved.
 
 - **Four replay fixtures are too short for the strategies they exercise, and
   are now declared so.** `drawdown`, `false_breakout`, `spread_spike` and

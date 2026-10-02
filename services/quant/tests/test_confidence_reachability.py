@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from vantage_quant import strategies as strat
+from vantage_quant.scanner import classify_regime
 
 # The control plane's DefaultConsensusPolicy, duplicated deliberately.
 #
@@ -43,6 +44,7 @@ from vantage_quant import strategies as strat
 # to the confidence it was compared against, which is the thing a reader needs
 # in order to notice.
 CONSENSUS_MIN_CONFIDENCE = 0.55
+CONSENSUS_MIN_NET_CONFIDENCE = 0.60
 
 
 def breakout_series(bar_range: float, break_multiple: float, n: int = 200) -> pd.DataFrame:
@@ -154,3 +156,87 @@ def test_the_confidence_tracks_the_break_and_saturates_at_the_blend_ceiling() ->
     for pen, conf in measured:
         assert abs(conf - (min(1.0, pen) + 0.5) / 2) < 0.01, (
             f"penetration {pen} gave {conf}, not (min(1,pen)+0.5)/2")
+
+
+def trending_then_breaking(break_atr: float, n: int = 200, step: float = 3.0,
+                           seed: int = 7) -> pd.DataFrame:
+    """A steady uptrend that ends in a break of its own channel high.
+
+    The trend has to be real enough for `classify_regime` to call it TRENDING
+    from ADX, and the final bar has to clear the Donchian high by a controlled
+    multiple of ATR. Both at once is the whole point: a market that is only one
+    of those proves nothing about whether the two gates can be open together.
+    """
+    rng = np.random.default_rng(seed)
+    close = 2650.0 + np.arange(n) * step + rng.normal(0, step * 0.2, n)
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    wick = np.abs(rng.normal(step * 0.3, step * 0.1, n))
+    high = np.maximum(open_, close) + wick
+    low = np.minimum(open_, close) - wick
+
+    atr_estimate = step + 2 * wick.mean()
+    close[-1] = high[:-1].max() + atr_estimate * break_atr
+    high[-1] = close[-1]
+    low[-1] = close[-2]
+    open_[-1] = close[-2]
+
+    index = pd.date_range("2025-01-06T00:00:00Z", periods=n, freq="1h")
+    return pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close,
+         "volume": np.full(n, 1000.0)},
+        index=index,
+    )
+
+
+def test_a_trending_market_can_clear_the_floor_with_a_trend_valid_strategy() -> None:
+    """The two gates can be open at the same time.
+
+    The engineering report recorded ST-5 as: on a trending market, the set of
+    strategies that can clear the confidence floor and the set permitted to act
+    in that regime DO NOT INTERSECT. Read as a structural claim that means the
+    platform cannot trade a trend, ever, and the only remedies are to move a
+    threshold or delete a regime gate.
+
+    It is not structural. Here one market is simultaneously classified TRENDING
+    and produces a `donchian_breakout` signal above both thresholds, with no
+    policy changed. What the seeded fixtures lacked was a decisive break, which
+    is a property of the data and is fixed by a fixture rather than a number.
+
+    This asserts the STRATEGY output and the regime gate, which is where the
+    claim was made. It does not assert that an order would be placed: consensus
+    weighting, vetoes and the risk engine all sit downstream in the control
+    plane, and claiming an outcome this test does not run would be the same
+    error in the other direction.
+    """
+    bars = trending_then_breaking(break_atr=1.0)
+
+    regime, _measures = classify_regime(bars)
+    spec = strat.REGISTRY["donchian_breakout"]
+    signal, _ = strat.evaluate("donchian_breakout", bars, None, None)
+
+    assert regime == "TRENDING", f"the fixture is not a trend; it classified {regime}"
+    assert regime in spec.valid_regimes, (
+        f"donchian_breakout is not valid in {regime}; its regimes are {spec.valid_regimes}")
+    assert signal.action == "buy", f"expected a break to buy, got {signal.action}"
+    assert signal.confidence >= CONSENSUS_MIN_NET_CONFIDENCE, (
+        f"a decisive break in a confirmed trend scored {signal.confidence:.4f}, "
+        f"below even the {CONSENSUS_MIN_NET_CONFIDENCE} net requirement")
+
+
+def test_the_same_trend_with_a_weak_break_still_fails_the_floor() -> None:
+    """The control, so the test above is not just a loosened assertion.
+
+    Same generator, same trend, same strategy. Only the size of the break
+    changes. If this also cleared the floor, the one above would be measuring
+    the fixture rather than the breakout.
+    """
+    bars = trending_then_breaking(break_atr=0.5)
+
+    regime, _measures = classify_regime(bars)
+    signal, _ = strat.evaluate("donchian_breakout", bars, None, None)
+
+    assert regime == "TRENDING"
+    assert signal.action == "buy"
+    assert signal.confidence < CONSENSUS_MIN_CONFIDENCE, (
+        f"a weak break scored {signal.confidence:.4f} and cleared the floor; "
+        f"the floor is then not discriminating on break size at all")
