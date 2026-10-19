@@ -206,10 +206,27 @@ jobs:
       # 127 printing the usage text, which reads like the action being broken
       # and is an unrecognised flag. Repository scanning is the default now, so
       # the flag is simply removed rather than replaced.
+      # --config is REQUIRED for the repository-root osv-scanner.toml to apply.
+      #
+      # OSV-Scanner discovers configuration next to each scanned MANIFEST, not
+      # at the root of the scan. With `--recursive ./` the manifests are
+      # services/control-api/go.mod and apps/web/package-lock.json, so an
+      # osv-scanner.toml at the repository root is never read and its entries
+      # silently do nothing -- the scan fails exactly as if the file did not
+      # exist, which is how this was first got wrong.
+      #
+      # Naming it explicitly keeps one config at the root, where somebody
+      # looking for the project's exceptions will actually find it, rather
+      # than a copy beside every lockfile drifting apart from the others.
+      #
+      # Verified locally against the same image: without the flag the scan
+      # exits 1 on braces; with it, "Filtered 1 vulnerability from output" and
+      # exit 0.
       - name: OSV-Scanner
         uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
           scan-args: |-
+            --config=osv-scanner.toml
             --recursive
             ./
 
