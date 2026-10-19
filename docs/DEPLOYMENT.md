@@ -25,6 +25,119 @@ buys nothing here, so the layout below keeps all four containers together.
 comfortable. That can be your own computer, a 5 USD VPS, or Oracle Cloud's
 Always Free ARM tier, which is genuinely free and genuinely always on.
 
+The same reasoning rules out Cloudflare Workers for the control plane, for the
+avoidance of doubt. Workers are request-scoped like Vercel functions. Cloudflare
+still does the two jobs it is best at here -- the tunnel and the gate -- and
+Supabase can hold the database; neither can hold the process.
+
+## Running the database on Supabase
+
+Supported, and it changes one thing: where Postgres is. Every connection string
+already arrives whole from the environment, so this is a change to
+`.env.production` and to nothing else -- no code, and no edit to either of the
+other compose files.
+
+### Use the SESSION pooler, port 5432
+
+The single choice here that misbehaves quietly if it is wrong.
+
+Supabase offers a transaction pooler on 6543 and a session pooler on 5432.
+**Use 5432.** `pgx` opens prepared statements, and `internal/db.Open` sets four
+startup parameters on every connection: `statement_timeout`,
+`idle_in_transaction_session_timeout`, `application_name` and `timezone`. A
+transaction-mode pooler hands a different backend to each transaction, so
+prepared statements disappear between uses and unrecognised startup parameters
+are rejected. The resulting failures are intermittent and read as application
+bugs.
+
+The direct connection also works and is the lowest latency, but on the free
+tier it resolves over **IPv6 only**, so a host without IPv6 fails to connect in
+a way that looks like a firewall rule.
+
+Set `sslmode=require`. The development URLs use `sslmode=disable`, and carrying
+that over by accident is not something anyone notices later.
+
+### Steps
+
+1. Create a Supabase project. Note the project reference and the database
+   password.
+2. From **Project Settings**, **Database**, copy the **Session pooler**
+   connection string. It looks like
+   `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres`.
+3. Create the three least-privilege roles. A managed database has no
+   `docker-entrypoint-initdb.d`, so the separation the Docker stack gets for
+   free is applied once by hand:
+
+   ```bash
+   psql "<the session pooler URL>" \
+     -v owner_pw="$(openssl rand -base64 24)" \
+     -v app_pw="$(openssl rand -base64 24)" \
+     -v research_pw="$(openssl rand -base64 24)" \
+     -f infra/supabase/01-roles.sql
+   ```
+
+   Keep those three values; they go into the connection strings below. **Run
+   this BEFORE the first migration.** Migration 0007 grants table privileges to
+   these roles and is guarded by `IF EXISTS` on each one, so applying
+   migrations first leaves the grants silently unapplied and the application
+   running with whatever its role already had.
+
+4. Write the two application connection strings into `.env.production`, using
+   the role names and the passwords from step 3 against the pooler host:
+
+   ```
+   VANTAGE_DATABASE_URL=postgres://vantage_app:...@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+   VANTAGE_MIGRATION_DATABASE_URL=postgres://vantage_owner:...@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+   ```
+
+   The database is `postgres`, not `vantage`. Supabase gives you one database
+   and every migration targets the `public` schema, so the name is irrelevant.
+
+5. Add the backup sidecar's view of the same database:
+
+   ```
+   SUPABASE_DB_HOST=aws-0-<region>.pooler.supabase.com
+   SUPABASE_DB_PORT=5432
+   SUPABASE_DB_USER=postgres.<ref>
+   SUPABASE_DB_PASSWORD=...
+   SUPABASE_DB_NAME=postgres
+   ```
+
+6. Start it, naming the services explicitly:
+
+   ```bash
+   cd infra/docker
+   docker compose --env-file ../../.env.production \
+     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.supabase.yml \
+     up -d --build control-api quant web cloudflared backup
+   ```
+
+   Naming them matters. The base file still defines a `postgres` service and an
+   overlay cannot delete one, so a bare `up` would start a local database that
+   nothing connects to.
+
+### What this costs you
+
+Be clear-eyed about it. The audit chain, the ledger, the order history and the
+password hashes move onto a third party's infrastructure. TOTP secrets are
+encrypted at rest with `VANTAGE_DATA_ENCRYPTION_KEY`, which stays on your
+host, so Supabase holds ciphertext for those and plaintext for everything else.
+Whoever controls the Supabase project can read the trading record.
+
+For a single-operator paper platform that is a reasonable trade for not
+administering a database. It is worth stating rather than discovering, and
+`docs/THREAT_MODEL.md` assumes a self-hosted database -- if you take this path,
+that document is describing a deployment you no longer have.
+
+Backups still run. A managed provider protects against disk failure, not
+against a bad migration, a careless DELETE, or losing access to the account, so
+the sidecar keeps taking its own verified dumps and shipping them off-site
+encrypted to a key Supabase never sees.
+
+Redis stays local. Supabase does not offer it, the platform uses it only for
+rate-limit buckets, and a bucket that resets on restart costs nothing --
+adding a second managed provider to hold ten counters would be the worse trade.
+
 ## The shape
 
 ```
@@ -57,6 +170,49 @@ it is the one place an unauthenticated stranger can make your machine do real
 work. Access means they never reach it.
 
 Both the tunnel and Access are free. Access is free for up to 50 users.
+
+## The free host that actually works: Oracle Cloud Always Free
+
+Of the free tiers, this is the one that fits. Render and Railway spin a free
+service down when idle, which for this platform means the ingest loop stops and
+the bar series freezes -- rule 9's failure, delivered by the hosting plan.
+Fly.io keeps a machine running but wants a card. Oracle's Always Free ARM tier
+gives up to 4 cores and 24 GB, permanently, and costs nothing.
+
+**On the reclamation worry.** Oracle reclaims Always Free compute that has been
+idle for seven days -- below roughly 15% CPU, 20% network and 20% memory. A
+control plane ingesting every two seconds, evaluating every thirty and
+reconciling every five minutes is never idle, so this workload is close to the
+best possible fit for that policy. The real friction is capacity: ARM
+(`VM.Standard.A1.Flex`) is frequently unavailable in popular regions at signup,
+and you may have to try another region or retry over a few days.
+
+Do **not** take the x86 Always Free shape (`VM.Standard.E2.1.Micro`). It has
+1 GB of RAM and the Next.js build dies on it with an out-of-memory kill that
+reads as a corrupt install.
+
+Pick Ubuntu 22.04 or 24.04, 2 cores and 8 GB is generous, then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Keathan2609/vantage/master/scripts/bootstrap-host.sh -o bootstrap-host.sh
+less bootstrap-host.sh      # read it first
+sudo bash bootstrap-host.sh
+```
+
+It installs Docker, clones to `/opt/vantage`, refuses to continue until
+`.env.production` is filled in, and brings the stack up. It opens no ports: the
+only route in is the tunnel, which dials out. Re-running it is safe.
+
+**Leave the Oracle security list alone.** Every listener binds to `127.0.0.1`
+and the tunnel makes an outbound connection, so there is nothing to allow
+through. If you find yourself opening 8080 to make this reachable, stop --
+that is the one change that would put an Argon2id login endpoint on the open
+internet.
+
+**On ARM.** All four base images are multi-arch and nothing pins a platform or
+a `GOARCH`, so the stack is expected to build natively. It has not been built
+on ARM here, so treat that as reasoned rather than verified; the bootstrap
+builds on the host, so you will know within one command.
 
 ## Steps
 

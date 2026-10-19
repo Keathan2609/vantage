@@ -1,0 +1,92 @@
+# Supabase overlay: the database lives outside this machine.
+#
+# Use it WITH both of the others, last:
+#
+#   docker compose --env-file ../../.env.production \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.supabase.yml \
+#     up -d --build control-api quant web cloudflared backup
+#
+# Name the services explicitly. The base file still DEFINES a postgres service
+# and this overlay cannot delete it, so an unqualified `up` would start a local
+# Postgres that nothing uses and that would quietly accumulate an empty volume.
+# Listing the services is the one reliable way to leave it out.
+#
+# # What changes, and what does not
+#
+# Only where the database is. Every connection string already arrives whole
+# from the environment, so pointing at Supabase is a change to .env.production
+# and not to any code or to either other compose file. That was the reason for
+# passing whole URLs rather than assembling them from parts, and this is the
+# first time it has paid for itself.
+#
+# Redis stays local. Supabase does not provide Redis, the platform uses it only
+# for rate-limit buckets, and a bucket that resets when the container restarts
+# costs nothing. Adding a second managed provider to hold ten counters would be
+# a worse trade than running a 30 MB container.
+#
+# # Use the SESSION pooler (port 5432), not the transaction pooler (6543)
+#
+# This is the one choice here that will silently misbehave if it is got wrong.
+#
+# pgx opens prepared statements, and `internal/db.Open` sets four startup
+# parameters on every connection -- statement_timeout,
+# idle_in_transaction_session_timeout, application_name and timezone. A
+# transaction-mode pooler hands a different backend to each transaction, so
+# prepared statements vanish between uses and unrecognised startup parameters
+# are rejected outright. The failures that follow are intermittent and read as
+# application bugs.
+#
+# Supabase's session pooler on 5432 keeps one backend per client connection,
+# which is what a long-lived pool with 2 to 20 connections wants anyway. The
+# direct connection also works, but on the free tier it resolves over IPv6
+# only, so a host without IPv6 fails to connect for a reason that looks
+# like a firewall.
+#
+# sslmode=require, not disable. Supabase refuses plaintext, and the
+# development default of `disable` carried over by accident is the kind of
+# thing nobody notices until it is in a packet capture.
+
+services:
+  control-api:
+    # postgres is gone; the dependency must go with it, or compose refuses to
+    # start a service that depends on one it was not asked to create.
+    #
+    # `!override` rather than a plain mapping. Compose MERGES depends_on by
+    # default, so listing redis and quant here without the tag leaves the
+    # base file's postgres entry in place and the resolved config still
+    # requires a container this overlay exists to remove. Verified with
+    # `docker compose config --format json`: without the tag the dependency
+    # list resolves to [postgres, quant, redis].
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      quant:
+        condition: service_healthy
+    networks:
+      # `data` still exists for redis. `edge` is how the tunnel reaches this.
+      - data
+      - edge
+
+  quant:
+    depends_on: !reset []
+
+  # No local database to back up.
+  #
+  # The backup sidecar is NOT simply deleted. A dump taken from Supabase is
+  # still worth having: a managed provider protects against disk failure, not
+  # against a bad migration, a careless DELETE, or losing access to the account
+  # itself. The container stays and its PG* variables point at Supabase.
+  #
+  # pg_dump over the session pooler works. It is slower than a local socket and
+  # that is the correct trade for a job that runs once a day.
+  backup:
+    depends_on: !reset []
+    environment:
+      PGHOST: ${SUPABASE_DB_HOST:?the Supabase pooler host, e.g. aws-0-eu-west-1.pooler.supabase.com}
+      PGPORT: ${SUPABASE_DB_PORT:-5432}
+      PGUSER: ${SUPABASE_DB_USER:?the Supabase pooler user, e.g. postgres.abcdefghijklm}
+      PGPASSWORD: ${SUPABASE_DB_PASSWORD:?}
+      PGDATABASE: ${SUPABASE_DB_NAME:-postgres}
+      PGSSLMODE: require
+    networks:
+      - data
