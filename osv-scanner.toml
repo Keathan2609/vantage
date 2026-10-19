@@ -1,0 +1,38 @@
+# OSV-Scanner exceptions.
+#
+# One entry, and it is here rather than suppressed globally because the rule
+# in ENGINEERING_GUIDE.md is that a finding is either fixed or recorded with
+# its reason and with what would change it. A scanner nobody can satisfy is a
+# scanner people turn off.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = """
+braces stack-exhaustion DoS through deeply nested glob patterns.
+
+NO FIX EXISTS. The advisory range is <= 3.0.3 and the latest published braces
+IS 3.0.3, so every version that has ever been released is in range and there
+is nothing to upgrade to. This was checked against the registry rather than
+assumed: `npm view braces versions` lists 3.0.1, 3.0.2, 3.0.3 and nothing
+after.
+
+It reaches this project only through development tooling:
+
+  braces -> micromatch -> fast-glob -> @next/eslint-plugin-next
+         -> eslint-config-next
+
+That is eslint's glob matcher. It is a devDependency, it never ships, and the
+production tree is clean: `npm audit --omit=dev` reports zero. Exploiting it
+means feeding hostile glob patterns to the linter, which requires already
+being able to edit this repository -- at which point the lint config is not
+the interesting target.
+
+npm's own suggested remedy is `eslint-config-next@14.2.35`, a MAJOR downgrade
+from 16.x that drops support for the Next version this application is built
+on. Taking it would trade a theoretical DoS in a build tool for a real and
+immediate break in the thing being built.
+
+WHAT WOULD CHANGE THIS: a braces release above 3.0.3, or fast-glob moving off
+braces. Either makes this entry unnecessary, and it should be deleted the day
+one lands. Re-check with `npm view braces versions`.
+"""

@@ -9,7 +9,7 @@
 #   docker build -t vantage/control-api .
 
 # ---------------------------------------------------------------- build stage
-FROM golang:1.27.0-alpine3.23 AS build
+FROM golang:1.27.2-alpine3.23 AS build
 
 # git is needed for module resolution of any VCS-hosted dependency.
 RUN apk add --no-cache git ca-certificates
