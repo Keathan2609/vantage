@@ -194,7 +194,7 @@ cat <<'NEXT'
 
  3. Confirm the execution mode is what you think it is:
 
-      curl -s https://vantage-api.yourdomain.com/api/v1/version \
+      curl -s https://vantage-api.yourdomain.com/version \
         | grep -o '"live_trading_available":[a-z]*'
 
     It must say false. It cannot say anything else in this build, and checking
