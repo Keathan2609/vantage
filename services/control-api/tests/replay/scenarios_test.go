@@ -484,10 +484,31 @@ func runScenarios(t *testing.T, scenarios []scenario) {
 					only = reason
 					break
 				}
+				// Two causes produce this, and naming only one sends the
+				// reader to fix something that is not broken.
+				//
+				// The message used to say "needs a freshly seeded database"
+				// and nothing else. That is right when earlier suites have
+				// spent the fixture -- and wrong for a dataset that is simply
+				// too SHORT, where no amount of reseeding will help because
+				// the strategies need more bars than the dataset contains.
+				// Measured: `spread-spike` is 100 bars and four of the five
+				// PAPER strategies require 120, so it can never produce a
+				// decision; `drawdown` and `false-breakout` at 120 both do.
+				// The boundary is exact, and the old message pointed at the
+				// database for a case decided entirely by the fixture.
+				starved := o.SkipReasonsContaining("complete bars available")
+				cause := "this matrix needs a freshly seeded database -- run " +
+					"./scripts/dev-up.ps1 -Reset -Seed and try again"
+				if starved == o.Skipped && sc.steps < 120 {
+					cause = fmt.Sprintf(
+						"this dataset is %d bars and the strategies need 120, so it "+
+							"cannot reach an evaluation however often you reseed. "+
+							"Lengthen the fixture rather than the database",
+						sc.steps)
+				}
 				t.Skipf("all %d strategy runs were skipped (%q) and no decision was "+
-					"taken: this matrix needs a freshly seeded database. Run "+
-					"./scripts/dev-up.ps1 -Reset -Seed and try again\n%s",
-					o.StrategyRuns, only, o.describe())
+					"taken: %s\n%s", o.StrategyRuns, only, cause, o.describe())
 			}
 
 			// The universal invariants are about the WHOLE account: a ledger

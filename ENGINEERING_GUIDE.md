@@ -179,6 +179,29 @@ VANTAGE_MARKETDATA_E2E=1   # Backfill / Sync / Repair / Snapshot against a fake 
 VANTAGE_STORE_E2E=1        # the retention sweeps, run as the APP role
 ```
 
+**`VANTAGE_REPLAY_RESTART_CMD` gates the crash-recovery tests**, and without it
+the ones that matter most skip silently. They kill the control plane mid-flight
+and assert that what survives is correct -- that a partial fill is not
+re-booked, that an execution lost to a crash is booked exactly once or left
+open, that a restart does not duplicate anything. Those are the properties a
+trading system cannot be wrong about, and they were going unrun because one
+variable was unset.
+
+It is a shell command, run through `bash -c`, that starts the control plane in
+replay mode. The test will not guess it: a hard-coded `go run` would silently
+exercise a different binary from the one the operator uses.
+
+```bash
+VANTAGE_REPLAY_RESTART_CMD='cd /path/to/services/control-api \
+  && set -a && . ../../.env && set +a \
+  && VANTAGE_MARKET_DATA_PROVIDER=replay exec go run ./cmd/control-api serve \
+  >> /tmp/restarted-api.log 2>&1'
+```
+
+Expect the control plane you started to report a failure while these run. That
+is the test killing it on purpose; it is restarted from this command and the
+run continues.
+
 Point `VANTAGE_DATABASE_URL` at the development Postgres for both. The
 retention suite deliberately uses the app role rather than the superuser,
 because the sweep runs as the app role in production and a missing `DELETE`
