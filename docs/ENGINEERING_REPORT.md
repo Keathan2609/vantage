@@ -3797,6 +3797,152 @@ directory held fourteen fixtures totalling 212 KB. The figure had drifted
 before this work started, and nobody recomputes a number in a rule. It now
 reads fifteen and 227 KB, both measured.
 
+## 30ab. A full verification run, against a live stack
+
+Every suite the engineering guide lists as the completion checklist, executed
+in one session against a running stack rather than skipped. Recorded because
+the stack-dependent half had not all been run together before.
+
+| Suite | Result |
+| --- | --- |
+| `gofmt -l .`, `go vet ./...` | clean |
+| `go test ./...` | **740 passed, 0 failed**, 55 skipped (every skip env-gated and named) |
+| `CGO_ENABLED=1 go test -race ./internal/...` | **23 packages, 0 data races** |
+| `ruff check`, `mypy vantage_quant` | clean, 26 source files |
+| `pytest` | **406 passed, 0 skipped** |
+| `npm run typecheck`, `lint`, `build` | clean; 19 routes, standalone assembled |
+| `tests/smoke/smoke.py` | **66 passed, 0 failed** |
+| `tests/smoke/smoke_research.py` | **35 passed, 0 failed** |
+| Playwright E2E | **57 passed** |
+| Retention (`VANTAGE_STORE_E2E`) | **3 passed**, as the APP role |
+| Acquisition (`VANTAGE_MARKETDATA_E2E`) | passed |
+| Concurrency (`VANTAGE_RACE_E2E`) | **15 passed** |
+| Replay (`VANTAGE_REPLAY_E2E`) | 13 passed, 1 failed, 8 skipped -- see below |
+
+### The pipeline places orders
+
+The open question from the previous milestone was whether anything reaches the
+OMS through the real scheduler. It does. From `restart_test.go` on the
+seeded account: **399 decisions, 2 orders, 3 fills, 1 ledger entry, balance
+stored 500.00 and derived 500.00, matching.** `partial_fill_test.go` separately
+held an order `PARTIALLY_FILLED` at 0.04 lots.
+
+That is the first recorded evidence in this repository of the full path --
+ingestion, bars, strategies, consensus, risk, OMS, venue, booking, ledger --
+running end to end under the real scheduler rather than at the decision layer.
+
+### Two walls of red that were configuration, not defects
+
+Both are worth recording because both LOOKED like platform failures and the
+platform was right each time.
+
+**Playwright, 29 of 57 failing.** Every failure was `.topbar` never appearing,
+with the sign-in button stuck on "Signing in...". Not the documented port-3000
+trap -- the page snapshot in `error-context.md` showed the genuine Vantage
+sign-in page, which is how that was ruled out rather than guessed. The cause
+was the terminal started with `NEXT_PUBLIC_VANTAGE_API_BASE_URL` pointing at
+`127.0.0.1:8080` while the page served from `localhost:3005`. Those are
+different sites for cookie purposes and session cookies are `SameSite=Lax`, so
+the cookie was never returned. `.env` had it right; the override was gratuitous.
+Corrected, the same suite passes 57 of 57 in 2.7 minutes rather than failing in
+14.6.
+
+**Replay, 18 of 21 failing**, every one on the identical line `replay start
+returned 403`. The harness sends `Origin` from `VANTAGE_SMOKE_WEB_ORIGIN`,
+defaulting to `http://localhost:3001`, against a control plane allowing exactly
+`http://localhost:3005`. Proved rather than inferred by issuing the same
+request twice: with the harness's default origin, `403 csrf_origin_mismatch`;
+with the correct one, `422` asking for a reason, "a replay puts this process on
+dataset time and the record should say why". The second response is the
+platform refusing correctly, which is what established the auth path was sound.
+
+Two origin mismatches in one session, both self-inflicted, both producing
+output indistinguishable at a glance from a broken application. That is the
+argument for this repository's habit of recording ports and origins in its
+operational notes.
+
+### The one failure, and what it turned out to be
+
+`TestScenarioMatrixThroughTheRealPipeline/B_range` failed with "no strategy was
+evaluated at all: 0 runs, all skipped. The pipeline did not reach strategy
+evaluation, which is a different thing from the strategies declining to act."
+
+The guide documents that symptom for several replay suites sharing one seeded
+database, so that was the hypothesis. It was tested rather than assumed: the
+matrix was re-run **alone, on a fresh seed**, and the same scenario reported
+
+    scenario B: the classifier reported RANGING on 39 of 39 decisions
+    strategy runs=670 (no_signal=98 skipped=551)
+
+670 strategy runs instead of 0, and the regime classifier correct on every one
+of 39 decisions across a range-bound dataset. Fixture exhaustion from suite
+sharing, exactly as documented, and not a defect. The remedy is the guide's own:
+reseed between suites, not between invocations.
+
+The 551 skips in that run are `"only N complete bars available"` and `"replay
+warm-up: evaluation begins at ..."` -- the `insufficient_history` refusal
+behaving correctly while a replay feeds bars incrementally. A strategy needing
+120 bars and declining at 12 is right. That the failure was diagnosable at all
+is down to the test's error message drawing the distinction between "the
+strategies declined" and "the pipeline never reached them", which is the whole
+value of wording an assertion that way.
+
+### A gap found in this milestone's own work, and closed
+
+The `decisive-breakout` fixture added earlier in this milestone was registered,
+embedded and loadable -- and **no replay test played it**. The claim that a
+decisive break produces an order had been verified at the decision layer, by
+feeding measured opinions to the real `Decide`, and never driven through the
+scheduler. Adding a fixture and registering it is not exercising it, and the
+gap survived because nothing fails when a fixture goes unused.
+
+**Measured before any assertion was written**, which is the only order that
+produces an honest test. Driving the dataset through the real pipeline by hand:
+
+| | |
+| --- | --- |
+| steps / errors | 160 / 0 |
+| strategy runs | 765 |
+| decisions | 76 |
+| orders | **11** -- 8 FILLED, 3 REJECTED `exposure_limit_breached` |
+| fills / ledger entries | 8 / 4 |
+| peak equity | 542.85 from a 500.00 start |
+
+For comparison, `trend-clean` through the same pipeline produces **zero**
+orders. The difference is the dataset, not the code.
+
+Three of those orders being refused for `exposure_limit_breached` is the risk
+engine working: the account's ceilings filled as earlier fills consumed them,
+and later signals were refused rather than sized down past the limit.
+
+Scenario O now pins it. The assertions are deliberately loose -- orders above
+zero, fills above zero, decisions recorded, TRENDING observed -- and that
+looseness earned itself immediately: run through the harness rather than by
+hand, the same dataset produced 58 decisions, 6 orders and 4 fills rather than
+76, 11 and 8, because the harness steps in different batches. Pinning the
+measured counts would have produced a test that failed for a reason having
+nothing to do with breakouts.
+
+This is the first end-to-end evidence in this repository that an actionable
+verdict becomes a filled order: ingestion, bars, strategies, consensus, risk,
+OMS, the venue, booking and the ledger, under the real scheduler.
+
+### Security advisories cleared before deployment
+
+`npm audit --omit=dev` reported 3 high: Next 16.3.6 (six advisories, two of
+them SSG/ISR cache poisoning affecting self-hosted `output: "standalone"` --
+the exact deployment shape), `sharp` below 0.35.5, and `source-map-js`.
+Upgraded to Next **16.4.2**, above the vulnerable range. **0 vulnerabilities**
+after.
+
+Two notes from doing it. `npm audit fix --omit=dev` does not scope the audit --
+it reinstalls the tree without dev dependencies and removed 334 packages
+including TypeScript, ESLint and Playwright; a plain `npm install` restores
+them. And the upgrade then failed the build with `TS1128` in
+`.next/dev/types/validator.ts`, a GENERATED file left by the dev server under
+the old version. Stale artefacts, not source: deleting `.next` and rebuilding
+is clean.
+
 ## 31. What is NOT verified
 
 Stated plainly, because a report that lists only successes is not useful.

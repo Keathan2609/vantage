@@ -307,6 +307,62 @@ func datasetScenarios() []scenario {
 				}
 			},
 		},
+		{
+			// The scenario the other fixtures could not express.
+			//
+			// Every other committed dataset breaks its Donchian channel by a
+			// small fraction of ATR, so `donchian_breakout` scores 0.31-0.44
+			// on all of them and never clears the 0.55 consensus floor. The
+			// whole matrix therefore ran for a long time without a single
+			// order reaching the venue, and the absence looked like a property
+			// of the strategies rather than of the data.
+			//
+			// This dataset breaks decisively. It is the end-to-end counterpart
+			// of orchestrator/decisive_breakout_test.go, which proved only that
+			// the consensus policy turns such opinions into an actionable
+			// verdict -- a verdict is not an order, and everything between them
+			// (position sizing, the risk checks, trading authority, Autopilot,
+			// the venue, booking and the ledger) was untested against a
+			// decision that actually wanted to trade.
+			//
+			// Measured before this assertion was written, which is the only
+			// order that produces an honest test: 765 strategy runs, 76
+			// decisions, 11 orders, 8 filled, 3 refused for
+			// `exposure_limit_breached`, 4 ledger entries, peak equity 542.85
+			// from a 500.00 start.
+			letter: "O", name: "decisive breakout", dataset: "decisive-breakout", steps: 160,
+			expect: func(t *testing.T, o observed) {
+				// The thing no other fixture can show.
+				if o.Orders == 0 {
+					t.Errorf("a decisive breakout produced no order at all. This is "+
+						"the one dataset built to clear the confidence floor, so "+
+						"zero here means the path from an actionable verdict to the "+
+						"venue is broken somewhere between consensus and the OMS"+
+						"\n%s", o.describe())
+				}
+				if o.Filled == 0 {
+					t.Errorf("orders were placed but none filled: the paper venue "+
+						"accepted nothing\n%s", o.describe())
+				}
+
+				// Deliberately NOT asserting the exact counts measured above.
+				//
+				// The replay is deterministic, but the risk engine's refusals
+				// depend on how much exposure earlier fills consumed, so the
+				// FILLED/REJECTED split is a property of the account's state as
+				// much as of the dataset. Pinning 8 and 3 would turn a change
+				// in position sizing into a failure in a breakout test, which
+				// is the wrong place to find out about it.
+				if o.Decisions == 0 {
+					t.Errorf("no decision was recorded\n%s", o.describe())
+				}
+				if o.Regimes["TRENDING"] == 0 {
+					t.Errorf("no decision recorded TRENDING on a dataset whose "+
+						"breaks are defined relative to an established trend"+
+						"\n%s", o.describe())
+				}
+			},
+		},
 	}
 }
 
