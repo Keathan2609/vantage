@@ -11,6 +11,7 @@ import {
   flattenAll,
   newKey,
   releaseAllKillSwitches,
+  removeOrphanVenueExecutions,
   resetBrokerFaults,
   safeStop,
   signIn,
@@ -418,6 +419,21 @@ test.describe("operator control: input validation", () => {
     // judgement and writes no financial state; importing would book a position
     // against a guessed parent order, which is the thing the platform refuses
     // to do automatically and which a test must not do either.
+    // Remove the CAUSE before closing the symptom.
+    //
+    // The first version of this teardown only acknowledged the open issues,
+    // and that was not enough: the injected venue fill survives an
+    // acknowledgement, so the next reconciliation pass re-detects the same
+    // divergence and raises a new issue minutes after the suite has finished.
+    // Measured after a clean run -- 5 issues acknowledged, 3 raised again on
+    // the following pass, the account halted, and `/health/ready` reporting
+    // TRADING_HALTED to whoever looked next.
+    //
+    // That re-detection is the platform being right. An acknowledgement is a
+    // judgement about an issue, not a repair of the venue, and rule 7's
+    // corollary is that "not re-detected" must mean "fixed".
+    removeOrphanVenueExecutions();
+
     try {
       const open = await admin
         .get(`/api/v1/reconciliation/${accountId}/issues?open=true`)

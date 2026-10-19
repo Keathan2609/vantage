@@ -301,11 +301,28 @@ on PATH and set `CGO_ENABLED=1`. Without it `go test -race` fails with
   What the halt demonstrably did was persist unnoticed for a day across a
   stopped and restarted process.
 
-  `reconciliation.spec.ts` now acknowledges anything it injected, in `afterAll`
-  so a failure cannot skip it. If you find an account halted by an
-  `EXEC-E2E-ORPHAN-` execution, that is this. The fix is an operator
-  ACKNOWLEDGE, never an import: importing books a position against a guessed
-  parent order, which is exactly what rule 7 forbids.
+  `reconciliation.spec.ts` now cleans up in `afterAll`, so a failure cannot
+  skip it. If you find an account halted by an `EXEC-E2E-ORPHAN-` execution,
+  that is this.
+
+  **Acknowledging the issue is not enough, and the first version of this fix
+  made exactly that mistake.** The fixture writes a row to `mock_venue_fills`;
+  an acknowledgement closes the ISSUE and leaves the ROW, so the next
+  reconciliation pass re-detects the same divergence and raises a new issue
+  minutes after the suite finished. Measured on a clean run: 5 issues
+  acknowledged, 3 raised again on the following pass, account halted,
+  `/health/ready` reporting `TRADING_HALTED` to whoever looked next.
+
+  That re-detection is the platform being right -- rule 7's corollary is that
+  "not re-detected" must mean "fixed", and an acknowledgement is a judgement
+  about an issue, not a repair of the venue. So the teardown removes the venue
+  rows first (`removeOrphanVenueExecutions`, which reads back and expects
+  zero) and only then acknowledges whatever was already raised. Verified: with
+  the rows gone, a reconciliation run leaves the issue count unchanged.
+
+  Resolving one by hand is an operator ACKNOWLEDGE, never an import --
+  importing books a position against a guessed parent order, which is exactly
+  what rule 7 forbids.
 
   **Read `/health/ready` before blaming a replay.** `trading_state`,
   `halted_accounts` and `open_reconciliation_issues` are all in it, and all

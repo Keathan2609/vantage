@@ -1,6 +1,11 @@
 import { execFileSync } from "node:child_process";
 
-import { expect, type APIRequestContext, type Page, request } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Page,
+  request,
+} from "@playwright/test";
 
 /**
  * Shared helpers for the end-to-end suite.
@@ -14,9 +19,12 @@ import { expect, type APIRequestContext, type Page, request } from "@playwright/
 export const API =
   process.env.VANTAGE_E2E_API_BASE_URL ?? "http://localhost:8080";
 
-export const TRADER_EMAIL = process.env.VANTAGE_E2E_EMAIL ?? "trader@vantage.local";
-export const VIEWER_EMAIL = process.env.VANTAGE_E2E_VIEWER_EMAIL ?? "viewer@vantage.local";
-export const ADMIN_EMAIL = process.env.VANTAGE_E2E_ADMIN_EMAIL ?? "admin@vantage.local";
+export const TRADER_EMAIL =
+  process.env.VANTAGE_E2E_EMAIL ?? "trader@vantage.local";
+export const VIEWER_EMAIL =
+  process.env.VANTAGE_E2E_VIEWER_EMAIL ?? "viewer@vantage.local";
+export const ADMIN_EMAIL =
+  process.env.VANTAGE_E2E_ADMIN_EMAIL ?? "admin@vantage.local";
 
 function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
@@ -30,7 +38,10 @@ function requireEnv(name: string, hint: string): string {
 }
 
 export function traderPassword(): string {
-  return requireEnv("VANTAGE_E2E_PASSWORD", "The suite needs the seeded trader's password.");
+  return requireEnv(
+    "VANTAGE_E2E_PASSWORD",
+    "The suite needs the seeded trader's password.",
+  );
 }
 
 export function viewerPassword(): string {
@@ -100,9 +111,13 @@ export async function apiClient(
   // being performed. Signing in per spec exhausts the login budget -- burst
   // ten, then two per minute -- and the suite then reports the platform's own
   // rate limiting as a failure.
-  const ctx = await request.newContext({ baseURL: API, storageState: stateFile });
+  const ctx = await request.newContext({
+    baseURL: API,
+    storageState: stateFile,
+  });
   const state = await ctx.storageState();
-  const csrf = state.cookies.find((c) => c.name === "vantage_csrf")?.value ?? "";
+  const csrf =
+    state.cookies.find((c) => c.name === "vantage_csrf")?.value ?? "";
   if (!csrf) {
     throw new Error(
       `no CSRF cookie in ${stateFile}; global setup did not complete a sign-in`,
@@ -112,7 +127,10 @@ export async function apiClient(
 }
 
 /** Headers for a state-changing API call. */
-export function csrfHeaders(csrf: string, idempotencyKey?: string): Record<string, string> {
+export function csrfHeaders(
+  csrf: string,
+  idempotencyKey?: string,
+): Record<string, string> {
   const headers: Record<string, string> = { "X-Vantage-CSRF": csrf };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   return headers;
@@ -178,7 +196,9 @@ export async function resetBrokerFaults(
   ctx: APIRequestContext,
   csrf: string,
 ): Promise<void> {
-  await ctx.post("/api/v1/dev/broker-faults/reset", { headers: csrfHeaders(csrf) });
+  await ctx.post("/api/v1/dev/broker-faults/reset", {
+    headers: csrfHeaders(csrf),
+  });
 }
 
 /**
@@ -245,7 +265,8 @@ export async function safeStop(
   if (!quote) throw new Error(`no quote for ${instrumentId}`);
 
   const reference = Number.parseFloat(side === "buy" ? quote.bid : quote.ask);
-  const stop = side === "buy" ? reference * (1 - fraction) : reference * (1 + fraction);
+  const stop =
+    side === "buy" ? reference * (1 - fraction) : reference * (1 + fraction);
   return stop.toFixed(2);
 }
 
@@ -426,4 +447,63 @@ function venueAccountRef(accountId: string): string | null {
 /** A unique idempotency key per test run. */
 export function newKey(prefix: string): string {
   return `e2e-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Removes every orphan execution this suite injected at the venue.
+ *
+ * Acknowledging the reconciliation issue is NOT enough, and finding that out
+ * cost a halted development database twice. The fixture writes a row to
+ * `mock_venue_fills` that belongs to no Vantage order; acknowledging the
+ * resulting issue closes the issue and leaves the row, so the next
+ * reconciliation pass detects the same divergence again and raises a new one.
+ *
+ * That is the platform being right. Rule 7's corollary is that "not
+ * re-detected" must mean "fixed", never "no longer examined" -- and an
+ * acknowledgement is a judgement about an issue, not a repair of the venue.
+ * The cause has to go, or the symptom returns on a five-minute timer.
+ *
+ * Deletes by the fixture's own prefix only, so a divergence somebody else
+ * created is left exactly where it is.
+ *
+ * Returns the number of venue fills removed, or null if the container could
+ * not be reached -- a cleanup that could not run must not fail the suite, but
+ * it also must not claim to have worked.
+ */
+export function removeOrphanVenueExecutions(): number | null {
+  const sql = [
+    "DELETE FROM mock_venue_fills WHERE broker_fill_id LIKE 'EXEC-E2E-ORPHAN-%';",
+    "DELETE FROM mock_venue_orders WHERE broker_order_id LIKE 'MOCK-E2E-ORPHAN-%';",
+    "SELECT count(*) FROM mock_venue_fills WHERE broker_fill_id LIKE 'EXEC-E2E-ORPHAN-%';",
+  ].join(" ");
+  try {
+    const out = execFileSync(
+      "docker",
+      [
+        "exec",
+        "-e",
+        "PGPASSWORD=vantage_superuser_dev_password",
+        "-e",
+        "PGOPTIONS=-c client_min_messages=error",
+        "vantage-postgres",
+        "psql",
+        "-U",
+        "vantage_superuser",
+        "-d",
+        "vantage",
+        "-q",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-tAc",
+        sql,
+      ],
+      { timeout: 20_000, encoding: "utf8" },
+    );
+    // Read back rather than trusting the DELETE: the count must be zero, and
+    // a fixture that silently removed nothing is what this whole function
+    // exists to stop happening a third time.
+    return out.trim().endsWith("0") ? 0 : -1;
+  } catch {
+    return null;
+  }
 }
