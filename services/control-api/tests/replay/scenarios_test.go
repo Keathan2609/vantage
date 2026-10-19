@@ -177,7 +177,11 @@ func datasetScenarios() []scenario {
 			// 100 steps, not 60: the fixture widens the book only from bar 60,
 			// so a shorter run never reaches the spike and would pass or fail
 			// on the flat half of the dataset.
-			letter: "E", name: "spread spike", dataset: "spread-spike", steps: 100,
+			// 160, not 100. At 100 bars this scenario could never execute:
+			// four of the five PAPER strategies need 120 bars of history, so
+			// the entire dataset was warm-up and the spike fell where nothing
+			// could see it. It skipped on every run, blaming the database.
+			letter: "E", name: "spread spike", dataset: "spread-spike", steps: 160,
 			expect: func(t *testing.T, o observed) {
 				// A spread spike must produce a refusal SOMEWHERE. Trading
 				// through a spike is the behaviour the spread check exists to

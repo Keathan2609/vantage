@@ -257,9 +257,24 @@ def flat_step(i, price):
     return price * (Decimal("1.00005") if i % 2 == 0 else Decimal("0.99995"))
 
 
+# 160 bars with the spike from 130, and both numbers are load-bearing.
+#
+# This was 100 bars with the spike from 60, and scenario E could never run.
+# Four of the five PAPER strategies require 120 bars of history, so on a
+# 100-bar dataset NOTHING is ever evaluated: the whole fixture is warm-up, the
+# spike happens where no strategy can see it, and the scenario skipped every
+# time while reporting that the database needed reseeding. A test that cannot
+# execute is not a test, and this one had been reporting a database problem
+# for a length problem.
+#
+# 160 bars puts evaluation at roughly bar 120 and leaves 40 evaluable
+# instants. The spike starts at 130, so about ten of those are at a normal
+# spread and about thirty are at 2% of mid -- a baseline the strategies can
+# act on, then a cost they must refuse to cross. The two weeks between slots
+# hold 160 bars comfortably; day-boundary and correlated-pair are 180.
 emit("spread_spike.csv",
-     walk(GOLD, 100, P0, flat_step, wick=Decimal("0.0002"), start=week(6),
-          spread_at=lambda i: SPREAD if i < 60 else Decimal("0.02")))
+     walk(GOLD, 160, P0, flat_step, wick=Decimal("0.0002"), start=week(6),
+          spread_at=lambda i: SPREAD if i < 130 else Decimal("0.02")))
 
 # --- H. drawdown -----------------------------------------------------------
 emit("drawdown.csv",
